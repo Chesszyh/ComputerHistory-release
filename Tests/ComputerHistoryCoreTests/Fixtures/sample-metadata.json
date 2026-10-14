@@ -1,0 +1,8 @@
+{
+  "endedAt": "2026-10-10T05:20:00Z",
+  "eventCount": 127,
+  "eventsPath": "/example/computer-history/segments/2026-10-10T05-10-00Z/events.jsonl",
+  "id": "2026-10-10T05-10-00Z",
+  "startedAt": "2026-10-10T05:10:00Z",
+  "suppressedEventCount": 10
+}

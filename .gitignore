@@ -1,0 +1,22 @@
+.build/
+.swiftpm/
+
+# 逆向中间产物：体积大且可由 re/ghidra/ 下脚本重建
+re/symbols-mangled.txt
+re/symbols-demangled.txt
+re/addr-sym.txt
+re/decomp/
+re/decomp2/
+re/decomp3/
+re/decomp4/
+re/scan/
+re/scan2/
+re/flush/
+re/xref/
+
+# 凭据不得进入版本历史
+.env
+.env.*
+!.env.example
+credentials.json
+credentials.local.json
