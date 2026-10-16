@@ -34,8 +34,14 @@ import ComputerHistoryCore
             scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, document.bounds.height - scroll.contentView.bounds.height)))
             scroll.reflectScrolledClipView(scroll.contentView)
             view.layoutSubtreeIfNeeded()
+            let deadline = Date().addingTimeInterval(3)
+            repeat {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+                view.layoutSubtreeIfNeeded()
+            } while model.timelineLimit < expected && Date() < deadline
             RunLoop.main.run(until: Date().addingTimeInterval(0.2))
-            precondition(model.timelineLimit == expected, "Scrolling must load exactly one page and stop at the end")
+            precondition(model.timelineLimit == expected,
+                "Expected \(expected), got \(model.timelineLimit); document \(document.bounds.height), viewport \(scroll.contentView.bounds)")
         }
         print("PASS: history starts at 12 and scrolls through 24, 36, 48 without loading beyond the end")
     }

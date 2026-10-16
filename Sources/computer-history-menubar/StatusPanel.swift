@@ -57,6 +57,11 @@ struct StatusPanel: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
+                .background(HistoryScrollObserver {
+                    if model.timelineLimit < model.timelineCount {
+                        model.timelineLimit = min(model.timelineLimit + 12, model.timelineCount)
+                    }
+                })
             }
             .frame(maxHeight: .infinity)
 
@@ -316,6 +321,58 @@ struct MetricCard: View {
 
 // MARK: - 历史活动时间线
 
+// 惰性行可能提前创建，分页依据实际滚动位置。
+private struct HistoryScrollObserver: NSViewRepresentable {
+    var onBottom: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onBottom: onBottom) }
+    func makeNSView(context: Context) -> NSView { NSView() }
+    func updateNSView(_ view: NSView, context: Context) {
+        context.coordinator.onBottom = onBottom
+        DispatchQueue.main.async { context.coordinator.connect(view) }
+    }
+    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) { coordinator.disconnect() }
+
+    @MainActor final class Coordinator {
+        var onBottom: () -> Void
+        private weak var scroll: NSScrollView?
+        private var observers: [NSObjectProtocol] = []
+        private var requested = false
+
+        init(onBottom: @escaping () -> Void) { self.onBottom = onBottom }
+        func connect(_ view: NSView) {
+            guard let current = view.enclosingScrollView, let document = current.documentView else { return }
+            if scroll !== current {
+                disconnect()
+                scroll = current
+                current.contentView.postsBoundsChangedNotifications = true
+                document.postsFrameChangedNotifications = true
+                for (name, object) in [(NSView.boundsDidChangeNotification, current.contentView),
+                                       (NSView.frameDidChangeNotification, document)] {
+                    observers.append(NotificationCenter.default.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
+                        MainActor.assumeIsolated { self?.checkBottom() }
+                    })
+                }
+            }
+            checkBottom()
+        }
+        func disconnect() {
+            for observer in observers { NotificationCenter.default.removeObserver(observer) }
+            observers.removeAll()
+            scroll = nil
+            requested = false
+        }
+        private func checkBottom() {
+            guard let scroll, let document = scroll.documentView else { return }
+            let visible = scroll.contentView.bounds
+            if document.bounds.height - visible.maxY > 1 { requested = false; return }
+            guard visible.minY > 0, !requested else { return }
+            requested = true
+            DispatchQueue.main.async { self.onBottom() }
+        }
+    }
+}
+
 struct TimelineSection: View {
     @ObservedObject var model: StatusModel
 
@@ -354,19 +411,12 @@ struct TimelineSection: View {
                         LazyVStack(spacing: 6) {
                             ForEach(group.items) { item in
                                 TimelineRow(item: item, model: model)
-                                    .onAppear {
-                                        if item.id == model.timelineGroups.last?.items.last?.id,
-                                           model.timelineLimit < model.timelineCount {
-                                            model.timelineLimit = min(model.timelineLimit + 12, model.timelineCount)
-                                        }
-                                    }
+
                             }
                         }
                     }
                 }
             }
-
-
         }
     }
 }

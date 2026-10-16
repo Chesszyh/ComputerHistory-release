@@ -37,6 +37,8 @@ jobs:
           swift --version
           python3 --version
           uname -m
+      - name: History pagination
+        run: bash scripts/test-menubar-panel.sh
       - name: Debug tests
         run: swift test
       - name: Debug integration tests
@@ -49,8 +51,6 @@ jobs:
         run: |
           python3 scripts/test-process-control.py .build/release/computer-history
           python3 scripts/test-text-summary.py .build/release/computer-history
-      - name: History pagination
-        run: bash scripts/test-menubar-panel.sh
       - name: Package binaries
         run: bash scripts/package-release.sh
       - name: Upload binaries
