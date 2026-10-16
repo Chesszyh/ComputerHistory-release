@@ -44,6 +44,11 @@ python3 scripts/make-tray-fixture.py --out /tmp/computer-history-tray-fixture --
 历史列表的自动分页可在 macOS 图形会话中用真实 SwiftUI 和滚动控件验证。此测试创建临时合成时间线和不显示的窗口，断言首屏及连续触底加载，不启动采集或调用模型：
 
 ```bash
-swiftc -parse-as-library -I .build/release Sources/computer-history-menubar/StatusModel.swift Sources/computer-history-menubar/StatusPanel.swift scripts/test-menubar-panel.swift .build/release/ComputerHistoryCore.o -o /tmp/computer-history-panel-test
-/tmp/computer-history-panel-test
+bash scripts/test-menubar-panel.sh
 ```
+
+## CI 与版本发布
+
+公开仓库的 CI 在 `main` 推送、合并请求和手动触发时运行，分别使用 Apple Silicon 与 Intel macOS 执行 Debug／Release 单元测试、进程集成、模拟模型和菜单分页测试。私有样本与大数据基准保持显式启用，不属于常规 CI。
+
+发布前更新 `VERSION`，等待相应提交的两个 CI 任务通过。CI 附件包含 `scripts/package-release.sh` 从公开源码构建的两种处理器压缩包。将版本标签指向该提交，创建 Release 并上传同一次 CI 的两个压缩包；用户下载和启动说明由 `docs/distribution.md` 维护。

@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: |
+          swift --version
+          python3 --version
+          uname -m
+      - name: Debug tests
+        run: swift test
+      - name: Debug integration tests
+        run: |
+          python3 scripts/test-process-control.py .build/debug/computer-history
+          python3 scripts/test-text-summary.py .build/debug/computer-history
+      - name: Release tests
+        run: swift test -c release
+      - name: Release integration tests
+        run: |
+          python3 scripts/test-process-control.py .build/release/computer-history
+          python3 scripts/test-text-summary.py .build/release/computer-history
+      - name: History pagination
+        run: bash scripts/test-menubar-panel.sh
+      - name: Package binaries
+        run: bash scripts/package-release.sh
+      - name: Upload binaries
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ComputerHistory-macos-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 14

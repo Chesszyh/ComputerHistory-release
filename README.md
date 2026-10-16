@@ -14,6 +14,8 @@ macOS 本地活动记录工具。通过 Accessibility（辅助功能，简称 AX
 
 ## 构建和验证
 
+预编译程序及启动方法见[下载与运行](docs/distribution.md)；源码验证结果见 [CI](https://github.com/Chesszyh/ComputerHistory-release/actions/workflows/ci.yml)。
+
 需要 macOS 13 或更高版本、Swift 6 工具链。进程集成测试和菜单栏启动脚本另需 Python 3。Swift 包不依赖第三方包。
 
 在源码目录执行：

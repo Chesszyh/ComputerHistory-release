@@ -1,5 +1,6 @@
 .build/
 .swiftpm/
+dist/
 
 # 逆向中间产物：体积大且可由 re/ghidra/ 下脚本重建
 re/symbols-mangled.txt
