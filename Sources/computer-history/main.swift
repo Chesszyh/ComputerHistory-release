@@ -713,7 +713,7 @@ do {
 signal(SIGINT, SIG_IGN)
 let sigintSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
 sigintSource.setEventHandler {
-    MainActor.assumeIsolated { exit(shutdown.run()) }
+    MainActor.assumeIsolated { () -> Void in exit(shutdown.run()) }
 }
 sigintSource.resume()
 
@@ -728,7 +728,7 @@ do {
 
 if let runSeconds {
     DispatchQueue.main.asyncAfter(deadline: .now() + runSeconds) {
-        MainActor.assumeIsolated { exit(shutdown.run()) }
+        MainActor.assumeIsolated { () -> Void in exit(shutdown.run()) }
     }
 }
 
