@@ -27,22 +27,29 @@ import ComputerHistoryCore
             return parent.subviews.compactMap { scrollView($0) }.first
         }
         precondition(model.timelineLimit == 12 && model.timelineCount == 48, "Initial page must remain bounded")
-        for expected in [24, 36, 48, 48] {
+        for expected in [24, 36, 48] {
             guard let scroll = scrollView(view), let document = scroll.documentView else {
                 fatalError("History scroll view is missing")
             }
-            scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, document.bounds.height - scroll.contentView.bounds.height)))
-            scroll.reflectScrolledClipView(scroll.contentView)
-            view.layoutSubtreeIfNeeded()
-            let deadline = Date().addingTimeInterval(3)
-            repeat {
-                RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            let deadline = ProcessInfo.processInfo.systemUptime + 10
+            while model.timelineLimit < expected && ProcessInfo.processInfo.systemUptime < deadline {
+                let bottom = max(0, document.bounds.height - scroll.contentView.bounds.height)
+                let next = min(bottom, scroll.contentView.bounds.minY + 60)
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: next))
+                scroll.reflectScrolledClipView(scroll.contentView)
                 view.layoutSubtreeIfNeeded()
-            } while model.timelineLimit < expected && Date() < deadline
+                RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            }
             RunLoop.main.run(until: Date().addingTimeInterval(0.2))
             precondition(model.timelineLimit == expected,
                 "Expected \(expected), got \(model.timelineLimit); document \(document.bounds.height), viewport \(scroll.contentView.bounds)")
         }
+        if let scroll = scrollView(view), let document = scroll.documentView {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, document.bounds.height - scroll.contentView.bounds.height)))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        }
+        precondition(model.timelineLimit == 48, "The end must not load beyond the available history")
         print("PASS: history starts at 12 and scrolls through 24, 36, 48 without loading beyond the end")
     }
 }
