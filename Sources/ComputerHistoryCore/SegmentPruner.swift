@@ -83,6 +83,13 @@ public enum SegmentPruner {
             return report
         }
         let removable = candidates.filter { $0.url != newest.url }
+        func summarized(_ item: URL) -> Bool {
+            let memory = rootDirectory.appendingPathComponent("memories")
+                .appendingPathComponent(MemoryWriter.fileName(segmentID: item.lastPathComponent))
+            guard let text = try? String(contentsOf: memory, encoding: .utf8) else { return false }
+            return !text.contains("\ngeneration: failed\n") && !text.contains("本节未由语言模型归纳：")
+        }
+        let hasSummary = Dictionary(uniqueKeysWithValues: removable.map { ($0.url, summarized($0.url)) })
         var attempted: Set<URL> = []
         var removed: Set<URL> = []
 
@@ -92,6 +99,7 @@ public enum SegmentPruner {
                 try fileManager.removeItem(at: url)
                 removed.insert(url)
                 report.removedSegments += 1
+                if hasSummary[url] != true { report.removedWithoutSummary += 1 }
                 report.freedBytes += bytes
                 total = total.map { $0 - bytes }
             } catch {
@@ -101,12 +109,18 @@ public enum SegmentPruner {
 
         if retention.maxAgeDays > 0 {
             let cutoff = now.addingTimeInterval(-Double(retention.maxAgeDays) * 86_400)
-            for item in removable where item.started < cutoff { remove(item.url) }
+            for item in removable where item.started < cutoff {
+                let grace = retention.unsummarizedMaxAgeDays
+                if hasSummary[item.url] != true, grace > retention.maxAgeDays,
+                   item.started >= now.addingTimeInterval(-Double(grace) * 86_400) { continue }
+                remove(item.url)
+            }
         }
 
         // 读取不完整时无法判断是否超量；不能用缺失的字节数指导删除。
         if retention.maxTotalBytes > 0 {
-            for item in removable {
+            let priority = removable.filter { hasSummary[$0.url] == true } + removable.filter { hasSummary[$0.url] != true }
+            for item in priority {
                 guard let bytes = total, bytes > retention.maxTotalBytes else { break }
                 remove(item.url)
             }
@@ -123,6 +137,10 @@ public enum SegmentPruner {
     }
 
     private static func firstEventDate(in directory: URL, started: Date) -> Date? {
+        if let data = try? Data(contentsOf: directory.appendingPathComponent("metadata.json")),
+           let meta = try? EventStreamJSON.makeDecoder().decode(EventStreamMetadata.self, from: data),
+           let first = meta.firstEventAt, first >= started,
+           first < started.addingTimeInterval(SegmentClock.durationSeconds) { return first }
         guard let handle = try? FileHandle(forReadingFrom: directory.appendingPathComponent("events.jsonl")) else { return nil }
         defer { try? handle.close() }
         // 只读取首条完整记录；损坏的大文件不能让清理扫描无限占用内存。

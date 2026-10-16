@@ -1,7 +1,7 @@
 import Foundation
 import Darwin
 
-/// 一个 segment 的元数据。字段与实测 metadata.json 完全一致（6 个键，无 null）。
+/// 段元数据；firstEventAt 是本项目增加的排序字段，旧文件缺失时从事件读取。
 public struct EventStreamMetadata: Codable, Sendable {
     public var id: String
     public var startedAt: Date
@@ -14,6 +14,7 @@ public struct EventStreamMetadata: Codable, Sendable {
     /// 服务端写的是**写入时的绝对路径**，样本从原容器复制后该字段仍指向旧路径。
     /// 读取方不得信任此字段，应以 metadata.json 所在目录推导 events.jsonl。
     public var eventsPath: String
+    public var firstEventAt: Date? = nil
 }
 
 /// 录制结束原因。取值来自反汇编 `ComputerUseIPCEventStreamEndReason.rawValue.getter`。
@@ -85,6 +86,7 @@ public final class SegmentWriter {
     public let startedAt: Date
 
     private var handle: FileHandle?
+    private var firstEventAt: Date?
     private var eventCount = 0
     private var suppressedCount = 0
     private var closed = false
@@ -135,6 +137,7 @@ public final class SegmentWriter {
         var data = try encoder.encode(record)
         data.append(0x0A)  // JSONL：每行一个对象
         try handle.write(contentsOf: data)
+        if firstEventAt == nil { firstEventAt = record.timestamp }
         eventCount += 1
     }
 
@@ -157,7 +160,8 @@ public final class SegmentWriter {
             eventCount: eventCount,
             suppressedEventCount: suppressedCount,
             // 与官方一致，写绝对路径；读取方以目录位置为准。
-            eventsPath: eventsURL.path
+            eventsPath: eventsURL.path,
+            firstEventAt: firstEventAt
         )
         let data = try Self.makeMetadataEncoder().encode(meta)
         try data.write(to: metadataURL, options: .atomic)

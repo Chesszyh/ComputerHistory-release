@@ -83,12 +83,38 @@ public enum FrontmostApplication {
               let el = AXTreeReader.focusedElement(ofApplication: pid) else {
             return (.init(value: nil, caret: nil), nil)
         }
-        let value = AXTreeReader.valueString(el)
+        let role = AXTreeReader.copyString(el, kAXRoleAttribute as String)
+        let subrole = AXTreeReader.copyString(el, kAXSubroleAttribute as String)
+        let placeholder = AXTreeReader.copyString(el, kAXPlaceholderValueAttribute as String)
+        var settable = DarwinBoolean(false)
+        let settableResult = AXUIElementIsAttributeSettable(el, kAXValueAttribute as CFString, &settable)
+        var selection: CFRange?
+        if let raw = AXTreeReader.copyValue(el, kAXSelectedTextRangeAttribute as String),
+           CFGetTypeID(raw) == AXValueGetTypeID() {
+            var range = CFRange()
+            if AXValueGetValue(unsafeDowncast(raw, to: AXValue.self), .cfRange, &range) { selection = range }
+        }
+        let textRole = role == kAXTextAreaRole as String || role == kAXTextFieldRole as String
+            || role == kAXComboBoxRole as String
+        // 某些网页编辑器不暴露可设置性；已知非文本角色不作为编辑缓冲。
+        let knownNonText = ["AXButton", "AXStaticText", "AXLink", "AXMenuItem", "AXImage"].contains(role ?? "")
+        let editable = !knownNonText && (textRole || settableResult == .success && settable.boolValue
+            || selection != nil)
+        let value = editable ? AXTreeReader.valueString(el) : nil
         let observation = TextInputTracker.Observation(
-            value: value, caret: AXTreeReader.caretLocation(of: el),
+            value: value, caret: selection?.location,
             isEditableBuffer: value.map(AXTreeReader.isEditableBuffer) ?? false,
-            focusIdentity: Int(truncatingIfNeeded: CFHash(el)))
-        return (observation, element(el))
+            focusIdentity: Int(truncatingIfNeeded: CFHash(el)),
+            role: role, subrole: subrole,
+            valueSettable: settableResult == .success ? settable.boolValue : nil,
+            placeholder: placeholder, selectionLength: selection?.length)
+        let target: EventStreamAXElement? = observation.isEditableBuffer ? .init(
+            role: role, subrole: subrole,
+            title: AXTreeReader.copyString(el, kAXTitleAttribute as String),
+            description: AXTreeReader.copyString(el, kAXDescriptionAttribute as String),
+            value: value, placeholder: placeholder,
+            identifier: AXTreeReader.copyString(el, kAXIdentifierAttribute as String)) : nil
+        return (observation, target)
     }
 
     /// 把 AXUIElement 转成落盘的 `target`/`element` 结构。

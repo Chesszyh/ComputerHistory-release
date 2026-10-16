@@ -15,12 +15,22 @@ import ComputerHistoryCore
 @main
 struct ComputerHistoryMenuBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @StateObject private var model = StatusModel()
+    @StateObject private var model: StatusModel
 
     private let processLease: CollectorProcessLease
 
     init() {
-        let root = CollectorStatus.defaultRoot.appendingPathComponent(".menubar")
+        let args = CommandLine.arguments
+        let dataRoot: URL
+        if let index = args.firstIndex(of: "--out") {
+            guard args.indices.contains(index + 1), !args[index + 1].hasPrefix("--") else {
+                FileHandle.standardError.write(Data("--out 缺少数据目录。\n".utf8))
+                exit(2)
+            }
+            dataRoot = URL(fileURLWithPath: args[index + 1], isDirectory: true)
+        } else { dataRoot = CollectorStatus.defaultRoot }
+        _model = StateObject(wrappedValue: StatusModel(root: dataRoot))
+        let root = dataRoot.appendingPathComponent(".menubar")
         if CommandLine.arguments.contains("--stop") {
             guard let identity = CollectorProcessLease.runningIdentity(
                 root: root, executableName: "computer-history-menubar") else {

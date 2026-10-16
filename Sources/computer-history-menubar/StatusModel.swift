@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import AppKit
+import ApplicationServices
 import ComputerHistoryCore
 
 /// 托盘应用的状态源。
@@ -19,9 +20,16 @@ final class StatusModel: ObservableObject {
     @Published private(set) var lastEventAt: Date?
 
     @Published private(set) var status: CollectorStatus
-    @Published private(set) var memories: MemoryIndex
-    /// 第三层：面向扫读的叙述条目。为空时时间线回退到记忆标题。
-    @Published private(set) var narrative: ActivityNarrative
+    @Published private(set) var timelineCount = 0
+    @Published private(set) var modelRequests: [ModelRequest] = []
+    @Published var showsUsage = false
+    @Published var requestDetail: ModelRequest?
+    @Published var requestError: String?
+    private let requestLoader = ModelRequestLoader()
+
+    private var contentVersion = 0
+    @Published private(set) var timelineGroups: [TrayTimelineGroup] = []
+    private var allTimelineGroups: [TrayTimelineGroup] = []
 
     /// 运行状态区的展开状态。默认收起——它是排查用的，不是日常要看的信息。
     @Published var showsRuntimeDetails = false
@@ -42,23 +50,32 @@ final class StatusModel: ObservableObject {
     /// 原地展开概要的行 id 集合。
     @Published var expandedRows: Set<String> = []
     /// 时间线展示条数上限，避免菜单过长。
-    @Published var timelineLimit = 12
+    @Published var timelineLimit = 12 { didSet { applyTimelineLimit() } }
 
     private var cancellables = Set<AnyCancellable>()
     private let root: URL
+    private let loader = TraySnapshotLoader()
+    private var refreshTask: Task<Void, Never>?
+    private var refreshState = TrayRefreshState()
+    private var liveTask: Task<Void, Never>?
+    private var detailTask: Task<Void, Never>?
+    private var detailRequest = UUID()
+    private var stopped = false
 
     init(root: URL = CollectorStatus.defaultRoot) {
         self.root = root
-        self.status = CollectorStatus.read(root: root)
-        self.memories = MemoryIndex.load(from: root.appendingPathComponent("memories"))
-        self.narrative = ActivityNarrative.load(root: root)
-        self.control = CollectorControl.load(root: root)
+        self.status = .empty(root: root)
+        self.control = CollectorControl()
         self.loginItemEnabled = LoginItem.isEnabled
         startTimers()
+        NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
+            .sink { [weak self] _ in MainActor.assumeIsolated { self?.shutdown() } }
+            .store(in: &cancellables)
+        refreshAll()
     }
 
     private func startTimers() {
-        // 当前活动：每秒一次，只读 AX 的聚焦窗口，开销很小。
+        // 前台身份留在主线程，跨进程窗口查询由后台 actor 完成。
         Timer.publish(every: 1, on: .main, in: .common).autoconnect()
             .sink { [weak self] _ in self?.refreshLive() }
             .store(in: &cancellables)
@@ -70,24 +87,76 @@ final class StatusModel: ObservableObject {
     }
 
     func refreshLive() {
+        guard !stopped, liveTask == nil else { return }
         let app = FrontmostApplication.current()
         let bundle = app?.bundleIdentifier
+        let name = AwayPeriods.isLoginWindow(app) ? "离开电脑" : (app?.name ?? bundle ?? "—")
         if bundle != frontBundleID {
             frontBundleID = bundle
             frontSince = Date()
         }
-        frontApp = app?.name ?? app?.bundleIdentifier ?? "—"
-        frontWindow = FrontmostApplication.frontWindow(for: app)?.title
+        if name != frontApp { frontApp = name }
+        if AwayPeriods.isLoginWindow(app) { frontWindow = "登录界面 · 暂停采集"; return }
+        let pid = app?.processIdentifier
+        liveTask = Task { [weak self] in
+            let window = await TrayWindowReader.shared.read(pid: pid)
+            guard let self else { return }
+            self.liveTask = nil
+            guard !self.stopped, FrontmostApplication.current()?.processIdentifier == pid else { return }
+            if self.frontWindow != window?.title { self.frontWindow = window?.title }
+        }
     }
 
     func refreshSlow() {
-        status = CollectorStatus.read(root: root)
-        memories = MemoryIndex.load(from: root.appendingPathComponent("memories"))
-        narrative = ActivityNarrative.load(root: root)
-        lastEventAt = status.data.lastWriteAt
-        // 开关可能被命令行或另一个托盘实例改动，随慢速刷新一并对齐。
-        control = CollectorControl.load(root: root)
-        loginItemEnabled = LoginItem.isEnabled
+        guard !stopped, refreshState.request() else { return }
+        startLoad()
+    }
+
+    private func startLoad() {
+        let root = root, loader = loader
+        refreshTask = Task { [weak self] in
+            let snapshot = await loader.load(root: root)
+            let requests = await self?.requestLoader.load(root: root) ?? []
+            guard let self, !self.stopped else { return }
+            if self.modelRequests != requests { self.modelRequests = requests }
+            if self.status != snapshot.status { self.status = snapshot.status }
+            if self.control != snapshot.control { self.control = snapshot.control }
+            self.contentVersion = snapshot.contentVersion
+            let count = snapshot.groups.reduce(0) { $0 + $1.items.count }
+            if self.timelineCount != count { self.timelineCount = count }
+            if self.allTimelineGroups != snapshot.groups {
+                self.allTimelineGroups = snapshot.groups
+                self.applyTimelineLimit()
+                let ids = Set(snapshot.groups.flatMap(\.items).map(\.id))
+                self.expandedRows.formIntersection(ids)
+                if let detail = self.detail, !ids.contains(detail.id) { self.closeDetail() }
+            }
+            if self.lastEventAt != snapshot.status.data.lastWriteAt { self.lastEventAt = snapshot.status.data.lastWriteAt }
+            let login = LoginItem.isEnabled
+            if self.loginItemEnabled != login { self.loginItemEnabled = login }
+            self.refreshTask = nil
+            if self.refreshState.finished() { self.startLoad() }
+        }
+    }
+
+    private func applyTimelineLimit() {
+        var remaining = timelineLimit
+        var visible: [TrayTimelineGroup] = []
+        for group in allTimelineGroups where remaining > 0 {
+            let items = Array(group.items.prefix(remaining))
+            remaining -= items.count
+            visible.append(TrayTimelineGroup(day: group.day, items: items))
+        }
+        if timelineGroups != visible { timelineGroups = visible }
+    }
+
+    func shutdown() {
+        stopped = true
+        refreshState.cancel()
+        refreshTask?.cancel()
+        liveTask?.cancel()
+        detailTask?.cancel()
+        cancellables.removeAll()
     }
 
     func refreshAll() {
@@ -97,22 +166,30 @@ final class StatusModel: ObservableObject {
 
     // MARK: - 菜单栏图标
 
+    var isStalled: Bool {
+        status.isStalled && control.recording && frontBundleID != "com.apple.loginwindow"
+    }
+
     /// 图标反映采集状态：正常、停滞、未运行。
     var menuBarSymbol: String {
         if !status.process.running { return "clock.badge.xmark" }
-        if status.isStalled { return "clock.badge.exclamationmark" }
+        if !control.recording || frontBundleID == "com.apple.loginwindow" { return "pause.circle" }
+        if isStalled { return "clock.badge.exclamationmark" }
         return "clock.arrow.circlepath"
     }
 
     var stateLabel: String {
         if !status.process.running { return "未采集" }
-        if status.isStalled { return "已停滞" }
+        if !control.recording { return "已暂停" }
+        if frontBundleID == "com.apple.loginwindow" { return "已离开" }
+        if isStalled { return "已停滞" }
         return "采集中"
     }
 
     var stateColor: StatusColor {
         if !status.process.running { return .secondary }
-        if status.isStalled { return .warning }
+        if !control.recording || frontBundleID == "com.apple.loginwindow" { return .secondary }
+        if isStalled { return .warning }
         return .ok
     }
 
@@ -136,121 +213,23 @@ final class StatusModel: ObservableObject {
         relativeLabel(frontSince).replacingOccurrences(of: "前", with: "")
     }
 
-    /// 时间线的一条，已归一为展示形态。
-    struct TimelineItem: Identifiable {
-        var id: String
-        var timestamp: Date
-        var title: String
-        var summary: String
-        var apps: [String]
-        /// 是否来自模型归纳的叙述层。
-        var isNarrative: Bool
-        /// 该条覆盖的记忆文件。叙述条目可能覆盖多份，故为列表。
-        var memoryFiles: [URL]
-        /// 覆盖的段数。叙述条目合并多段时会大于 1。
-        var coveredCount: Int
-        /// 事件数；叙述条目不带该信息，为 nil。
-        var eventCount: Int?
-        /// 覆盖范围里最后一段的起始时刻。
-        ///
-        /// 合并条目横跨多段，只显示起始时刻会让后续时段看起来像丢了——
-        /// 实测 17:20 的条目覆盖到 17:40，但下一条显示 17:50，
-        /// 使用者会以为 17:30 与 17:40 没有被总结。
-        var endTimestamp: Date
-
-        /// 是否有可展开的详情。
-        var hasDetail: Bool { !memoryFiles.isEmpty }
-    }
+    typealias TimelineItem = TrayTimelineItem
 
     /// 侧栏详情的数据。
-    struct DetailContent: Identifiable {
+    struct DetailContent: Identifiable, Sendable {
         var id: String
         var title: String
         var timestamp: Date
         var apps: [String]
         var files: [MemoryFile]
 
-        struct MemoryFile: Identifiable {
+        struct MemoryFile: Identifiable, Sendable {
             var id: String { url.lastPathComponent }
             var url: URL
             var title: String
             var granularity: String
             var sections: [(heading: String, content: String)]
         }
-    }
-
-    /// 时间线按天分组。
-    ///
-    /// **先把叙述层与记忆层按天合并、排序，最后才截断**。此前的顺序是
-    /// 「先填叙述、填满即止，再补没有叙述的天」，结果是昨天的叙述占满上限后
-    /// 今天的记录完全不可见，同一天里未被叙述覆盖的记忆也看不到。
-    var timelineGroups: [(day: String, items: [TimelineItem])] {
-        // ① 两层的条目都归到各自的日期，便于合并。
-        var byDay: [String: [TimelineItem]] = [:]
-        var narrativeCovered: Set<String> = []
-
-        for group in narrative.groupedByDay() {
-            for item in group.items {
-                let files = item.sourceMemories.compactMap { memoryURL(for: $0) }
-                for name in item.sourceMemories { narrativeCovered.insert(name) }
-                byDay[group.day, default: []].append(TimelineItem(
-                    id: item.id, timestamp: item.timestamp, title: item.title,
-                    summary: item.summary, apps: item.apps,
-                    isNarrative: true, memoryFiles: files,
-                    coveredCount: max(1, item.sourceMemories.count),
-                    eventCount: nil,
-                    endTimestamp: item.sourceMemories
-                        .compactMap { Self.segmentTime(fromMemoryName: $0) }.max()
-                        ?? item.timestamp))
-            }
-        }
-        // ② 记忆层补齐叙述未覆盖的段——不是「没有叙述的天」才补。
-        for group in memories.groupedByDay() {
-            for entry in group.entries where !narrativeCovered.contains(entry.id) {
-                let exists = FileManager.default.fileExists(atPath: entry.fileURL.path)
-                byDay[group.day, default: []].append(TimelineItem(
-                    id: entry.id, timestamp: entry.startedAt, title: entry.title,
-                    summary: entry.summary, apps: entry.applications,
-                    isNarrative: false,
-                    memoryFiles: exists ? [entry.fileURL] : [],
-                    coveredCount: 1, eventCount: nil,
-                    endTimestamp: entry.startedAt))
-            }
-        }
-
-        // ③ 每天内部按时间倒序，天与天之间也倒序。
-        let days = byDay.keys.sorted(by: >)
-        var result: [(day: String, items: [TimelineItem])] = []
-        var remaining = timelineLimit
-        for day in days {
-            guard remaining > 0 else { break }
-            let sorted = byDay[day]!.sorted { $0.timestamp > $1.timestamp }
-            let taken = Array(sorted.prefix(remaining))
-            remaining -= taken.count
-            result.append((day, taken))
-        }
-        return result
-    }
-
-    /// 从记忆文件名解析出所属段的起始时刻。
-    ///
-    /// 文件名形如 `2026-10-14T09-30-00Z-XXXX-10min-memory-summary.md`；
-    /// 用固定宽度截取而不是按 `-` 切分——基准段与带 UUID 后缀的段前缀相同，
-    /// 切分得到的段数不一致。
-    static func segmentTime(fromMemoryName name: String) -> Date? {
-        guard name.count >= 20 else { return nil }
-        let stamp = String(name.prefix(20))          // 2026-10-14T09-30-00Z
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd'T'HH-mm-ss'Z'"
-        f.timeZone = TimeZone(identifier: "UTC")
-        f.locale = Locale(identifier: "en_US_POSIX")
-        return f.date(from: stamp)
-    }
-
-    func memoryURL(for fileName: String?) -> URL? {
-        guard let fileName else { return nil }
-        let url = root.appendingPathComponent("memories").appendingPathComponent(fileName)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     func dayLabel(_ day: String) -> String {
@@ -398,21 +377,59 @@ final class StatusModel: ObservableObject {
     /// 读本地文件并解析分节，不调用外部程序——此前是交给默认 Markdown 阅读器，
     /// 每看一次就多开一个软件。
     func openDetail(for item: TimelineItem) {
-        let files = item.memoryFiles.compactMap(Self.parseMemoryFile)
-        guard !files.isEmpty else { return }
-        detail = DetailContent(id: item.id, title: item.title,
-                               timestamp: item.timestamp, apps: item.apps,
-                               files: files)
+        detailTask?.cancel()
+        let request = UUID()
+        detailRequest = request
+        detail = nil
+        let version = contentVersion
+        detailTask = Task { [weak self] in
+            let files = await Task.detached(priority: .userInitiated) {
+                item.memoryFiles.compactMap { url -> DetailContent.MemoryFile? in
+                    guard let entry = MemoryIndex.parse(fileURL: url) else { return nil }
+                    return DetailContent.MemoryFile(url: url, title: entry.title,
+                        granularity: entry.granularity, sections: entry.sections)
+                }
+            }.value
+            guard let self, !self.stopped, !Task.isCancelled,
+                  self.detailRequest == request, self.contentVersion == version, !files.isEmpty else { return }
+            self.detail = DetailContent(id: item.id, title: item.title,
+                timestamp: item.timestamp, apps: item.apps, files: files)
+            self.detailTask = nil
+        }
     }
 
-    func closeDetail() { detail = nil }
+    func openRequest(_ record: ModelRequest) {
+        detailTask?.cancel()
+        let url = root.appendingPathComponent("requests/" + record.id + ".json")
+        let request = UUID()
+        detailRequest = request
+        requestError = nil
+        detailTask = Task { [weak self] in
+            let result = await Task.detached { () -> Result<ModelRequest, Error> in
+                Result { try ModelRequest.load(url: url) }
+            }.value
+            guard let self, !self.stopped, !Task.isCancelled, self.detailRequest == request else { return }
+            switch result {
+            case .success(let value): self.requestDetail = value
+            case .failure(let error): self.requestError = "读取请求失败：\(error.localizedDescription)"
+            }
+            self.detailTask = nil
+        }
+    }
 
-    /// 解析记忆文件为可分节渲染的形态。
-    static func parseMemoryFile(_ url: URL) -> DetailContent.MemoryFile? {
-        guard let entry = MemoryIndex.parse(fileURL: url) else { return nil }
-        return DetailContent.MemoryFile(
-            url: url, title: entry.title, granularity: entry.granularity,
-            sections: entry.sections)
+    func closeUsage() {
+        detailRequest = UUID()
+        detailTask?.cancel()
+        detailTask = nil
+        requestDetail = nil
+        showsUsage = false
+    }
+
+    func closeDetail() {
+        detailRequest = UUID()
+        detailTask?.cancel()
+        detailTask = nil
+        detail = nil
     }
 
     func copyRecentSummary() {
@@ -425,5 +442,14 @@ final class StatusModel: ObservableObject {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
+    }
+}
+
+/// 默认 AX 超时在本托盘进程生效；AX 对象在此后台 actor 内创建和使用。
+private actor TrayWindowReader {
+    static let shared = TrayWindowReader()
+    func read(pid: Int32?) -> EventStreamWindow? {
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.2)
+        return FrontmostApplication.window(pid: pid)
     }
 }

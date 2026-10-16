@@ -16,3 +16,34 @@ python3 scripts/test-process-control.py .build/release/computer-history
 文档只描述可由实现和测试支撑的行为；权限与应用兼容性请注明验证环境。注释说明非显然的原因，提交说明最终行为。不要提交真实活动数据、凭据、构建产物或个人机器配置。
 
 提交变更时附问题复现、最终行为与实际执行的验证。涉及公开 API 或配置行为变化时同步更新相关文档。
+
+## 文本证据与菜单性能验证
+
+模型取材、逐次用量、缓存计费、失败与空输出、预算拦截及分批续跑使用本地模拟服务验证：
+
+```bash
+python3 scripts/test-text-summary.py .build/debug/computer-history
+python3 scripts/test-text-summary.py .build/release/computer-history
+```
+
+大数据基准为显式入口，创建并回收约 1.5 GiB 的合成事件；比较完整状态读取与托盘首次、重复加载的耗时，并断言事件读取字节和记忆解析次数。
+
+```bash
+COMPUTER_HISTORY_TRAY_BENCHMARK=1 swift test -c release --filter TraySnapshotLoaderTests.testLargeHistoryBenchmark
+```
+
+交互验收可用独立合成目录，`--out` 指定的目录必须尚不存在：
+
+```bash
+python3 scripts/make-tray-fixture.py --out /tmp/computer-history-tray-fixture --large
+.build/release/computer-history-menubar --out /tmp/computer-history-tray-fixture
+```
+
+不带 `--large` 生成小数据组。对同一数据重复打开/收起、滚动、展开概要与详情，跨越多个刷新周期；将响应耗时、堆对象数、物理内存峰值和稳态分别记录。一次 `leaks` 或 RSS 读数不能证明长期无泄漏。关闭测试实例后可删除其合成目录。
+
+历史列表的自动分页可在 macOS 图形会话中用真实 SwiftUI 和滚动控件验证。此测试创建临时合成时间线和不显示的窗口，断言首屏及连续触底加载，不启动采集或调用模型：
+
+```bash
+swiftc -parse-as-library -I .build/release Sources/computer-history-menubar/StatusModel.swift Sources/computer-history-menubar/StatusPanel.swift scripts/test-menubar-panel.swift .build/release/ComputerHistoryCore.o -o /tmp/computer-history-panel-test
+/tmp/computer-history-panel-test
+```

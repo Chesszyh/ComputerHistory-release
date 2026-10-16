@@ -128,6 +128,6 @@ final class RetentionTests: XCTestCase {
         let data = Data(#"{"maxNodesPerSnapshot": 77}"#.utf8)
         let cfg = try CollectorConfig.decode(from: data)
         XCTAssertEqual(cfg.maxNodesPerSnapshot, 77)
-        XCTAssertEqual(cfg.retention.maxAgeDays, 30, "未提供的字段应取默认")
+        XCTAssertEqual(cfg.retention.maxAgeDays, 2, "未提供的字段应取默认")
     }
 }

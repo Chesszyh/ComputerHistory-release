@@ -166,13 +166,25 @@ public struct EventStreamAXTree: Codable, Sendable, Equatable {
     }
 }
 
+/// 编辑活动只说明附近发生过交互，不证明逐字键入、发送或任务完成。
+public enum TextEvidence: String, Codable, Sendable {
+    case editedValue = "edited_value"
+    case uncertainValueChange = "uncertain_value_change"
+}
+
 public struct EventStreamKeyboardInteraction: Codable, Sendable, Equatable {
     public var text: String?
+    public var textEvidence: TextEvidence?
+    public var textReplaces: [String]
+    public var focusIdentity: Int?
     public var keyEquivalent: String?
     public var modifiers: [String]
     public var target: EventStreamAXElement?
     enum CodingKeys: String, CodingKey {
         case text
+        case textEvidence
+        case textReplaces
+        case focusIdentity
         case keyEquivalent
         case modifiers
         case target
@@ -181,11 +193,17 @@ public struct EventStreamKeyboardInteraction: Codable, Sendable, Equatable {
 
     public init(
         text: String? = nil,
+        textEvidence: TextEvidence? = nil,
+        focusIdentity: Int? = nil,
+        textReplaces: [String] = [],
         keyEquivalent: String? = nil,
         modifiers: [String] = [],
         target: EventStreamAXElement? = nil
     ) {
         self.text = text
+        self.textEvidence = textEvidence
+        self.textReplaces = textReplaces
+        self.focusIdentity = focusIdentity
         self.keyEquivalent = keyEquivalent
         self.modifiers = modifiers
         self.target = target
@@ -194,6 +212,9 @@ public struct EventStreamKeyboardInteraction: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         text = try c.decodeIfPresent(String.self, forKey: .text)
+        textEvidence = try c.decodeIfPresent(TextEvidence.self, forKey: .textEvidence)
+        focusIdentity = try c.decodeIfPresent(Int.self, forKey: .focusIdentity)
+        textReplaces = try c.decodeIfPresent([String].self, forKey: .textReplaces) ?? []
         keyEquivalent = try c.decodeIfPresent(String.self, forKey: .keyEquivalent)
         modifiers = try c.decodeIfPresent([String].self, forKey: .modifiers) ?? []
         target = try c.decodeIfPresent(EventStreamAXElement.self, forKey: .target)
@@ -204,6 +225,9 @@ public struct EventStreamKeyboardInteraction: Codable, Sendable, Equatable {
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encodeIfPresent(text, forKey: .text)
+        try c.encodeIfPresent(textEvidence, forKey: .textEvidence)
+        try c.encodeIfPresent(focusIdentity, forKey: .focusIdentity)
+        if !textReplaces.isEmpty { try c.encode(textReplaces, forKey: .textReplaces) }
         try c.encodeIfPresent(keyEquivalent, forKey: .keyEquivalent)
         if !modifiers.isEmpty { try c.encode(modifiers, forKey: .modifiers) }
         try c.encodeIfPresent(target, forKey: .target)

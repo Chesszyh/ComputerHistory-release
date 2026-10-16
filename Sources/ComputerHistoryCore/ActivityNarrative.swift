@@ -8,9 +8,9 @@ import Foundation
 ///
 /// 第二层不是第一层的缩写，而是**换一种用途**：记忆文件用于追溯（含事件路径、
 /// 完整分节），叙述条目用于扫读（标题 + 一两句 + 时刻 + 应用）。
-public struct ActivityNarrative: Codable, Sendable {
+public struct ActivityNarrative: Codable, Sendable, Equatable {
 
-    public struct Item: Codable, Sendable, Identifiable {
+    public struct Item: Codable, Sendable, Equatable, Identifiable {
         /// 稳定标识：由覆盖的源记忆文件名派生，便于去重与增量更新。
         public var id: String
         /// 本条覆盖时段的起始时刻。

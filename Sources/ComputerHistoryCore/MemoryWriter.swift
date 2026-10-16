@@ -54,7 +54,8 @@ public enum MemoryWriter {
         modelNote: String? = nil,
         granularity: String = "10min",
         sources: [String] = [],
-        titleOverride: String? = nil
+        titleOverride: String? = nil,
+        evidenceMaterial: String? = nil
     ) -> String {
         var out = ""
 
@@ -64,6 +65,7 @@ public enum MemoryWriter {
             ? sixHourDescription(for: digest) : description(for: digest)
         out += "title: \(heading)\n"
         out += "description: \(summary)\n"
+        out += "generation: \(enrichment != nil ? "model" : (modelNote != nil ? "failed" : "factual"))\n"
         out += "applications: [" + digest.applications.joined(separator: ", ") + "]\n"
         out += "---\n\n"
 
@@ -96,6 +98,9 @@ public enum MemoryWriter {
         }
         // recordingSection 已以换行收尾，此处再补一个即形成小节间单空行。
 
+        if let evidenceMaterial, !evidenceMaterial.isEmpty {
+            out += "### 时序证据\n\n" + evidenceMaterial + "\n"
+        }
         out += "## Citations\n\n"
         out += "- \(eventsPath)\n"
         // 粗粒度汇总引用它所归纳的各份细粒度记忆。
@@ -201,8 +206,7 @@ public enum MemoryWriter {
         if activity.clickCount > 0 { counts.append("点击 \(activity.clickCount) 次") }
         if activity.shortcutCount > 0 { counts.append("快捷键 \(activity.shortcutCount) 次") }
         if !activity.typedTexts.isEmpty {
-            let chars = activity.typedTexts.reduce(0) { $0 + $1.count }
-            counts.append("输入 \(activity.typedTexts.count) 段共 \(chars) 字")
+            counts.append("文本值变化 \(activity.typedTexts.count) 段")
         }
         if !counts.isEmpty {
             out += "- \(counts.joined(separator: "，"))。\n"
@@ -216,13 +220,25 @@ public enum MemoryWriter {
             out += "。\n"
         }
 
-        if !activity.typedTexts.isEmpty {
-            out += "- 输入内容摘录：\n"
-            for text in activity.typedTexts.prefix(6) {
-                out += "  - `\(escape(truncate(text, 120)))`\n"
-            }
-            if activity.typedTexts.count > 6 {
-                out += "  - 另有 \(activity.typedTexts.count - 6) 段未列出。\n"
+        out += textEvidenceSection(for: activity)
+        return out
+    }
+
+    private static let editedTextLabel = "编辑片段"
+    private static let uncertainTextLabel = "控件变化"
+
+    /// 模型取材和本地事实版本共用，证据级别与引用不能在渲染时丢失。
+    static func textEvidenceSection(for activity: SegmentDigest.AppActivity, limit: Int = 20) -> String {
+        let excerpts = activity.selectedTextExcerpts(limit: limit)
+        var out = ""
+        for (edited, label) in [(true, editedTextLabel), (false, uncertainTextLabel)] {
+            let group = excerpts.filter { ($0.evidence == .editedValue) == edited }
+            guard !group.isEmpty else { continue }
+            out += "- \(label)：\n"
+            for item in group {
+                var revision = item.wasReplaced ? "后续已覆盖部分或全部内容；" : ""
+                if !item.replaces.isEmpty { revision += "覆盖来源 \(item.replaces.joined(separator: ", "))；" }
+                out += "  - [\(revision)\(format(item.timestamp)); \(item.segmentID)#\(item.eventID)] `\(escape(truncate(item.text, 200)))`\n"
             }
         }
         return out

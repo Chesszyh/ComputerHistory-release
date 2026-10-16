@@ -8,6 +8,19 @@ import Foundation
 /// 让记忆在无模型时也可用，且内容可追溯。
 public struct SegmentDigest: Sendable {
 
+    public struct TextExcerpt: Sendable {
+        public var text: String
+        public var timestamp: Date
+        public var eventID: Int
+        public var segmentID: String
+        public var windowID: UInt32? = nil
+        public var url: String? = nil
+        public var focusIdentity: Int? = nil
+        public var evidence: TextEvidence?
+        public var wasReplaced = false
+        public var replaces: [String] = []
+    }
+
     /// 单个应用在本段内的活动。
     public struct AppActivity: Sendable {
         public var bundleIdentifier: String
@@ -19,6 +32,27 @@ public struct SegmentDigest: Sendable {
         public var shortcutCount: Int
         /// 本段内记录的输入片段，按时间顺序。
         public var typedTexts: [String]
+        public var textExcerpts: [TextExcerpt] = []
+
+        /// 先按证据分配预算，再均匀覆盖时间范围；不拼接无法证实连续的片段。
+        public func selectedTextExcerpts(limit: Int = 20) -> [TextExcerpt] {
+            guard limit > 0 else { return [] }
+            let excerpts = textExcerpts.isEmpty ? typedTexts.enumerated().map {
+                TextExcerpt(text: $0.element, timestamp: firstSeen, eventID: $0.offset,
+                            segmentID: "unknown", evidence: nil)
+            } : textExcerpts
+            func sample(_ values: [TextExcerpt], count: Int) -> [TextExcerpt] {
+                guard count > 0 else { return [] }
+                guard values.count > count else { return values }
+                if count == 1 { return [values[values.count - 1]] }
+                return (0..<count).map { values[$0 * (values.count - 1) / (count - 1)] }
+            }
+            let edited = excerpts.filter { $0.evidence == .editedValue }
+            let uncertain = excerpts.filter { $0.evidence != .editedValue }
+            let selected = sample(edited, count: min(limit, edited.count))
+                + sample(uncertain, count: max(0, limit - edited.count))
+            return selected.sorted { $0.timestamp < $1.timestamp }
+        }
         /// 出现过的窗口标题（去重、保序）。
         public var windowTitles: [String]
         /// 出现过的 URL（去重、保序）。
@@ -86,6 +120,7 @@ public struct SegmentDigest: Sendable {
                     merged.windowTitles = []
                     merged.urls = []
                     merged.typedTexts = []
+                    merged.textExcerpts = []
                     order.append(activity.bundleIdentifier)
                 }
                 merged.eventCount += activity.eventCount
@@ -100,11 +135,12 @@ public struct SegmentDigest: Sendable {
                     merged.urls.append(url)
                 }
                 merged.typedTexts.append(contentsOf: activity.typedTexts)
+                merged.textExcerpts.append(contentsOf: activity.textExcerpts)
                 byApp[activity.bundleIdentifier] = merged
             }
         }
 
-        let activities = order.compactMap { byApp[$0] }.sorted {
+        let activities = order.compactMap { byApp[$0].map(markReplaced) }.sorted {
             if $0.eventCount != $1.eventCount { return $0.eventCount > $1.eventCount }
             return $0.bundleIdentifier < $1.bundleIdentifier
         }
@@ -117,6 +153,19 @@ public struct SegmentDigest: Sendable {
             suppressedEventCount: totalSuppressed,
             coveredSegments: digests.filter { $0.eventCount > 0 }.count,
             activities: activities)
+    }
+
+    private static func markReplaced(_ source: AppActivity) -> AppActivity {
+        var activity = source
+        let references = Set(activity.textExcerpts.flatMap(\.replaces))
+        for index in activity.textExcerpts.indices {
+            let excerpt = activity.textExcerpts[index]
+            if references.contains("\(excerpt.segmentID)#\(excerpt.eventID)") {
+                activity.textExcerpts[index].evidence = .uncertainValueChange
+                activity.textExcerpts[index].wasReplaced = true
+            }
+        }
+        return activity
     }
 
     /// 从事件列表归纳。
@@ -154,7 +203,17 @@ public struct SegmentDigest: Sendable {
                 activity.shortcutCount += 1
             case .keyboardTextInput:
                 if let text = event.keyboard?.text, !text.isEmpty {
-                    activity.typedTexts.append(text)
+                    let target = event.keyboard?.target
+                    let placeholder = target?.placeholder == text
+                        && event.keyboard?.textEvidence != .editedValue
+                    if !placeholder {
+                        activity.typedTexts.append(text)
+                        activity.textExcerpts.append(TextExcerpt(
+                            text: text, timestamp: event.timestamp, eventID: event.id,
+                            segmentID: segmentID, windowID: event.window?.windowID,
+                            url: event.window?.url, focusIdentity: event.keyboard?.focusIdentity,
+                            evidence: event.keyboard?.textEvidence, replaces: event.keyboard?.textReplaces ?? []))
+                    }
                 }
             default:
                 break
@@ -171,7 +230,7 @@ public struct SegmentDigest: Sendable {
             byApp[bundle] = activity
         }
 
-        let activities = order.compactMap { byApp[$0] }
+        let activities = order.compactMap { byApp[$0].map(markReplaced) }
             .sorted {
                 if $0.eventCount != $1.eventCount { return $0.eventCount > $1.eventCount }
                 return $0.bundleIdentifier < $1.bundleIdentifier

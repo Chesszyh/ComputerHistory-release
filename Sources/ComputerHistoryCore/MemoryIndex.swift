@@ -23,6 +23,7 @@ public struct MemoryIndex: Sendable {
         public var body: String
         /// 正文里各小节标题，用于折叠展示。
         public var sections: [(heading: String, content: String)]
+        public var generationStatus: String? = nil
 
         /// 用于展示的时刻，形如 `15:40`。
         public func timeLabel(timeZone: TimeZone = .current) -> String {
@@ -85,7 +86,8 @@ public struct MemoryIndex: Sendable {
                      sourceSegmentID: segmentID, granularity: granularity,
                      title: front.title, summary: front.description,
                      applications: apps, body: body,
-                     sections: parseSections(body))
+                     sections: parseSections(body),
+                     generationStatus: text.split(separator: "\n").first(where: { $0.hasPrefix("generation: ") }).map { String($0.dropFirst(12)) })
     }
 
     static func parseApplications(_ text: String) -> [String] {

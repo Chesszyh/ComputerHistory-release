@@ -8,7 +8,9 @@ struct StatusPanel: View {
 
     var body: some View {
         Group {
-            if let detail = model.detail {
+            if model.showsUsage {
+                ModelUsagePane(model: model)
+            } else if let detail = model.detail {
                 // 详情整屏替换列表。不作并排：MenuBarExtra 不会随内容变宽，
                 // 并排的第二栏会被裁在可视区外。
                 DetailPane(content: detail, model: model) { model.closeDetail() }
@@ -36,6 +38,21 @@ struct StatusPanel: View {
                 VStack(alignment: .leading, spacing: 14) {
                     RuntimeSection(model: model)
                     SettingsSection(model: model)
+                    Button { model.showsUsage = true } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 9, weight: .bold))
+                                .frame(width: 10)
+                            Text("总结用量与费用")
+                                .font(.system(size: 11, weight: .semibold))
+                            Spacer()
+                            Text("\(model.modelRequests.count) 次请求")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
                     TimelineSection(model: model)
                 }
                 .padding(.horizontal, 14)
@@ -90,7 +107,6 @@ struct StatusPanel: View {
             ToolbarIconButton(icon: "doc.on.doc", tooltip: "复制近期活动摘要") {
                 model.copyRecentSummary()
             }
-
             Spacer()
 
             ToolbarIconButton(icon: "power", tooltip: "退出计算机历史") {
@@ -116,9 +132,11 @@ struct LiveActivityCard: View {
                         .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1)
                     Spacer()
-                    Text(model.frontDurationLabel)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        Text(model.frontDurationLabel)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                    }
                 }
 
                 if let window = model.frontWindow, !window.isEmpty {
@@ -248,7 +266,7 @@ struct RuntimeMetricsGrid: View {
             .padding(.horizontal, 4)
             .padding(.top, 2)
 
-            if status.isStalled {
+            if model.isStalled {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 10))
@@ -302,27 +320,19 @@ struct TimelineSection: View {
     @ObservedObject var model: StatusModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        LazyVStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("历史活动")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                if model.memories.entries.count > model.timelineLimit {
-                    Button("展开更多") {
-                        model.timelineLimit += 12
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color.accentColor)
-                }
             }
 
-            if model.memories.entries.isEmpty {
+            if model.timelineCount == 0 {
                 HStack(spacing: 8) {
                     Image(systemName: "clock")
                         .foregroundStyle(.tertiary)
-                    Text("尚无记忆文件，采集器会在每个周期自动汇总。")
+                    Text("暂无历史活动")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
@@ -330,7 +340,7 @@ struct TimelineSection: View {
                 .frame(maxWidth: .infinity, alignment: .center)
             } else {
                 ForEach(model.timelineGroups, id: \.day) { group in
-                    VStack(alignment: .leading, spacing: 8) {
+                    LazyVStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 6) {
                             Text(model.dayLabel(group.day))
                                 .font(.system(size: 11, weight: .semibold))
@@ -341,14 +351,22 @@ struct TimelineSection: View {
                         }
                         .padding(.top, 4)
 
-                        VStack(spacing: 6) {
+                        LazyVStack(spacing: 6) {
                             ForEach(group.items) { item in
                                 TimelineRow(item: item, model: model)
+                                    .onAppear {
+                                        if item.id == model.timelineGroups.last?.items.last?.id,
+                                           model.timelineLimit < model.timelineCount {
+                                            model.timelineLimit = min(model.timelineLimit + 12, model.timelineCount)
+                                        }
+                                    }
                             }
                         }
                     }
                 }
             }
+
+
         }
     }
 }
@@ -372,7 +390,7 @@ struct TimelineRow: View {
     /// 17:40，而下一条显示 17:50，使用者会以为 17:30 与 17:40 没有被总结。
     /// 一行放不下 `17:20–17:40`（时间列只有 36pt），故分两行。
     private var isMerged: Bool {
-        item.endTimestamp.timeIntervalSince(item.timestamp) > 300
+        item.isAway || item.endTimestamp.timeIntervalSince(item.timestamp) > 300
     }
 
     private var endTimeLabel: String {
@@ -428,7 +446,7 @@ struct TimelineRow: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
 
-                        if !item.apps.isEmpty || !item.isNarrative {
+                        if !item.isAway && (!item.apps.isEmpty || !item.isNarrative) {
                             HStack(spacing: 6) {
                                 if !item.apps.isEmpty {
                                     ApplicationBadges(bundleIDs: item.apps)
@@ -456,22 +474,24 @@ struct TimelineRow: View {
                 .help("点击复制这条记录")
 
                 // 概要展开：内容留在原地，不改变布局层级，也不打开新窗口。
-                Button {
-                    withAnimation(.easeInOut(duration: 0.16)) {
-                        model.toggleExpanded(item.id)
+                if !item.isAway {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            model.toggleExpanded(item.id)
+                        }
+                    } label: {
+                        Image(systemName: model.isExpanded(item.id)
+                              ? "ellipsis.circle.fill" : "ellipsis.circle")
+                            .font(.system(size: 12))
+                            .foregroundStyle(model.isExpanded(item.id)
+                                             ? AnyShapeStyle(Color.accentColor)
+                                             : AnyShapeStyle(.tertiary))
+                            .opacity(isHovered || model.isExpanded(item.id) ? 1 : 0.45)
                     }
-                } label: {
-                    Image(systemName: model.isExpanded(item.id)
-                          ? "ellipsis.circle.fill" : "ellipsis.circle")
-                        .font(.system(size: 12))
-                        .foregroundStyle(model.isExpanded(item.id)
-                                         ? AnyShapeStyle(Color.accentColor)
-                                         : AnyShapeStyle(.tertiary))
-                        .opacity(isHovered || model.isExpanded(item.id) ? 1 : 0.45)
+                    .buttonStyle(.plain)
+                    .padding(.top, 1)
+                    .help(model.isExpanded(item.id) ? "收起概要" : "展开概要详情")
                 }
-                .buttonStyle(.plain)
-                .padding(.top, 1)
-                .help(model.isExpanded(item.id) ? "收起概要" : "展开概要详情")
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 7)
@@ -686,9 +706,20 @@ struct ApplicationBadges: View {
         }
     }
 
-    static func icon(for bundleID: String) -> NSImage? {
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return nil }
-        return NSWorkspace.shared.icon(forFile: url.path)
+    @MainActor private static var icons = NSCache<NSString, NSImage>()
+    @MainActor private static var missing: Set<String> = []
+    @MainActor static func icon(for bundleID: String) -> NSImage? {
+        icons.countLimit = 64
+        if let icon = icons.object(forKey: bundleID as NSString) { return icon }
+        if missing.contains(bundleID) { return nil }
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+            if missing.count >= 64 { missing.removeAll() }
+            missing.insert(bundleID)
+            return nil
+        }
+        let icon = NSWorkspace.shared.icon(forFile: url.path)
+        icons.setObject(icon, forKey: bundleID as NSString)
+        return icon
     }
 
     static func initial(_ bundleID: String) -> String {
@@ -1105,5 +1136,258 @@ struct PillLabel: View {
             .background(tint.opacity(0.15))
             .foregroundStyle(tint)
             .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+    }
+}
+
+
+struct ModelUsagePane: View {
+    @ObservedObject var model: StatusModel
+    @State private var filter = ModelRequestFilter()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Button {
+                    if model.requestDetail != nil { model.requestDetail = nil }
+                    else { model.closeUsage() }
+                } label: { Label("返回", systemImage: "chevron.left") }
+                .buttonStyle(.plain)
+                Spacer()
+                Text(model.requestDetail == nil ? "总结用量与费用" : "请求详情")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Button {
+                    model.refreshSlow()
+                    if let detail = model.requestDetail { model.openRequest(detail) }
+                } label: { Image(systemName: "arrow.clockwise") }
+                .buttonStyle(.plain)
+            }
+            Divider()
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    if let request = model.requestDetail {
+                        requestBody(request)
+                    } else {
+                        Picker("时段", selection: $filter.period) {
+                            ForEach(ModelRequestFilter.Period.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        HStack(spacing: 12) {
+                            Picker("任务", selection: $filter.task) {
+                                Text("全部任务").tag("")
+                                Text("十分钟记忆").tag("10min")
+                                Text("六小时汇总").tag("6h")
+                                Text("活动整理").tag("narrative")
+                            }
+                            Picker("来源", selection: $filter.source) {
+                                ForEach(ModelRequestFilter.Source.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                            }
+                        }
+                        .font(.system(size: 11))
+                        totals(filter.period.rawValue, records: filteredRequests)
+                        Text("费用按配置单价估算")
+                            .font(.system(size: 10)).foregroundStyle(.tertiary)
+                        if filteredRequests.isEmpty {
+                            Text("这个范围内暂无请求")
+                                .font(.system(size: 12)).foregroundStyle(.secondary)
+                                .padding(.vertical, 16)
+                        }
+                        if let error = model.requestError { Text(error).foregroundStyle(.red) }
+                        ForEach(requestDays, id: \.self) { day in
+                            Text(day).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                            ForEach(tasks(on: day), id: \.self) { task in
+                                ModelRequestGroup(records: requests(on: day, task: task), model: model)
+                            }
+                        }
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }.font(.system(size: 11)).padding(14)
+    }
+
+    private var filteredRequests: [ModelRequest] { filter.apply(model.modelRequests) }
+    private func day(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+    private var requestDays: [String] { Set(filteredRequests.map { day($0.startedAt) }).sorted(by: >) }
+    private func tasks(on date: String) -> [String] {
+        var seen = Set<String>()
+        return filteredRequests.filter { day($0.startedAt) == date }.compactMap {
+            seen.insert($0.task).inserted ? $0.task : nil
+        }
+    }
+    private func requests(on date: String, task: String) -> [ModelRequest] {
+        filteredRequests.filter { day($0.startedAt) == date && $0.task == task }
+    }
+
+    private func totals(_ title: String, records: [ModelRequest]) -> some View {
+        let costs = records.reduce(into: [String: Double]()) { values, record in
+            if let price = record.pricing, let cost = record.estimatedCost {
+                values[price.currency, default: 0] += cost
+            }
+        }
+        let input = records.compactMap(\.usage).reduce(0) { $0 + $1.promptTokens }
+        let output = records.compactMap(\.usage).reduce(0) { $0 + $1.completionTokens }
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(title).font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Text(costs.isEmpty ? "—" : costs.keys.sorted().map { "\($0) " + String(format: "%.4f", costs[$0]!) }.joined(separator: " / "))
+            }
+            Text("\(records.count) 次请求 · 输入 \(input) · 输出 \(output) token")
+                .font(.caption).foregroundStyle(.secondary)
+            let unknown = records.filter { $0.usage == nil || $0.estimatedCost == nil }.count
+            if unknown > 0 { Text("\(unknown) 次请求的用量或费用未知").font(.caption).foregroundStyle(.secondary) }
+        }
+    }
+
+    private func requestBody(_ request: ModelRequest) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(request.taskLabel + " · " + request.statusLabel)
+                    .font(.system(size: 12, weight: .semibold))
+                Text(request.model).font(.system(size: 11)).foregroundStyle(.secondary)
+                HStack {
+                    Text(request.startedAt, format: .dateTime.month().day().hour().minute())
+                    Spacer()
+                    Text(request.costLabel)
+                    if let duration = request.durationSeconds {
+                        Text(String(format: "%.1f 秒", duration))
+                    }
+                }.font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+            if let error = request.error { textBlock("错误", error) }
+            textBlock("模型输出", request.output ?? "尚无输出")
+            if let parent = request.comparisonOf {
+                if let primary = model.modelRequests.first(where: { $0.id == parent }) {
+                    Button("查看正式结果") { model.openRequest(primary) }
+                        .buttonStyle(.plain).foregroundStyle(Color.accentColor)
+                }
+            } else {
+                ForEach(model.modelRequests.filter { $0.comparisonOf == request.id }) { secondary in
+                    Button("查看对照结果 · " + secondary.model) { model.openRequest(secondary) }
+                        .buttonStyle(.plain).foregroundStyle(Color.accentColor)
+                }
+            }
+            if let usage = request.usage {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("输入 \(usage.promptTokens) · 输出 \(usage.completionTokens) token")
+                    HStack {
+                        if let cached = usage.cachedPromptTokens { Text("缓存命中 \(cached)") }
+                        Text("思考 \(usage.reasoningTokens)")
+                    }
+                }.font(.system(size: 10)).foregroundStyle(.secondary)
+            } else { Text("服务未返回用量").font(.system(size: 10)).foregroundStyle(.secondary) }
+            Divider().opacity(0.4)
+            if !request.sources.isEmpty { RequestDisclosure(title: "原始来源", text: request.sources.joined(separator: "\n")) }
+            RequestDisclosure(title: "系统提示词", text: request.system)
+            RequestDisclosure(title: "原始输入", text: request.input)
+            RequestDisclosure(title: "服务地址", text: request.endpoint)
+        }
+        .font(.system(size: 11))
+        .id(request.id)
+    }
+
+    private func textBlock(_ title: String, _ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title).font(.system(size: 11, weight: .semibold))
+                Spacer()
+                Button("复制") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                }.buttonStyle(.plain).font(.caption)
+            }
+            Text(text).font(.system(size: 11)).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8).background(Color.primary.opacity(0.04)).cornerRadius(6)
+        }
+    }
+}
+
+
+struct ModelRequestGroup: View {
+    let records: [ModelRequest]
+    @ObservedObject var model: StatusModel
+    @State private var expanded = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            LazyVStack(spacing: 6) {
+                ForEach(records) { request in
+                    Button { model.openRequest(request) } label: {
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack {
+                                Text(request.comparisonOf == nil ? "正式" : "对照")
+                                Text(request.model).lineLimit(1).truncationMode(.middle)
+                                Spacer(minLength: 4)
+                                Text(request.costLabel)
+                            }.font(.system(size: 11))
+                            HStack {
+                                Text(request.startedAt, style: .time)
+                                Text(request.statusLabel)
+                                Spacer()
+                                if let usage = request.usage { Text("入 \(usage.promptTokens) / 出 \(usage.completionTokens)") }
+                                else { Text("用量未知") }
+                            }.font(.system(size: 10)).foregroundStyle(.secondary)
+                        }
+                        .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.primary.opacity(0.04))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                }
+            }.padding(.top, 6)
+        } label: {
+            HStack {
+                Text(taskLabel).font(.system(size: 11, weight: .semibold))
+                Spacer()
+                Text("\(records.count) 次").font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+        }
+        .tint(.secondary)
+        .padding(10)
+        .background(Color.primary.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var taskLabel: String {
+        switch records.first?.task {
+        case "10min": return "十分钟记忆"
+        case "6h": return "六小时汇总"
+        case "narrative": return "活动整理"
+        default: return records.first?.task ?? "请求"
+        }
+    }
+}
+
+struct RequestDisclosure: View {
+    let title: String
+    let text: String
+    @State private var expanded = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Spacer()
+                    Button("复制") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(text, forType: .string)
+                    }.buttonStyle(.plain).font(.system(size: 10))
+                }
+                Text(text).font(.system(size: 11)).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(8)
+            .background(Color.primary.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .padding(.top, 6)
+        } label: {
+            Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+        }
+        .tint(.secondary)
     }
 }

@@ -55,7 +55,11 @@ public final class CollectionSession {
     /// 上一帧已编号的树，直接用于差分；避免"渲染再反解"的绕行。
     private var previousTree: [UIElementRender]?
     private var lastSnapshotText: String?
+    private var treeContext: EventStreamWindow?
+    private var treeApp: EventStreamApp?
     private var isRunning = false
+    private var away: AwayPeriods
+    public var isAway: Bool { away.startedAt != nil }
 
     /// 最近一次清理结果，供 CLI 汇报。
     public private(set) var lastPruneReport: PruneReport?
@@ -68,18 +72,11 @@ public final class CollectionSession {
             // 恢复时必须重新建立基线，避免把暂停期间的编辑补记为输入。
             textTracker.resetBaseline()
             textContext = nil
+            inputActivity = nil
             previousTree = nil
             lastSnapshotText = nil
-            pendingDiff = nil
         }
     }
-
-    /// 已算出但尚未归入事件的差分。
-    ///
-    /// 输入事件（点击/按键）与 AX 采样是两条独立来源，若不排队，
-    /// 同一帧的差分要么被丢掉、要么被重复计算。这里让它**只被消费一次**，
-    /// 与官方一致——样本中点击事件 89.7% 携带真实差分。
-    private var pendingDiff: EventStreamAXTree?
 
     /// 文本输入聚合。观察聚焦元素的值变化，按停顿切块。
     private let textTracker = TextInputTracker()
@@ -90,6 +87,18 @@ public final class CollectionSession {
         var target: EventStreamAXElement?
     }
     private var textContext: TextContext?
+    private var inputActivity: (pid: Int32?, windowID: UInt32?, url: String?, focus: Int?, at: Date)?
+
+    /// 只记录交互时间与上下文，不保存原始键码或键入内容。
+    public func noteInputActivity(at now: Date = Date()) {
+        noteInputActivity(processIdentifier: FrontmostApplication.current()?.processIdentifier, at: now)
+    }
+
+    func noteInputActivity(processIdentifier: Int32?, at now: Date) {
+        guard isRunning, !isPaused, !isAway, let context = textContext,
+              context.app.processIdentifier == processIdentifier else { return }
+        inputActivity = (processIdentifier, context.window?.windowID, context.window?.url, context.focusIdentity, now)
+    }
 
     /// 供外部观察状态。
     public private(set) var currentSegmentID: String?
@@ -97,6 +106,7 @@ public final class CollectionSession {
 
     public init(configuration: Configuration) {
         self.config = configuration
+        self.away = AwayPeriods.load(root: configuration.rootDirectory)
     }
 
     public var isRecording: Bool { isRunning }
@@ -107,13 +117,13 @@ public final class CollectionSession {
     public func start(now: Date = Date()) throws {
         guard !isRunning else { return }
         nextID = 1
-        try rotateIfNeeded(now: now, force: true)
+        if !isAway { try rotateIfNeeded(now: now, force: true) }
+        try EventArchive.recoverUnsealed(root: config.rootDirectory, excluding: currentSegmentID ?? "")
         isRunning = true
         textTracker.resetBaseline()
         textContext = nil
         previousTree = nil
         lastSnapshotText = nil
-        pendingDiff = nil
         append(kind: .sessionStarted, at: now, app: nil, window: nil,
                mouse: nil, keyboard: nil, selection: nil, ax: nil)
     }
@@ -140,7 +150,7 @@ public final class CollectionSession {
     /// 调用频率由外部决定；真实服务在窗口/应用切换时触发。
     public func sampleFrontmost(now: Date = Date(), force: Bool = false) {
         guard isRunning, !isPaused else { return }
-        guard let app = FrontmostApplication.current() else { return }
+        guard let app = FrontmostApplication.current(), observeAvailability(app: app, now: now) else { return }
 
         let window = FrontmostApplication.frontWindow(for: app)
         // 命中抑制时直接返回：既为隐私，也省下每帧整棵树的遍历开销。
@@ -150,28 +160,33 @@ public final class CollectionSession {
             return
         }
 
-        var numbered: [UIElementRender] = []
-        var treeText = ""
+        var roots: [UIElementRender] = []
         if let pid = app.processIdentifier {
-            let roots = AXTreeReader.read(pid: pid, maxNodes: config.maxNodesPerSnapshot)
-            // 身份由 AXTreeReader 直接按 CFHash 写入（跨帧稳定，见该文件说明）；
-            // 这里只需补上落盘用的遍历序号。若在此重算身份会覆盖掉精确值。
-            numbered = UIElementRenderTree.assignElementIDs(roots)
-            treeText = UIElementRenderTree.text(numbered)
+            roots = AXTreeReader.read(pid: pid, maxNodes: config.maxNodesPerSnapshot)
         }
 
+        recordSnapshot(roots: roots, app: app, window: window, now: now, force: force)
+    }
+
+    func recordSnapshot(roots: [UIElementRender], app: EventStreamApp,
+                        window: EventStreamWindow?, now: Date, force: Bool = false) {
+        guard isRunning, !isPaused, observeAvailability(app: app, now: now), !config.policy.shouldSuppress(app: app, window: window) else { return }
+        let numbered = UIElementRenderTree.assignElementIDs(roots)
+        let treeText = UIElementRenderTree.text(numbered)
+        let switched = treeApp?.processIdentifier != app.processIdentifier
+            || treeContext?.windowID != window?.windowID || treeContext?.url != window?.url
+        let expired = writer.map { SegmentClock.isExpired($0.startedAt, now: now) } ?? false
+        if switched || expired { previousTree = nil; lastSnapshotText = nil }
+        treeApp = app; treeContext = window
         let changed = treeText != lastSnapshotText
-        // 未变化则不产出 window.changed，避免静默期刷屏；但差分仍要刷新，
-        // 因为输入事件会异步取用它。
+        // 相同界面只记录一次，输入事件独立保存动作。
         if !force, !changed { return }
 
         let ax = makeAXTree(current: numbered, currentText: treeText)
-        previousTree = numbered
-        lastSnapshotText = treeText
-        // 持有本帧差分供输入事件取用；window.changed 自己带这一份。
-        pendingDiff = ax
         append(kind: .windowChanged, at: now, app: app, window: window,
                mouse: nil, keyboard: nil, selection: nil, ax: ax)
+        previousTree = numbered
+        lastSnapshotText = treeText
     }
 
     /// 记录一次鼠标点击。
@@ -183,13 +198,14 @@ public final class CollectionSession {
     ) {
         guard isRunning, !isPaused else { return }
         let app = FrontmostApplication.current()
+        guard observeAvailability(app: app, now: now) else { return }
         let target = FrontmostApplication.focusedElement()
         append(kind: button == "right" ? .mouseContextMenu : .mouseClick, at: now,
                app: app, window: FrontmostApplication.frontWindow(for: app),
                mouse: EventStreamMouseInteraction(
                    button: button, clickCount: clickCount,
                    modifiers: modifiers, target: target),
-               keyboard: nil, selection: nil, ax: consumeDiff())
+               keyboard: nil, selection: nil, ax: nil)
     }
 
     /// 记录一次快捷键。
@@ -200,18 +216,20 @@ public final class CollectionSession {
     ) {
         guard isRunning, !isPaused else { return }
         let app = FrontmostApplication.current()
+        guard observeAvailability(app: app, now: now) else { return }
         append(kind: .keyboardShortcut, at: now,
                app: app, window: FrontmostApplication.frontWindow(for: app), mouse: nil,
                keyboard: EventStreamKeyboardInteraction(
                    keyEquivalent: keyEquivalent, modifiers: modifiers,
                    target: FrontmostApplication.focusedElement()),
-               selection: nil, ax: consumeDiff())
+               selection: nil, ax: nil)
     }
 
     /// 记录一次文本输入。
     public func recordTextInput(_ text: String, at now: Date = Date()) {
         guard isRunning, !isPaused, !text.isEmpty else { return }
         let app = FrontmostApplication.current()
+        guard observeAvailability(app: app, now: now) else { return }
         append(kind: .keyboardTextInput, at: now,
                app: app, window: FrontmostApplication.frontWindow(for: app), mouse: nil,
                keyboard: EventStreamKeyboardInteraction(
@@ -223,11 +241,12 @@ public final class CollectionSession {
     public func recordSubmit(at now: Date = Date()) {
         guard isRunning, !isPaused else { return }
         let app = FrontmostApplication.current()
+        guard observeAvailability(app: app, now: now) else { return }
         append(kind: .keyboardSubmit, at: now,
                app: app, window: FrontmostApplication.frontWindow(for: app), mouse: nil,
                keyboard: EventStreamKeyboardInteraction(
                    keyEquivalent: "\r", target: FrontmostApplication.focusedElement()),
-               selection: nil, ax: consumeDiff())
+               selection: nil, ax: nil)
     }
 
     /// 轮询一次聚焦元素的文本，按需产出 `keyboard.text_input`。
@@ -237,6 +256,7 @@ public final class CollectionSession {
     public func sampleTextInput(now: Date = Date()) {
         guard isRunning, !isPaused else { return }
         let app = FrontmostApplication.current()
+        guard observeAvailability(app: app, now: now) else { return }
 
         sampleTextInput(app: app, window: FrontmostApplication.frontWindow(for: app),
                         readFocused: { FrontmostApplication.focusedTextSnapshot(for: app) }, now: now)
@@ -246,6 +266,7 @@ public final class CollectionSession {
                          readFocused: () -> (TextInputTracker.Observation, EventStreamAXElement?),
                          now: Date) {
         guard isRunning, !isPaused else { return }
+        guard observeAvailability(app: app, now: now) else { return }
         guard let app else {
             flushTextInput(at: now)
             textTracker.resetBaseline()
@@ -267,43 +288,95 @@ public final class CollectionSession {
             textContext = nil
             return
         }
-        let (obs, target) = readFocused()
+        var (obs, target) = readFocused()
         if textContext?.focusIdentity != obs.focusIdentity {
             flushTextInput(at: now)
             textTracker.resetBaseline()
             textContext = nil
         }
+        if obs.hasInputActivity == nil, let inputActivity {
+            let age = now.timeIntervalSince(inputActivity.at)
+            obs.hasInputActivity = inputActivity.pid == app.processIdentifier
+                && inputActivity.windowID == window?.windowID && inputActivity.url == window?.url
+                && inputActivity.focus == obs.focusIdentity && age >= 0 && age <= 2
+        }
+        // 明确 placeholder 仅在没有编辑活动时排除；真正键入相同文字仍保留。
+        if let placeholder = obs.placeholder, !placeholder.isEmpty,
+           obs.value == placeholder, obs.hasInputActivity != true {
+            obs.isPlaceholder = true
+        }
         let context = TextContext(app: app, window: window,
                                   focusIdentity: obs.focusIdentity, target: target)
         textContext?.app = app
         textContext?.window = window
-        if let text = textTracker.observe(obs, at: now) {
-            writeTextInput(text, context: textContext ?? context, at: now)
+        for fragment in textTracker.observe(obs, at: now) {
+            writeTextInput(fragment, context: textContext ?? context, at: now)
         }
         textContext = context
     }
 
     private func flushTextInput(at now: Date) {
-        if let tail = textTracker.flush(), let context = textContext {
-            writeTextInput(tail, context: context, at: now)
+        let fragments = textTracker.flush()
+        if let context = textContext {
+            for fragment in fragments {
+                writeTextInput(fragment, context: context, at: now)
+            }
         }
     }
 
-    private func writeTextInput(_ text: String, context: TextContext, at now: Date) {
-        guard !text.isEmpty else { return }
+    private func writeTextInput(_ fragment: TextInputTracker.Fragment, context: TextContext, at now: Date) {
+        guard !fragment.text.isEmpty else { return }
+        let eventID = nextID
         append(kind: .keyboardTextInput, at: now,
                app: context.app, window: context.window, mouse: nil,
-               keyboard: EventStreamKeyboardInteraction(text: text, target: context.target),
+               keyboard: EventStreamKeyboardInteraction(text: fragment.text, textEvidence: fragment.evidence,
+                                                        focusIdentity: context.focusIdentity, textReplaces: fragment.replaces, target: context.target),
                selection: nil, ax: nil)
+        if nextID > eventID, let segment = currentSegmentID {
+            textTracker.acknowledge(fragment, reference: "\(segment)#\(eventID)")
+        }
     }
 
     /// 记录一次文本选中变化。
     public func recordSelection(_ selection: EventStreamSelection, at now: Date = Date()) {
         guard isRunning, !isPaused else { return }
         let app = FrontmostApplication.current()
+        guard observeAvailability(app: app, now: now) else { return }
         append(kind: .selectionChanged, at: now,
                app: app, window: FrontmostApplication.frontWindow(for: app), mouse: nil, keyboard: nil,
                selection: selection, ax: nil)
+    }
+
+    @discardableResult
+    func observeAvailability(app: EventStreamApp?, now: Date) -> Bool {
+        guard !isPaused else { return false }
+        var changed = false
+        if AwayPeriods.isLoginWindow(app), away.startedAt == nil {
+            flushTextInput(at: now)
+            away.startedAt = now
+            changed = true
+            do {
+                try writer?.close(endedAt: now, endReason: nil)
+                writer = nil
+                currentSegmentID = nil
+            } catch {
+                FileHandle.standardError.write(Data("封口离开前的事件段失败：\(error)\n".utf8))
+            }
+        } else if let app, !AwayPeriods.isLoginWindow(app), let start = away.startedAt {
+            away.periods.append(.init(start: start, end: max(start, now)))
+            away.startedAt = nil
+            changed = true
+        }
+        if changed {
+            textTracker.resetBaseline()
+            textContext = nil
+            inputActivity = nil
+            previousTree = nil
+            lastSnapshotText = nil
+            do { try away.save(root: config.rootDirectory) }
+            catch { FileHandle.standardError.write(Data("保存离开时段失败：\(error)\n".utf8)) }
+        }
+        return !isAway
     }
 
     // MARK: - 内部
@@ -316,18 +389,12 @@ public final class CollectionSession {
         guard let previous = previousTree, !previous.isEmpty else {
             return EventStreamAXTree(mode: .fullTree, text: currentText)
         }
-        if let diff = UIElementRenderDifference.lines(from: previous, to: current) {
+        if let diff = UIElementRenderDifference.lines(from: previous, to: current, includesUnchangedContext: false) {
             return EventStreamAXTree(mode: .diffFromPrevious,
                                      text: diff.joined(separator: "\n"))
         }
         // 预算超限：回退整树
         return EventStreamAXTree(mode: .fullTree, text: currentText)
-    }
-
-    /// 取出并清空待处理差分。同一帧只被一个事件消费，避免重复携带。
-    private func consumeDiff() -> EventStreamAXTree? {
-        defer { pendingDiff = nil }
-        return pendingDiff
     }
 
     private func append(
@@ -342,7 +409,7 @@ public final class CollectionSession {
     ) {
         // 暂停期间一律不写入。输入事件由事件监听回调触发，不经过采样入口，
         // 因此这里也要挡一次。
-        guard !isPaused else { return }
+        guard !isPaused, !isAway else { return }
 
         // 抑制判定：命中则只计数，不落主文件。
         if config.policy.shouldSuppress(app: app, window: window) {
@@ -377,12 +444,17 @@ public final class CollectionSession {
         let w = try SegmentWriter(rootDirectoryURL: config.rootDirectory, start: now)
         writer = w
         currentSegmentID = w.segmentID
+        previousTree = nil
+        lastSnapshotText = nil
 
         // 借轮转时机清理旧段：后台长跑时轮转每 10 分钟一次，足够及时，
         // 又不必额外起定时器。清理失败不影响采集。
         let report = SegmentPruner.prune(rootDirectory: config.rootDirectory,
                                         retention: config.retention, now: now,
                                         activeSegmentID: w.segmentID)
+        if report.removedWithoutSummary > 0 {
+            FileHandle.standardError.write("保留上限已淘汰 \(report.removedWithoutSummary) 个未完成总结的段。\n".data(using: .utf8)!)
+        }
         lastPruneReport = report.removedSegments > 0 || !report.failures.isEmpty ? report : nil
         for failure in report.failures {
             FileHandle.standardError.write(

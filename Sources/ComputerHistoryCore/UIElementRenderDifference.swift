@@ -37,7 +37,8 @@ public enum UIElementRenderDifference {
         options: UIElementRenderLineOptions = [],
         summarizesRemovedElementIDs: Bool = true,
         ignoreLineBudget: Bool = false,
-        lineBudget: Int = defaultLineBudget
+        lineBudget: Int = defaultLineBudget,
+        includesUnchangedContext: Bool = true
     ) -> [String]? {
         // 跨帧身份由调用方提供；这里只补充落盘的遍历序号。
         let previousNumbered = UIElementRenderTree.assignElementIDs(previous)
@@ -56,7 +57,7 @@ public enum UIElementRenderDifference {
         if summarizesRemovedElementIDs, !removedIDs.isEmpty {
             lines.append("Removed element IDs: " + formatRanges(removedIDs))
         }
-        lines.append(contentsOf: context)
+        if includesUnchangedContext { lines.append(contentsOf: context) }
         lines.append(contentsOf: additions)
 
         if !ignoreLineBudget, lines.count > lineBudget { return nil }

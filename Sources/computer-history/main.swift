@@ -6,6 +6,7 @@ import ComputerHistoryCore
 
 let args = Array(CommandLine.arguments.dropFirst())
 let flags = Set(args)
+atexit { ModelComparison.waitForPendingRequests() }
 
 let defaultRoot = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent(".computer-history")
@@ -35,7 +36,8 @@ func usage() {
       --out <目录>     落盘根目录。默认 ~/.computer-history
       --seconds <秒>   采集指定时长后自动退出；省略则持续运行直到中断
 
-    collect 仅在本地采集；memorize、narrative 和 supervise 在配置密钥后会联网。
+    collect 仅在本地采集；生成任务使用 model.json 配置的服务或 DeepSeek 环境变量。
+    请求输入、输出、用量与估算费用保存在 requests/，可在菜单栏查看。
     --no-model 禁止生成任务调用模型，适用于以上三个生成入口。
     supervise 默认定期生成记忆；--memorize-interval 0 关闭定时生成（仍接受手动请求）。
     """)
@@ -127,25 +129,13 @@ if flags.contains("--status") {
           + "最长 \(cfg.retention.maxAgeDays) 天")
     print("屏蔽应用：\(cfg.policy.blocklist.count) 项")
 
-    let dirs = ((try? FileManager.default.contentsOfDirectory(
-        at: seg, includingPropertiesForKeys: [.fileSizeKey])) ?? [])
-        .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false }
-    var bytes = 0, events = 0
-    for d in dirs {
-        let f = d.appendingPathComponent("events.jsonl")
-        bytes += (try? f.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        if let text = try? String(contentsOf: f, encoding: .utf8) {
-            events += text.reduce(0) { $1 == "\n" ? $0 + 1 : $0 }
-        }
-    }
+    let data = CollectorStatus.read(root: root).data
     let fmt = DateFormatter()
     fmt.dateFormat = "yyyy-MM-dd HH:mm"
-    let first = dirs.map(\.lastPathComponent).min() ?? "-"
-    let last = dirs.map(\.lastPathComponent).max() ?? "-"
-    print("segment 数：\(dirs.count)")
-    print("时间范围：\(first) → \(last)")
-    print("事件总数：\(events)")
-    print("占用空间：\(bytes / 1_048_576) MB")
+    print("segment 数：\(data.segmentCount)")
+    print("时间范围：\(data.earliest.map { fmt.string(from: $0) } ?? "-") → \(data.latest.map { fmt.string(from: $0) } ?? "-")")
+    print("事件总数：\(data.eventCountIncomplete ? "至少 " : "")\(data.eventCount)")
+    print("占用空间：\(data.bytes / 1_048_576) MiB")
     exit(0)
 }
 
@@ -178,7 +168,7 @@ if flags.contains("narrative") {
     _ = generationLock
     var client: DeepSeekClient?
     if !flags.contains("--no-model") {
-        do { client = try DeepSeekClient.fromEnvironment() }
+        do { client = try DeepSeekClient.fromEnvironment(rootDirectory: root) }
         catch { warn("未启用模型归纳：\(error)") }
     }
     let generator = NarrativeGenerator(rootDirectory: root, client: client)
@@ -249,13 +239,15 @@ if flags.contains("memorize") {
     var client: DeepSeekClient?
     if !flags.contains("--no-model") {
         do {
-            client = try DeepSeekClient.fromEnvironment()
+            client = try DeepSeekClient.fromEnvironment(rootDirectory: root)
         } catch {
             warn("未启用模型补写：\(error)")
-            warn("  只生成可由事件证实的部分。要启用请先 export DEEPSEEK_API_KEY。")
+            warn("  只生成事实摘要。模型配置见数据目录中的 model.json 或 DEEPSEEK_API_KEY。")
         }
     }
 
+    do { try EventArchive.archiveCompleted(root: root) }
+    catch { warn("事件归档失败，保留原始文件：\(error)") }
     let limit = value(of: "--limit").flatMap(Int.init)
     let granularity = value(of: "--granularity") ?? "10min"
     let generator = MemoryGenerator(rootDirectory: root,
@@ -657,7 +649,7 @@ let timer = Timer.scheduledTimer(withTimeInterval: sampleInterval, repeats: true
         // 文本输入按同一周期轮询；切块由跟踪器内部的停顿阈值决定，
         // 与采样周期解耦。
         session.sampleTextInput()
-        if debugText && !session.isPaused {
+        if debugText && !session.isPaused && !session.isAway {
             let app = FrontmostApplication.current()
             let window = FrontmostApplication.frontWindow(for: app)
             guard !collectorConfig.policy.shouldSuppress(app: app, window: window) else { return }
@@ -686,6 +678,7 @@ do {
       MainActor.assumeIsolated {
         switch event {
         case .leftMouseDown(let n):
+            session.noteInputActivity()
             session.recordClick(button: "left", clickCount: n,
                                 modifiers: ModifierNames.names(from: []))
         case .rightMouseDown(let n):
@@ -696,12 +689,15 @@ do {
                                 modifiers: ModifierNames.names(from: []))
         case .leftMouseDragged:
             break   // 拖拽在抬起时归档，避免逐像素刷屏
-        case .keyDown(_, let flags, let isRepeat):
+        case .keyDown(let keyCode, let flags, let isRepeat):
+            session.noteInputActivity()
             guard !isRepeat else { break }
             let mods = ModifierNames.names(from: flags)
             // 带修饰键的按键记为快捷键；纯文本输入由输入法侧聚合，此处不重复记。
             if !mods.isEmpty {
-                session.recordShortcut(keyEquivalent: "", modifiers: mods)
+                session.recordShortcut(keyEquivalent: InputKey.name(for: keyCode), modifiers: mods)
+            } else if keyCode == 36 || keyCode == 76 {
+                session.recordSubmit()
             }
         case .flagsChanged:
             break

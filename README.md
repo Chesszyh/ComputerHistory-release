@@ -1,13 +1,13 @@
 # ComputerHistory
 
-macOS 本地活动记录工具。通过 Accessibility（辅助功能，简称 AX）读取前台应用的界面文本，记录窗口变化、点击、快捷键和可归因的文本变化，按时间段保存。可选用 DeepSeek 生成记忆摘要，并在菜单栏查看时间线。
+macOS 本地活动记录工具。通过 Accessibility（辅助功能，简称 AX）读取前台应用的界面文本，记录窗口变化、点击、快捷键和可归因的文本变化，按时间段保存。支持 DeepSeek 和兼容接口的自托管模型生成记忆摘要，并在菜单栏查看时间线、逐次请求和费用。
 
 本项目为独立实现，与 OpenAI、ChatGPT 或 DeepSeek 无隶属关系，不承诺与其他产品完整兼容。
 
 ## 使用前了解
 
 - 普通文本框、窗口标题、页面内容和访问地址可能以明文保存。默认屏蔽名单不能保证排除所有敏感内容。
-- `collect` 不调用模型；`memorize`、`narrative` 以及 `supervise` 的生成任务在有密钥时会向配置的模型服务发送活动内容。`--no-model` 可禁止模型请求。
+- `collect` 不调用模型；`memorize`、`narrative` 以及 `supervise` 的生成任务会向已配置的模型服务发送活动内容。`--no-model` 可禁止模型请求。
 - 暂停记录只阻止新的采集；恢复后当前界面仍可能被完整读取。已有记录不会因暂停而删除。
 
 详见 [隐私与安全边界](docs/privacy.md)。
@@ -55,6 +55,8 @@ python3 scripts/test-process-control.py .build/release/computer-history
 
 ## 记忆与时间线
 
+历史活动滚动到底部时自动加载更早记录。系统登录界面期间停止内容采集，返回后将这段时间展示为一条“离开电脑”；具体判定和存储见[采集行为](docs/collector.md#采集行为与局限)。
+
 ```bash
 # 不联网：为已封口的段生成事实摘要
 ./.build/release/computer-history memorize --no-model --limit 6
@@ -68,7 +70,11 @@ python3 scripts/test-process-control.py .build/release/computer-history
 
 模型接入使用 `DEEPSEEK_API_KEY`，可用 `DEEPSEEK_MODEL` 与 `DEEPSEEK_BASE_URL` 覆盖模型和地址。默认值见 [DeepSeekClient.swift](Sources/ComputerHistoryCore/DeepSeekClient.swift) 的 `defaultModel` / `defaultBaseURL`；请按服务账户的实际可用模型设置。
 
-配置密钥后，不带 `--no-model` 的 `memorize` 会发送活动摘要；`narrative` 会进一步归纳已有记忆。`supervise` 默认定期执行这两个入口。模型失败可能产生事实降级版本；输出标记和日志应一并查看，不能把“任务结束”理解为模型成功。
+自托管模型在数据目录创建 `model.json`，格式见[模型与用量配置](docs/collector.md#模型与用量配置)。可将模型部署在另一台电脑，本机只发送整理后的材料。配置文件优先于模型环境变量；`requiresAPIKey: false` 的服务不接收 DeepSeek 密钥。
+
+不带 `--no-model` 的生成任务会发送活动材料；`supervise` 定期执行生成入口。模型失败时保留带失败标记的事实摘要，后续周期会重试。菜单栏的“总结用量与费用”可查看每次请求的实际输入、输出、token 用量和费用估算。可用 `comparison` 将同一输入并行交给第二个模型；正式时间线只使用主模型结果，对照结果在请求详情中查看。旧版本没有保存的用量不会补算。
+
+用量页支持今天、昨天、本周（周一起）和本月筛选，并可选择任务类型及正式／对照请求。合计随筛选范围变化，请求按日期和任务分组展开。详情先显示模型输出，原始来源、系统提示词和原始输入默认折叠。
 
 ## 文档
 

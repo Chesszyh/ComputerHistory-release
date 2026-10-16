@@ -54,9 +54,9 @@ final class ReviewRegressionTests: XCTestCase {
         for (before, after) in [("😀", "😁"), ("𠀀", "𠀁"), ("👩‍💻", "👩‍🔬"), ("e", "e\u{301}")] {
             let tracker = TextInputTracker()
             let now = Date()
-            _ = tracker.observe(.init(value: before, caret: nil), at: now)
-            _ = tracker.observe(.init(value: after, caret: nil), at: now.addingTimeInterval(1))
-            XCTAssertEqual(tracker.flush(), after)
+            _ = tracker.observeText(.init(value: before, caret: nil), at: now)
+            _ = tracker.observeText(.init(value: after, caret: nil), at: now.addingTimeInterval(1))
+            XCTAssertEqual(tracker.flushText(), after)
         }
     }
 

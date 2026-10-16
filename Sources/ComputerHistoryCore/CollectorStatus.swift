@@ -1,16 +1,16 @@
 import Foundation
 
 /// 采集器运行状态快照，供托盘应用展示。
-public struct CollectorStatus: Sendable {
+public struct CollectorStatus: Sendable, Equatable {
 
-    public struct ProcessInfo: Sendable {
+    public struct ProcessInfo: Sendable, Equatable {
         public var running: Bool
         public var pid: Int32?
         /// 已运行时长（秒）。取不到启动时刻时为 nil。
         public var uptime: TimeInterval?
     }
 
-    public struct DataStats: Sendable {
+    public struct DataStats: Sendable, Equatable {
         public var segmentCount: Int
         /// 已计数的事件总数。
         public var eventCount: Int
@@ -27,7 +27,7 @@ public struct CollectorStatus: Sendable {
         public var sealedSegmentIDs: [String]
     }
 
-    public struct MemoryStats: Sendable {
+    public struct MemoryStats: Sendable, Equatable {
         public var count: Int
         public var tenMinuteCount: Int
         public var sixHourCount: Int
@@ -64,6 +64,13 @@ public struct CollectorStatus: Sendable {
                                memories: memories, rootDirectory: root)
     }
 
+    public static func empty(root: URL) -> CollectorStatus {
+        CollectorStatus(process: .init(running: false, pid: nil, uptime: nil),
+            data: .init(segmentCount: 0, eventCount: 0, eventCountIncomplete: false, bytes: 0,
+                        earliest: nil, latest: nil, lastWriteAt: nil, sealedSegmentIDs: []),
+            memories: .init(count: 0, tenMinuteCount: 0, sixHourCount: 0, pendingSegments: 0), rootDirectory: root)
+    }
+
     static func readProcess(root: URL, fileManager: FileManager) -> ProcessInfo {
         // 以采集锁 + 进程身份判定，而不是仅看 pid 文件是否存在——
         // pid 会复用，文件也可能是上次崩溃留下的残留。
@@ -92,7 +99,7 @@ public struct CollectorStatus: Sendable {
         var sealed: [String] = []
         var earliest: Date?, latest: Date?, lastWrite: Date?
         for dir in dirs {
-            let eventsURL = dir.appendingPathComponent("events.jsonl")
+            let eventsURL = EventArchive.eventsURL(in: dir)
             guard let attrs = try? fileManager.attributesOfItem(atPath: eventsURL.path)
             else { continue }
             count += 1
@@ -103,7 +110,9 @@ public struct CollectorStatus: Sendable {
                 sealed.append(dir.lastPathComponent)
             }
             bytes += (attrs[.size] as? Int) ?? 0
-            let modified = attrs[.modificationDate] as? Date
+            let sealedMetadata = try? EventStreamJSON.makeDecoder().decode(EventStreamMetadata.self,
+                from: Data(contentsOf: dir.appendingPathComponent("metadata.json")))
+            let modified = eventsURL.pathExtension == "gz" ? (sealedMetadata?.endedAt ?? attrs[.modificationDate] as? Date) : attrs[.modificationDate] as? Date
             if let modified {
                 if lastWrite == nil || modified > lastWrite! { lastWrite = modified }
             }
@@ -116,7 +125,7 @@ public struct CollectorStatus: Sendable {
             // 逐块计行，不设大小上限——按大小跳过会静默漏计（实测漏掉三份
             // 大于 8 MiB 的文件，把 8173 条报成 7034 条）。只把整数加一，
             // 不保留字符串，内存与文件大小无关。
-            if let counted = Self.countLines(at: eventsURL) {
+            if let counted = sealedMetadata?.eventCount ?? Self.countLines(at: eventsURL) {
                 events += counted
             } else {
                 incomplete = true
@@ -130,27 +139,29 @@ public struct CollectorStatus: Sendable {
 
     /// 流式统计行数。文件读不到时返回 nil，由调用方标记为不完整。
     static func countLines(at url: URL) -> Int? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? handle.close() }
-        var lines = 0
-        var lastByte: UInt8 = 0x0A
-        while let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty {
-            for byte in chunk where byte == 0x0A { lines += 1 }
-            lastByte = chunk.last ?? lastByte
+        try? EventArchive.withReader(at: url) { handle in
+            var lines = 0
+            var lastByte: UInt8 = 10
+            while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
+                lines += chunk.reduce(0) { $0 + ($1 == 10 ? 1 : 0) }
+                lastByte = chunk.last ?? lastByte
+            }
+            return lines + (lastByte == 10 ? 0 : 1)
         }
-        // 末行无换行符时补计一条。
-        if lastByte != 0x0A { lines += 1 }
-        return lines
     }
 
     static func readMemories(root: URL, data: DataStats,
                              fileManager: FileManager) -> MemoryStats {
         let index = MemoryIndex.load(from: root.appendingPathComponent("memories"))
+        return memoryStats(index: index, data: data)
+    }
+
+    static func memoryStats(index: MemoryIndex, data: DataStats) -> MemoryStats {
         let ten = index.entries.filter { $0.granularity == "10min" }.count
         let six = index.entries.filter { $0.granularity == "6h" }.count
         // 待补写量按**真实集合差**计算：已封口的段中尚无十分钟记忆的那些。
         // 不能用「段数 − 记忆数」，同窗重启会让两者口径不同。
-        let produced = Set(index.entries.filter { $0.granularity == "10min" }
+        let produced = Set(index.entries.filter { $0.granularity == "10min" && $0.generationStatus != "failed" }
             .map { $0.sourceSegmentID })
         return MemoryStats(count: index.entries.count, tenMinuteCount: ten,
                            sixHourCount: six,

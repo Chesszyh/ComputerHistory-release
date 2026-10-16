@@ -1,25 +1,7 @@
 import Foundation
 
-/// 文本输入聚合。
-///
-/// ## 为什么不能用键码映射
-///
-/// 实测样本里 `keyboard.text` 含**拼音串**（如 `ganjue zhecankgu qishi meism xinyi`），
-/// 长度中位 6、最长 88。逐键映射需要自己处理键盘布局、输入法候选与提交，
-/// 中文场景基本不可行。
-///
-/// ## 为什么不能直接读控件全值
-///
-/// 聚焦元素的 `kAXValueAttribute` 返回**整个字段内容**（实测 TextEdit 里打完
-/// 三次输入后读到的是一次累积的长串）。把它记为 `text_input` 会与官方语义不符——
-/// 官方每条只记本次输入的片段。
-///
-/// 另一条路 `kAXSelectedTextAttribute` 在无选中时返回空串，同样拿不到插入文本。
-///
-/// ## 采用的做法：完整字符的公共前后缀差分
-///
-/// 首次观察建立基线，后续变化段按输入停顿聚合。值差分无法区分
-/// 用户输入与程序化改写；不可编辑的屏幕缓冲不产出输入事件。
+/// 跟踪完整字符的新增编辑区域；删除和替换会更新尚未输出的内容。
+/// 值变化不能单独证明用户输入，输出保留输入活动的归因证据。
 public final class TextInputTracker {
 
     /// 静默多久算一次输入结束。样本中位间隔 3 秒，取略小的 2.5 秒，
@@ -27,10 +9,8 @@ public final class TextInputTracker {
     public static let defaultIdleThreshold: TimeInterval = 2.5
 
     private let idleThreshold: TimeInterval
+    private var baselineValue: String?
     private var lastValue: String?
-    private var lastCaret: Int?
-    /// 已累积但尚未 flush 的输入片段。
-    private var pending = ""
     private var lastChangeAt: Date?
 
     /// 上一次观察的焦点元素身份。用于识别同一应用内的控件切换。
@@ -59,89 +39,135 @@ public final class TextInputTracker {
         /// 不能用对象指针：实测跨次查询一致率为 0/1417。用 `CFHash` 加出现序号，
         /// 与树遍历所用的身份同一机制（实测跨帧一致率 1417/1417）。
         public var focusIdentity: Int?
+        public var role: String?
+        public var subrole: String?
+        public var valueSettable: Bool?
+        public var placeholder: String?
+        public var selectionLength: Int?
+        /// nil 表示应用没有公开组合状态，不能当作已完成输入法上屏。
+        public var hasMarkedText: Bool?
+        public var hasInputActivity: Bool?
+        public var isPlaceholder: Bool
 
         public init(value: String?, caret: Int? = nil,
-                    isEditableBuffer: Bool = true, focusIdentity: Int? = nil) {
+                    isEditableBuffer: Bool = true, focusIdentity: Int? = nil,
+                    role: String? = nil, subrole: String? = nil,
+                    valueSettable: Bool? = nil, placeholder: String? = nil,
+                    selectionLength: Int? = nil, hasMarkedText: Bool? = nil,
+                    hasInputActivity: Bool? = nil, isPlaceholder: Bool = false) {
             self.value = value
             self.caret = caret
             self.isEditableBuffer = isEditableBuffer
             self.focusIdentity = focusIdentity
+            self.role = role
+            self.subrole = subrole
+            self.valueSettable = valueSettable
+            self.placeholder = placeholder
+            self.selectionLength = selectionLength
+            self.hasMarkedText = hasMarkedText
+            self.hasInputActivity = hasInputActivity
+            self.isPlaceholder = isPlaceholder
         }
     }
 
-    /// 喂入一次观察。返回应当作为一条 `keyboard.text_input` 落盘的文本（无则 nil）。
-    public func observe(_ obs: Observation, at now: Date) -> String? {
-        // 焦点切到**另一个控件**时重建基线。只看前台应用不够：同一应用内从
-        // 已有 "hello" 的输入框切到已有 "world" 的输入框，值差分会把 "world"
-        // 记成用户输入。
-        if let id = obs.focusIdentity, id != lastFocusIdentity {
-            let out = flush(reason: .focusChanged)
-            lastValue = nil
-            lastCaret = nil
-            lastFocusIdentity = id
-            if let value = obs.value { lastValue = value }
-            lastChangeAt = now
+    public struct Fragment: Equatable, Sendable {
+        public var text: String
+        public var evidence: TextEvidence
+        public var replaces: [String] = []
+        var emissionID: Int = 0
+    }
+    private struct Cell {
+        var character: Character
+        var edit: Int?
+        var evidence: TextEvidence
+        var reference: String? = nil
+        var replaces: Set<String> = []
+        var emittedFragment: Int? = nil
+        var originalRange: Range<Int>? = nil
+    }
+    private var cells: [Cell] = []
+    private var baselineCells: [Cell] = []
+    private var nextEdit = 0
+    private var nextEmission = 0
+    private var composing = false
+
+    /// 输出独立编辑片段；不同位置的编辑保持各自的文本和顺序。
+    public func observe(_ obs: Observation, at now: Date) -> [Fragment] {
+        if obs.focusIdentity != lastFocusIdentity {
+            let out = flush()
+            establish(obs, now: now)
             return out
         }
-
-        guard let value = obs.value else {
-            // 目标不可读（Electron 应用、失焦、隐私输入）：视为中断。
-            lastValue = nil
-            lastCaret = nil
-            return flush(reason: .targetLost)
-        }
-
-        // 值不像编辑缓冲（终端屏幕网格）：不产出 text_input。
-        // 值差分无法证明新增内容来自键盘，命令输出会被误记为输入。
-        guard obs.isEditableBuffer else {
-            lastValue = value
-            lastCaret = obs.caret
-            return flush(reason: .unattributable)
-        }
-
-        guard let prevValue = lastValue else {
-            // 首次观察（或刚从无效状态恢复）只建立基线：
-            // 字段里可能已有内容，记成输入会凭空造数据。
-            lastValue = value
-            lastCaret = obs.caret
-            lastChangeAt = now
-            return nil
-        }
-        guard value != prevValue else { return flushIfIdle(now: now) }
-
-        // 用公共前后缀求变化段。**不依赖光标位置**——实测其 `location` 不可靠：
-        // 输入法上屏时可能报告 0（`value=…hello, caret=0`），据此判定会漏记。
-        let change = Self.change(from: prevValue, to: value)
-
-        defer {
-            lastValue = value
-            lastCaret = obs.caret
-        }
-
-        switch change {
-        case .inserted(let text) where !text.isEmpty:
-            pending += Self.sanitize(text)
-            lastChangeAt = now
-            return flushIfIdle(now: now)
-
-        case .deleted:
-            // 删除不是输入；更新基线即可。
-            lastChangeAt = now
-            return flushIfIdle(now: now)
-
-        case .replaced(let newText):
-            // 变化段两侧不匹配（输入法上屏把拼音换成汉字、或程序化改写）。
-            // 两者在值层面同形，无法区分，故采取：吐出已积累的旧内容，
-            // 并把新值作为新的累积起点——新值本身是当前控件内容，
-            // 与"本次键入"高度相关；若有后续键入会继续追加，停顿后一并落盘。
-            let out = flush(reason: .replaced)
-            pending = Self.sanitize(newText)
-            lastChangeAt = now
+        guard let value = obs.value, obs.isEditableBuffer, !obs.isPlaceholder else {
+            let out = flush()
+            establish(obs, now: now)
             return out
-
-        case .inserted:
-            return flushIfIdle(now: now)
         }
+        guard let previous = lastValue else {
+            establish(obs, now: now)
+            return []
+        }
+        composing = obs.hasMarkedText == true
+        guard previous != value else { return flushIfIdle(now: now) }
+        let old = Array(previous), new = Array(value)
+        var prefix = 0, suffix = 0
+        while prefix < old.count, prefix < new.count, old[prefix] == new[prefix] { prefix += 1 }
+        while suffix < old.count - prefix, suffix < new.count - prefix,
+              old[old.count - suffix - 1] == new[new.count - suffix - 1] { suffix += 1 }
+        let removed = prefix..<(old.count - suffix)
+        let inserted = new[prefix..<(new.count - suffix)]
+        // 沿用相邻待输出区域的身份；既有正文仍保留 nil，不会夹入输入片段。
+        let nearby = cells[removed].compactMap(\.edit).first
+            ?? (prefix > 0 ? cells[prefix - 1].edit : nil)
+            ?? (removed.upperBound < cells.count ? cells[removed.upperBound].edit : nil)
+        nextEdit += 1
+        let edit = nearby ?? nextEdit
+        let evidence: TextEvidence = obs.hasInputActivity == true && !composing
+            ? .editedValue : .uncertainValueChange
+        let replaced = Set(cells[removed].compactMap(\.reference))
+            .union(cells[removed].flatMap(\.replaces))
+        let oldCells = Array(cells[removed])
+        let ranges = oldCells.compactMap(\.originalRange)
+        var originalRange = ranges.isEmpty ? nil : ranges.map(\.lowerBound).min()!..<ranges.map(\.upperBound).max()!
+        if oldCells.isEmpty {
+            let lower = cells[..<prefix].compactMap(\.originalRange).last?.upperBound ?? 0
+            let upper = cells[removed.upperBound...].compactMap(\.originalRange).first?.lowerBound ?? baselineCells.count
+            if lower < upper { originalRange = lower..<upper }
+        }
+        var replacement = inserted.enumerated().map { index, character -> Cell in
+            let range = oldCells.count == inserted.count ? oldCells[index].originalRange : originalRange
+            if let range, range.count == 1, baselineCells[range.lowerBound].character == character {
+                return baselineCells[range.lowerBound]
+            }
+            return Cell(character: character, edit: edit, evidence: evidence,
+                        replaces: replaced, originalRange: range)
+        }
+        // 同一替换区域整体撤销时恢复原有身份，不能把原正文重新记为输入。
+        if let range = originalRange,
+           !cells[..<removed.lowerBound].contains(where: { $0.originalRange == range }),
+           !cells[removed.upperBound...].contains(where: { $0.originalRange == range }),
+           String(baselineCells[range].map(\.character)) == String(inserted) {
+            replacement = Array(baselineCells[range])
+        }
+        cells.replaceSubrange(removed, with: replacement)
+        lastValue = value
+        if value == baselineValue {
+            cells = baselineCells
+        }
+        lastChangeAt = now
+        return []
+    }
+
+    private func establish(_ obs: Observation, now: Date) {
+        lastFocusIdentity = obs.focusIdentity
+        lastValue = obs.isEditableBuffer && !obs.isPlaceholder ? obs.value : nil
+        baselineValue = lastValue
+        cells = (lastValue ?? "").enumerated().map {
+            Cell(character: $0.element, edit: nil, evidence: .uncertainValueChange, originalRange: $0.offset..<($0.offset + 1))
+        }
+        baselineCells = cells
+        composing = obs.hasMarkedText == true
+        lastChangeAt = now
     }
 
     /// 去掉终端网格的 NUL 填充，保留 Unicode 格式字符（如 emoji 连接符）。
@@ -159,76 +185,72 @@ public final class TextInputTracker {
         })
     }
 
-    /// 两段文本的差异。
-    enum Change: Equatable {
-        /// 新值 = 旧值前缀 + 插入段 + 旧值后缀。插入段非空。
-        case inserted(String)
-        /// 新值是旧值的真子集（纯删除）。
-        case deleted
-        /// 中间被替换：插入段与删除段都存在，且不是纯插入。
-        case replaced(String)
+    private func flushIfIdle(now: Date) -> [Fragment] {
+        guard !composing, let last = lastChangeAt,
+              now.timeIntervalSince(last) >= idleThreshold else { return [] }
+        return flush()
     }
 
-    /// 按**公共前后缀**求变化。这是文本差异的通用做法，不依赖光标，
-    /// 因而对输入法上屏、程序化改写、光标不可用等情形都成立。
-    ///
-    /// 判据：设旧值 `p`、新值 `n`，取公共前缀长度 `pre`、公共后缀长度 `suf`
-    /// （后缀不越过前缀）。若 `pre + suf >= p.count`，则新值只是旧值的扩展，
-    /// 插入段为 `n[pre ..< n.count - suf]`；若 `pre + suf >= n.count`，则是纯删除；
-    /// 否则为替换。
-    static func change(from prev: String, to next: String) -> Change {
-        let p = Array(prev), n = Array(next)
-
-        var pre = 0
-        while pre < p.count, pre < n.count, p[pre] == n[pre] { pre += 1 }
-
-        var suf = 0
-        while suf < (p.count - pre), suf < (n.count - pre),
-              p[p.count - 1 - suf] == n[n.count - 1 - suf] { suf += 1 }
-
-        let insertedCount = n.count - pre - suf
-        let deletedCount = p.count - pre - suf
-
-        if insertedCount > 0, deletedCount == 0 {
-            return .inserted(String(n[pre..<(n.count - suf)]))
-        }
-        if insertedCount == 0, deletedCount > 0 {
-            return .deleted
-        }
-        if insertedCount == 0, deletedCount == 0 {
-            return .deleted   // 值相等的情形已在调用方排除
-        }
-        return .replaced(String(n[pre..<(n.count - suf)]))
-    }
-
-    private func flushIfIdle(now: Date) -> String? {
-        guard let last = lastChangeAt, !pending.isEmpty else { return nil }
-        guard now.timeIntervalSince(last) >= idleThreshold else { return nil }
-        return flush(reason: .idle)
-    }
-
-    /// 立即吐出已积累文本。
     @discardableResult
-    public func flush(reason: FlushReason = .explicit) -> String? {
-        defer { pending = ""; lastChangeAt = nil }
-        return pending.isEmpty ? nil : pending
+    public func flush() -> [Fragment] {
+        var currentID: Int?
+        var runs: [(id: Int, fragment: Fragment)] = []
+        var text = ""
+        var evidence = TextEvidence.editedValue
+        var replaces: Set<String> = []
+        var indices: [Int] = []
+        func emit() {
+            let clean = Self.sanitize(text)
+            if !clean.isEmpty, let currentID {
+                nextEmission += 1
+                runs.append((currentID, .init(text: clean, evidence: evidence, replaces: replaces.sorted(), emissionID: nextEmission)))
+                for index in indices { cells[index].emittedFragment = nextEmission }
+            }
+            for index in indices { cells[index].edit = nil }
+            indices = []
+            text = ""
+            replaces = []
+            evidence = .editedValue
+        }
+        for index in cells.indices {
+            let cell = cells[index]
+            if cell.edit != currentID { emit(); currentID = cell.edit }
+            guard cell.edit != nil else { continue }
+            indices.append(index)
+            text.append(cell.character)
+            replaces.formUnion(cell.replaces)
+            if cell.evidence == .uncertainValueChange || composing { evidence = .uncertainValueChange }
+        }
+        emit()
+        let fragments = runs.enumerated().sorted {
+            $0.element.id == $1.element.id ? $0.offset < $1.offset : $0.element.id < $1.element.id
+        }.map { $0.element.fragment }
+        for index in cells.indices { cells[index].originalRange = index..<(index + 1) }
+        baselineCells = cells
+        baselineValue = lastValue
+        lastChangeAt = nil
+        return fragments
     }
 
-    /// 丢弃基线。切换前台应用或聚焦控件时调用，避免把新控件的内容当增量。
+    /// 事件写出后登记来源，后续覆盖可在派生摘要中降低旧片段的归因强度。
+    func acknowledge(_ fragment: Fragment, reference: String) {
+        for index in cells.indices where cells[index].emittedFragment == fragment.emissionID {
+            cells[index].reference = reference
+            cells[index].replaces = []
+            cells[index].emittedFragment = nil
+        }
+        baselineCells = cells
+    }
+
+    /// 暂停与上下文边界丢弃待输出编辑；恢复时只建立新基线。
     public func resetBaseline() {
         lastValue = nil
-        lastCaret = nil
+        baselineValue = nil
         lastChangeAt = nil
         lastFocusIdentity = nil
+        cells = []
+        baselineCells = []
+        composing = false
     }
 
-    public enum FlushReason: Sendable {
-        case idle            // 输入停顿
-        case targetLost      // 聚焦目标不可读
-        case focusChanged    // 焦点切到同一应用内的另一个控件
-        case unattributable  // 值不是编辑缓冲，无法归因到键盘
-        case replaced        // 输入法上屏：替换为新内容
-        case indeterminate   // 无法判定插入内容
-        case explicit        // 调用方要求
-    }
 }

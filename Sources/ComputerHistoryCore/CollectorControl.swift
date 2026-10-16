@@ -4,7 +4,7 @@ import Foundation
 ///
 /// 用文件而非信号或 socket：开关要跨进程、跨重启保持，且应由使用者直接查看与编辑。
 /// 采集器每个采样周期读一次（文件很小），监督进程每个生成周期读一次。
-public struct CollectorControl: Codable, Sendable {
+public struct CollectorControl: Codable, Sendable, Equatable {
 
     /// 是否记录活动。关闭后采集器不再采样，也不写入事件。
     public var recording: Bool

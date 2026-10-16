@@ -26,11 +26,14 @@ public struct CollectorConfig: Sendable {
         public var maxTotalBytes: Int
         /// segment 最长保留天数。0 表示不按时间清理。
         public var maxAgeDays: Int
+        public var unsummarizedMaxAgeDays: Int
 
         public init(maxTotalBytes: Int = 2 * 1024 * 1024 * 1024,
-                    maxAgeDays: Int = 30) {
+                    maxAgeDays: Int = 2,
+                    unsummarizedMaxAgeDays: Int = 7) {
             self.maxTotalBytes = maxTotalBytes
             self.maxAgeDays = maxAgeDays
+            self.unsummarizedMaxAgeDays = unsummarizedMaxAgeDays
         }
     }
 
@@ -83,9 +86,10 @@ public struct CollectorConfig: Sendable {
         if let n = try ConfigValidation.integer(dict, "maxNodesPerSnapshot", minimum: 1) { config.maxNodesPerSnapshot = n }
         if let n = try ConfigValidation.integer(dict, "maxLogBytes", minimum: 1) { config.maxLogBytes = n }
         if let r = try ConfigValidation.object(dict, "retention") {
-            try ConfigValidation.keys(r, allowed: ["maxTotalBytes", "maxAgeDays"], path: "retention")
+            try ConfigValidation.keys(r, allowed: ["maxTotalBytes", "maxAgeDays", "unsummarizedMaxAgeDays"], path: "retention")
             if let n = try ConfigValidation.integer(r, "maxTotalBytes", minimum: 0) { config.retention.maxTotalBytes = n }
             if let n = try ConfigValidation.integer(r, "maxAgeDays", minimum: 0) { config.retention.maxAgeDays = n }
+            if let n = try ConfigValidation.integer(r, "unsummarizedMaxAgeDays", minimum: 0) { config.retention.unsummarizedMaxAgeDays = n }
         }
         if let policy = try ConfigValidation.object(dict, "policy") {
             config.policy = try ObservationPolicy(json: policy)
@@ -112,6 +116,7 @@ public struct CollectorConfig: Sendable {
             "retention": [
                 "maxTotalBytes": retention.maxTotalBytes,
                 "maxAgeDays": retention.maxAgeDays,
+                "unsummarizedMaxAgeDays": retention.unsummarizedMaxAgeDays,
             ],
             "policy": policy.jsonObject,
         ]
@@ -124,6 +129,7 @@ public struct CollectorConfig: Sendable {
 public struct PruneReport: Sendable {
     public var removedSegments: Int = 0
     public var freedBytes: Int = 0
+    public var removedWithoutSummary: Int = 0
     /// 剩余可识别时间段的文件字节数；无法完整读取时为 nil。
     public var remainingBytes: Int?
     public var failures: [Failure] = []
