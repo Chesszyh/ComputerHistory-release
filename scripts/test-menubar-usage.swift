@@ -44,13 +44,16 @@ import ComputerHistoryCore
             RunLoop.main.run(until: Date().addingTimeInterval(0.3))
             view.layoutSubtreeIfNeeded()
         }
-        // Click the count at the far edge of the header, away from its chevron.
-        click(330, 385)
         guard let listScroll = scrollView(view), let document = listScroll.documentView else {
             fatalError("Usage list scroll view is missing")
         }
+        // 折叠状态下最后一个分组标题位于文档底部。按文档坐标定位，避免仪表盘
+        // 高度变化后固定的窗口坐标点空；整行都接受点击，不依赖箭头位置。
+        let header = document.convert(
+            NSPoint(x: document.bounds.width - 20, y: document.bounds.height - 16), to: nil)
+        click(header.x, header.y)
         precondition(document.bounds.height > listScroll.contentView.bounds.height + 200,
-            "Clicking the count must expand the request rows")
+            "Clicking the group header must expand the request rows")
         listScroll.contentView.scroll(to: NSPoint(x: 0, y: 600))
         listScroll.reflectScrolledClipView(listScroll.contentView)
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
