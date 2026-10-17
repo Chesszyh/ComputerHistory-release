@@ -41,20 +41,37 @@ struct StatusPanel: View {
                     RuntimeSection(model: model)
                     SettingsSection(model: model)
                     Button { model.showsUsage = true } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 9, weight: .bold))
-                                .frame(width: 10)
+                        HStack(spacing: 8) {
+                            Image(systemName: "chart.xyaxis.line")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Color.accentColor)
+                                .frame(width: 14)
                             Text("总结用量与费用")
                                 .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.primary)
                             Spacer()
-                            Text("\(model.modelRequests.count) 次请求")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(.tertiary)
+                            HStack(spacing: 4) {
+                                Text("\(model.modelRequests.count) 次请求")
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(.tertiary)
+                            }
                         }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.primary.opacity(0.03))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+                                )
+                        )
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
                     TimelineSection(model: model)
                 }
                 .padding(.horizontal, 14)
@@ -399,7 +416,7 @@ struct TimelineSection: View {
                 .frame(maxWidth: .infinity, alignment: .center)
             } else {
                 ForEach(model.timelineGroups, id: \.day) { group in
-                    LazyVStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 6) {
                             Text(model.dayLabel(group.day))
                                 .font(.system(size: 11, weight: .semibold))
@@ -410,7 +427,7 @@ struct TimelineSection: View {
                         }
                         .padding(.top, 4)
 
-                        LazyVStack(spacing: 6) {
+                        VStack(spacing: 6) {
                             ForEach(group.items) { item in
                                 TimelineRow(item: item, model: model)
 
@@ -1142,10 +1159,28 @@ struct SettingsSection: View {
                             get: { model.loginItemEnabled },
                             set: { model.setLoginItem($0) }))
                     Divider().opacity(0.4)
-                    Button("总结提示词与配置…") { model.openSummarySettings() }
-                        .buttonStyle(.plain)
+                    Button { model.openSummarySettings() } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.system(size: 10, weight: .medium))
+                            Text("总结提示词与配置…")
+                                .font(.system(size: 11, weight: .medium))
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(.tertiary)
+                        }
                         .foregroundStyle(Color.accentColor)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 7)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Color.accentColor.opacity(0.08))
+                        )
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 4)
                 }
                 .padding(.top, 4)
             }
@@ -1203,24 +1238,52 @@ struct ModelUsagePane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
+            HStack(alignment: .center, spacing: 10) {
                 Button {
                     if model.requestDetail != nil { model.requestDetail = nil }
                     else { model.closeUsage() }
-                } label: { Label("返回", systemImage: "chevron.left") }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 11, weight: .bold))
+                        Text("返回")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.12))
+                    )
+                    .contentShape(Rectangle())
+                }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("usage-back")
+
                 Spacer()
                 Text(model.requestDetail == nil ? "总结用量与费用" : "请求详情")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                 Spacer()
+
                 Button {
                     model.refreshSlow()
                     if let detail = model.requestDetail { model.openRequest(detail) }
-                } label: { Image(systemName: "arrow.clockwise") }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 26)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Color.primary.opacity(0.06))
+                        )
+                        .contentShape(Rectangle())
+                }
                 .buttonStyle(.plain)
+                .help("刷新用量记录")
             }
-            Divider()
+            Divider().opacity(0.4)
             ZStack(alignment: .topLeading) {
                 // 保留列表及其滚动控件，详情返回时继续使用原来的浏览位置。
                 ScrollView {
@@ -1294,17 +1357,49 @@ struct ModelUsagePane: View {
         }
         let input = records.compactMap(\.usage).reduce(0) { $0 + $1.promptTokens }
         let output = records.compactMap(\.usage).reduce(0) { $0 + $1.completionTokens }
-        return VStack(alignment: .leading, spacing: 5) {
-            HStack {
-                Text(title).font(.system(size: 12, weight: .semibold))
+        let unknown = records.filter { $0.usage == nil || $0.estimatedCost == nil }.count
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title + " · 估算总花费")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text(costs.isEmpty ? "—" : costs.keys.sorted().map { "\($0) " + String(format: "%.4f", costs[$0]!) }.joined(separator: " / "))
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .foregroundStyle(.primary)
+                }
                 Spacer()
-                Text(costs.isEmpty ? "—" : costs.keys.sorted().map { "\($0) " + String(format: "%.4f", costs[$0]!) }.joined(separator: " / "))
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text("\(records.count) 次请求")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text("入 \(input) · 出 \(output) token")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
             }
-            Text("\(records.count) 次请求 · 输入 \(input) · 输出 \(output) token")
-                .font(.caption).foregroundStyle(.secondary)
-            let unknown = records.filter { $0.usage == nil || $0.estimatedCost == nil }.count
-            if unknown > 0 { Text("\(unknown) 次请求的用量或费用未知").font(.caption).foregroundStyle(.secondary) }
+
+            if unknown > 0 {
+                HStack(spacing: 4) {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 9))
+                    Text("\(unknown) 次请求未返回用量或单价")
+                        .font(.system(size: 9))
+                }
+                .foregroundStyle(.tertiary)
+            }
         }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.primary.opacity(0.04))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+                )
+        )
     }
 
     private func requestBody(_ request: ModelRequest) -> some View {
@@ -1372,6 +1467,17 @@ struct ModelUsagePane: View {
 }
 
 
+extension ModelRequest {
+    var statusColor: Color {
+        switch status {
+        case "success": return .green
+        case "running": return .orange
+        case "empty", "truncated": return .yellow
+        default: return .red
+        }
+    }
+}
+
 struct ModelRequestGroup: View {
     let records: [ModelRequest]
     let groupID: String
@@ -1380,17 +1486,29 @@ struct ModelRequestGroup: View {
     var body: some View {
         VStack(spacing: 0) {
             Button {
-                if model.expandedRequestGroups.contains(groupID) { model.expandedRequestGroups.remove(groupID) }
-                else { model.expandedRequestGroups.insert(groupID) }
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    if model.expandedRequestGroups.contains(groupID) { model.expandedRequestGroups.remove(groupID) }
+                    else { model.expandedRequestGroups.insert(groupID) }
+                }
             } label: {
-                HStack {
+                HStack(spacing: 6) {
                     Image(systemName: model.expandedRequestGroups.contains(groupID) ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 10)
                     Text(taskLabel).font(.system(size: 11, weight: .semibold))
                     Spacer()
-                    Text("\(records.count) 次").font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text("\(records.count) 次")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.primary.opacity(0.05))
+                        .clipShape(Capsule())
                 }
-                .padding(10)
-                .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -1400,32 +1518,79 @@ struct ModelRequestGroup: View {
                     ForEach(records) { request in
                         Button { model.openRequest(request) } label: {
                             VStack(alignment: .leading, spacing: 5) {
-                                HStack {
+                                HStack(spacing: 6) {
                                     Text(request.comparisonOf == nil ? "正式" : "对照")
-                                    Text(request.model).lineLimit(1).truncationMode(.middle)
+                                        .font(.system(size: 9, weight: .semibold))
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1.5)
+                                        .background(request.comparisonOf == nil ? Color.accentColor.opacity(0.12) : Color.purple.opacity(0.12))
+                                        .foregroundStyle(request.comparisonOf == nil ? Color.accentColor : Color.purple)
+                                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+
+                                    Text(request.model)
+                                        .font(.system(size: 11, weight: .medium))
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+
                                     Spacer(minLength: 4)
+
                                     Text(request.costLabel)
-                                }.font(.system(size: 11))
-                                HStack {
-                                    Text(request.startedAt, style: .time)
+                                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                }
+
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(request.statusColor)
+                                        .frame(width: 5, height: 5)
                                     Text(request.statusLabel)
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(.secondary)
+                                    Text("·")
+                                        .foregroundStyle(.tertiary)
+                                    Text(request.startedAt, style: .time)
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+
                                     Spacer()
-                                    if let usage = request.usage { Text("入 \(usage.promptTokens) / 出 \(usage.completionTokens)") }
-                                    else { Text("用量未知") }
-                                }.font(.system(size: 10)).foregroundStyle(.secondary)
+
+                                    if let usage = request.usage {
+                                        Text("入 \(usage.promptTokens) / 出 \(usage.completionTokens)")
+                                            .font(.system(size: 9, design: .monospaced))
+                                            .foregroundStyle(.tertiary)
+                                    } else {
+                                        Text("用量未知")
+                                            .font(.system(size: 9))
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                }
                             }
-                            .padding(8).frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.primary.opacity(0.04))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(Color.primary.opacity(0.04))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                            .strokeBorder(Color.primary.opacity(0.04), lineWidth: 1)
+                                    )
+                            )
                             .contentShape(Rectangle())
-                        }.buttonStyle(.plain)
+                        }
+                        .buttonStyle(.plain)
                         .accessibilityIdentifier("usage-request-" + request.id)
                     }
-                }.padding([.horizontal, .bottom], 10)
+                }
+                .padding([.horizontal, .bottom], 8)
             }
         }
-        .background(Color.primary.opacity(0.03))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.primary.opacity(0.025))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.05), lineWidth: 1)
+                )
+        )
     }
 
     private var taskLabel: String {
