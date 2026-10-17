@@ -32,6 +32,11 @@ import ComputerHistoryCore
             return parent.subviews.compactMap { scrollView($0) }.first
         }
         model.showsUsage = true
+        let loadDeadline = Date().addingTimeInterval(15)
+        while model.modelRequests.count < 40, Date() < loadDeadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        }
+        precondition(model.modelRequests.count == 40, "Fixture requests must load before interaction")
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         view.layoutSubtreeIfNeeded()
         func click(_ x: CGFloat, _ y: CGFloat) {
@@ -52,6 +57,11 @@ import ComputerHistoryCore
         let header = document.convert(
             NSPoint(x: document.bounds.width - 20, y: document.bounds.height - 16), to: nil)
         click(header.x, header.y)
+        if document.bounds.height <= listScroll.contentView.bounds.height + 200 {
+            FileHandle.standardError.write(Data((
+                "usage geometry: requests=\(model.modelRequests.count) document=\(document.bounds) "
+                + "scroll=\(listScroll.frame) header=\(header) expanded=\(model.expandedRequestGroups)\n").utf8))
+        }
         precondition(document.bounds.height > listScroll.contentView.bounds.height + 200,
             "Clicking the group header must expand the request rows")
         listScroll.contentView.scroll(to: NSPoint(x: 0, y: 600))

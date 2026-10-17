@@ -49,7 +49,7 @@ bash scripts/test-menubar-panel.sh scripts/test-menubar-usage.swift
 bash scripts/test-menubar-panel.sh scripts/test-menubar-settings.swift
 ```
 
-用量与设置面板用例使用临时合成记录，验证分组及请求详情标题整行点击、详情返回后的展开与滚动位置、提示词保存和恢复默认，以及原生模型／采集表单的编辑、保存和校验；不启动真实采集器、写入密钥或访问模型服务。
+用量与设置面板用例使用临时合成记录，验证分组及请求详情标题整行点击、详情返回后的展开与滚动位置、提示词保存和恢复默认，以及原生模型／采集表单的编辑、保存和校验；不启动真实采集器、写入密钥或访问模型服务。Intel CI 运行器没有可用的 Metal 设备，创建有序窗口的用量面板用例只在 Apple Silicon 执行；Intel 仍运行分页、单元、进程集成与打包步骤。
 
 ## CI 与版本发布
 
