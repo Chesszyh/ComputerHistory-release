@@ -57,6 +57,13 @@ import ComputerHistoryCore
         let header = document.convert(
             NSPoint(x: document.bounds.width - 20, y: document.bounds.height - 16), to: nil)
         click(header.x, header.y)
+        // LazyVStack 的行可能在下一次布局才出现；CI 上固定等待不够。
+        let expandDeadline = Date().addingTimeInterval(10)
+        while document.bounds.height <= listScroll.contentView.bounds.height + 200,
+              Date() < expandDeadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            view.layoutSubtreeIfNeeded()
+        }
         if document.bounds.height <= listScroll.contentView.bounds.height + 200 {
             FileHandle.standardError.write(Data((
                 "usage geometry: requests=\(model.modelRequests.count) document=\(document.bounds) "
