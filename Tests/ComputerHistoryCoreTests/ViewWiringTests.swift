@@ -31,6 +31,7 @@ final class ViewWiringTests: XCTestCase {
         let pattern = try NSRegularExpression(pattern: #"^struct\s+(\w+)\s*:\s*View"#,
                                               options: [.anchorsMatchLines])
         var orphans: [String] = []
+        let allSource = try files.map { try String(contentsOf: $0, encoding: .utf8) }.joined(separator: "\n")
 
         for file in files {
             let text = try String(contentsOf: file, encoding: .utf8)
@@ -41,7 +42,7 @@ final class ViewWiringTests: XCTestCase {
                 if allowedOrphans.contains(name) { continue }
                 // 构造点是「名字紧跟左括号」。定义行是 `struct X: View`，
                 // 名字后面跟的是冒号，因此不会被算进来。
-                let constructions = text.components(separatedBy: "\(name)(").count - 1
+                let constructions = allSource.components(separatedBy: "\(name)(").count - 1
                 if constructions <= 0 {
                     orphans.append("\(name)（\(file.lastPathComponent)）")
                 }

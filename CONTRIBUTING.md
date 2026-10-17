@@ -46,9 +46,10 @@ python3 scripts/make-tray-fixture.py --out /tmp/computer-history-tray-fixture --
 ```bash
 bash scripts/test-menubar-panel.sh
 bash scripts/test-menubar-panel.sh scripts/test-menubar-usage.swift
+bash scripts/test-menubar-panel.sh scripts/test-menubar-settings.swift
 ```
 
-用量面板用例使用临时请求记录，验证分组整行点击、详情返回后的展开与滚动位置，以及提示词保存和恢复默认；不启动真实采集器或访问模型服务。
+用量与设置面板用例使用临时合成记录，验证分组及请求详情标题整行点击、详情返回后的展开与滚动位置、提示词保存和恢复默认，以及原生模型／采集表单的编辑、保存和校验；不启动真实采集器、写入密钥或访问模型服务。
 
 ## CI 与版本发布
 

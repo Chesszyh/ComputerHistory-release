@@ -1133,11 +1133,6 @@ struct SettingsSection: View {
                             get: { model.control.summarizing },
                             set: { model.setSummarizing($0) }))
                     Divider().opacity(0.4)
-                    Button("总结提示词与配置…") { model.openSummarySettings() }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Color.accentColor)
-                        .padding(.vertical, 10)
-                    Divider().opacity(0.4)
                     ToggleRow(
                         title: "登录时启动托盘",
                         subtitle: model.loginItemEnabled
@@ -1146,6 +1141,11 @@ struct SettingsSection: View {
                         isOn: Binding(
                             get: { model.loginItemEnabled },
                             set: { model.setLoginItem($0) }))
+                    Divider().opacity(0.4)
+                    Button("总结提示词与配置…") { model.openSummarySettings() }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.vertical, 10)
                 }
                 .padding(.top, 4)
             }
@@ -1196,59 +1196,6 @@ struct PillLabel: View {
     }
 }
 
-
-struct SummarySettingsPane: View {
-    @ObservedObject var model: StatusModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Button { model.showsSummarySettings = false } label: { Label("返回", systemImage: "chevron.left") }
-                    .buttonStyle(.plain)
-                Spacer()
-                Text("总结提示词与配置").font(.system(size: 13, weight: .semibold))
-                Spacer()
-            }
-            Divider()
-            Picker("阶段", selection: Binding(get: { model.summaryStage }, set: {
-                model.summaryStage = $0
-                model.loadSummaryDraft()
-            })) {
-                ForEach(SummarySettings.Stage.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-            }
-            Text("系统提示词").font(.system(size: 11, weight: .semibold))
-            TextEditor(text: $model.summaryDraft)
-                .font(.system(size: 11))
-                .frame(maxHeight: .infinity)
-                .border(Color.primary.opacity(0.15))
-                .accessibilityIdentifier("summary-prompt")
-            Text("保留提示词中的输出格式，供时间线解析。修改仅影响后续生成，不重写已有历史。")
-                .font(.system(size: 10)).foregroundStyle(.secondary)
-            if let error = model.summarySettingsError {
-                Text(error).foregroundStyle(.red).font(.system(size: 10)).textSelection(.enabled)
-                Button("打开提示词文件") { model.openConfiguration("summary.json") }.font(.system(size: 10))
-            }
-            if let message = model.summaryMessage { Text(message).font(.system(size: 10)).foregroundStyle(.secondary) }
-            HStack {
-                Button("恢复默认") {
-                    model.summaryDraft = model.summaryStage.defaultPrompt
-                    model.summaryMessage = "默认提示词已载入，保存后生效"
-                }.accessibilityIdentifier("summary-default")
-                Spacer()
-                Button("保存") { model.saveSummaryDraft() }
-                    .keyboardShortcut("s", modifiers: .command)
-                    .accessibilityIdentifier("summary-save")
-            }
-            Divider()
-            HStack {
-                Button("编辑模型配置") { model.openConfiguration("model.json") }
-                Button("编辑采集配置") { model.openConfiguration("config.json") }
-            }.font(.system(size: 11))
-            Text("模型配置在下次生成任务启动时读取；采集配置需重启采集器。")
-                .font(.system(size: 10)).foregroundStyle(.secondary)
-        }.padding(14)
-    }
-}
 
 struct ModelUsagePane: View {
     @ObservedObject var model: StatusModel
@@ -1497,7 +1444,22 @@ struct RequestDisclosure: View {
     @State private var expanded = false
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
+        VStack(alignment: .leading, spacing: 0) {
+            Button { expanded.toggle() } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .bold)).frame(width: 10)
+                    Text(title).font(.system(size: 11, weight: .semibold))
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(title)
+            .accessibilityValue(expanded ? "已展开" : "已收起")
+            if expanded {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Spacer()
@@ -1513,9 +1475,7 @@ struct RequestDisclosure: View {
             .background(Color.primary.opacity(0.04))
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .padding(.top, 6)
-        } label: {
-            Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            }
         }
-        .tint(.secondary)
     }
 }

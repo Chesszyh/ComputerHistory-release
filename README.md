@@ -70,13 +70,13 @@ python3 scripts/test-process-control.py .build/release/computer-history
 ./.build/release/computer-history verify
 ```
 
-模型接入使用 `DEEPSEEK_API_KEY`，可用 `DEEPSEEK_MODEL` 与 `DEEPSEEK_BASE_URL` 覆盖模型和地址。默认值见 [DeepSeekClient.swift](Sources/ComputerHistoryCore/DeepSeekClient.swift) 的 `defaultModel` / `defaultBaseURL`；请按服务账户的实际可用模型设置。
+模型接入可在菜单栏“设置 → 总结提示词与配置 → 模型”填写服务地址、模型名称和密钥，或使用 `DEEPSEEK_API_KEY`。命令行也可用 `DEEPSEEK_MODEL` 与 `DEEPSEEK_BASE_URL` 覆盖模型和地址。默认值见 [DeepSeekClient.swift](Sources/ComputerHistoryCore/DeepSeekClient.swift) 的 `defaultModel` / `defaultBaseURL`；请按服务账户的实际可用模型设置。
 
 自托管模型在数据目录创建 `model.json`，格式见[模型与用量配置](docs/collector.md#模型与用量配置)。可将模型部署在另一台电脑，本机只发送整理后的材料。配置文件优先于模型环境变量；`requiresAPIKey: false` 的服务不接收 DeepSeek 密钥。
 
 不带 `--no-model` 的生成任务会发送活动材料；`supervise` 定期执行生成入口。模型失败时保留带失败标记的事实摘要，后续周期会重试。菜单栏的“总结用量与费用”可查看每次请求的实际输入、输出、token 用量和费用估算。可用 `comparison` 将同一输入并行交给第二个模型；正式时间线只使用主模型结果，对照结果在请求详情中查看。旧版本没有保存的用量不会补算。
 
-用量页支持今天、昨天、本周（周一起）和本月筛选，并可选择任务类型及正式／对照请求。合计随筛选范围变化，请求按日期和任务分组展开。详情先显示模型输出，原始来源、系统提示词和原始输入默认折叠。分组整行可点击展开，查看请求详情后返回保留展开状态和浏览位置。菜单栏“设置 → 总结提示词与配置”可修改各阶段提示词并打开配置文件，生效方式见[模型与用量配置](docs/collector.md#模型与用量配置)。
+用量页支持今天、昨天、本周（周一起）和本月筛选，并可选择任务类型及正式／对照请求。合计随筛选范围变化，请求按日期和任务分组展开。详情先显示模型输出，原始来源、系统提示词和原始输入默认折叠。分组和请求详情的折叠标题整行可点击展开，查看请求详情后返回保留展开状态和浏览位置。菜单栏“设置 → 总结提示词与配置”提供提示词、模型和采集表单；配置文件编辑位于高级选项，生效方式见[模型与用量配置](docs/collector.md#模型与用量配置)。
 
 ## 文档
 

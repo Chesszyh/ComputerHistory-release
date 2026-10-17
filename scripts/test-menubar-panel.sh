@@ -15,5 +15,6 @@ fi
 swiftc -parse-as-library -I "$modules" \
     Sources/computer-history-menubar/StatusModel.swift \
     Sources/computer-history-menubar/StatusPanel.swift \
+    Sources/computer-history-menubar/SettingsPane.swift \
     "${1:-scripts/test-menubar-panel.swift}" "${objects[@]}" -o "$test_dir/panel-test"
 "$test_dir/panel-test"

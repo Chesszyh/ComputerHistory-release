@@ -32,6 +32,19 @@ final class StatusModel: ObservableObject {
     @Published var summaryDraft = ""
     @Published var summaryMessage: String?
     @Published var summarySettingsError: String?
+    enum SettingsTab: String, CaseIterable { case prompts = "提示词", model = "模型", collector = "采集" }
+    @Published var settingsTab: SettingsTab = .prompts
+    @Published var modelDraft = ModelSettingsDraft()
+    @Published var collectorDraft = CollectorSettingsDraft()
+    @Published var apiKeyDraft = ""
+    @Published var apiKeyStatus = ""
+    @Published var removesAPIKey = false
+    @Published var modelSettingsError: String?
+    @Published var collectorSettingsError: String?
+    @Published var modelSettingsMessage: String?
+    @Published var collectorSettingsMessage: String?
+    @Published private(set) var modelConfigurationLoaded = false
+    @Published private(set) var collectorConfigurationLoaded = false
     private let requestLoader = ModelRequestLoader()
 
     private var contentVersion = 0
@@ -434,7 +447,58 @@ final class StatusModel: ObservableObject {
 
     func openSummarySettings() {
         loadSummaryDraft()
+        loadConfigurationDrafts()
         showsSummarySettings = true
+    }
+
+    func loadConfigurationDrafts() {
+        modelSettingsError = nil
+        collectorSettingsError = nil
+        modelSettingsMessage = nil
+        collectorSettingsMessage = nil
+        apiKeyDraft = ""
+        removesAPIKey = false
+        modelConfigurationLoaded = false
+        collectorConfigurationLoaded = false
+        do {
+            modelDraft = ModelSettingsDraft(try ModelSettings.load(root: root))
+            modelConfigurationLoaded = true
+            let stored = try ModelAPIKey.load(root: root)
+            apiKeyStatus = stored != nil ? "已保存到系统钥匙串"
+                : (ProcessInfo.processInfo.environment["DEEPSEEK_API_KEY"]?.isEmpty == false ? "当前从环境变量读取密钥" : "尚未填写密钥")
+        } catch { modelSettingsError = String(describing: error) }
+        do {
+            collectorDraft = CollectorSettingsDraft(try CollectorConfig.load(rootDirectory: root))
+            collectorConfigurationLoaded = true
+        }
+        catch { collectorSettingsError = String(describing: error) }
+    }
+
+    func saveModelConfiguration() {
+        guard modelConfigurationLoaded else { return }
+        do {
+            let settings = try modelDraft.value()
+            let replacesKey = !apiKeyDraft.isEmpty
+            if replacesKey { try ModelAPIKey.save(apiKeyDraft, root: root) }
+            else if removesAPIKey { try ModelAPIKey.remove(root: root) }
+            try settings.save(root: root)
+            if replacesKey { apiKeyStatus = "已保存到系统钥匙串" }
+            else if removesAPIKey { apiKeyStatus = "未保存密钥；可从环境变量读取" }
+            apiKeyDraft = ""
+            removesAPIKey = false
+            modelSettingsError = nil
+            modelSettingsMessage = "已保存，下一次总结使用新设置"
+        } catch { modelSettingsError = String(describing: error); modelSettingsMessage = nil }
+    }
+
+    func saveCollectorConfiguration() {
+        guard collectorConfigurationLoaded else { return }
+        do {
+            let config = try collectorDraft.value()
+            try config.jsonData().write(to: CollectorConfig.fileURL(rootDirectory: root), options: .atomic)
+            collectorSettingsError = nil
+            collectorSettingsMessage = "已保存；运行中的采集器会自动读取"
+        } catch { collectorSettingsError = String(describing: error); collectorSettingsMessage = nil }
     }
 
     func loadSummaryDraft() {
@@ -459,11 +523,17 @@ final class StatusModel: ObservableObject {
 
     func openConfiguration(_ name: String) {
         let file = root.appendingPathComponent(name)
+        func showError(_ message: String) {
+            switch settingsTab {
+            case .prompts: summarySettingsError = message
+            case .model: modelSettingsError = message
+            case .collector: collectorSettingsError = message
+            }
+        }
         if FileManager.default.fileExists(atPath: file.path) {
-            if !NSWorkspace.shared.open(file) { summarySettingsError = "无法打开 \(name)，请从数据目录中选择编辑器打开。" }
+            if !NSWorkspace.shared.open(file) { showError("无法打开 \(name)，请从数据目录中选择编辑器打开。") }
         } else {
-            summarySettingsError = "\(name) 尚不存在，可在数据目录中按采集说明创建。"
-            NSWorkspace.shared.open(root)
+            showError("请先保存设置，再打开 \(name)。")
         }
     }
 

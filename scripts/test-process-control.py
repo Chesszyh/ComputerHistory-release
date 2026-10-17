@@ -270,3 +270,37 @@ with tempfile.TemporaryDirectory(prefix="collector-offline-") as directory:
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+with tempfile.TemporaryDirectory(prefix="collector-reconfigure-") as directory:
+    root = Path(directory)
+    (root / "control.json").write_text(json.dumps({"recording": False, "summarizing": False}))
+    config_path = root / "config.json"
+    config_path.write_text("{}")
+    log_path = root / "test.log"
+    with log_path.open("w") as output:
+        collector = subprocess.Popen([str(binary), "collect", "--out", str(root)], stdout=output, stderr=output)
+        try:
+            wait_for_record(root, collector)
+            def wait_for_log(text, count=1):
+                deadline = time.monotonic() + 6
+                while time.monotonic() < deadline:
+                    assert collector.poll() is None, "configuration reload stopped the collector"
+                    if (root / "collector.log").read_text().count(text) >= count:
+                        return
+                    time.sleep(0.05)
+                raise AssertionError(f"missing reconfiguration log: {text}")
+            updated = {"policy": {"blocklist": [{"scope": "app", "bundleID": "synthetic.blocked"}]}}
+            config_path.write_text(json.dumps(updated))
+            wait_for_log("采集配置已更新")
+            config_path.write_text('{"policy":{"blocklist":false}}')
+            wait_for_log("继续使用上次有效设置")
+            config_path.write_text(json.dumps(updated))
+            wait_for_log("采集配置已更新", 2)
+            assert command(root, "--stop").returncode == 0
+            assert collector.wait(timeout=5) == 0
+            assert all(path.read_bytes() == b"" for path in (root / "segments").glob("*/events.jsonl"))
+            print("PASS: live configuration reload, invalid-file rejection, recovery, and pause preservation")
+        finally:
+            if collector.poll() is None:
+                collector.kill()
+                collector.wait(timeout=5)

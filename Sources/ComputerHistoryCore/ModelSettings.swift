@@ -46,21 +46,33 @@ public struct ModelSettings: Codable, Sendable {
         do {
             let data = try Data(contentsOf: url)
             let value = try JSONDecoder().decode(Self.self, from: data)
-            guard ["http", "https"].contains(value.baseURL.scheme), value.baseURL.host != nil,
-                  !value.model.isEmpty, !value.reasoningEffort.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
-            for number in [value.pricing?.inputPerMillion, value.pricing?.cachedInputPerMillion,
-                           value.pricing?.outputPerMillion, value.dailyBudget, value.monthlyBudget,
-                           value.comparison?.pricing.inputPerMillion, value.comparison?.pricing.cachedInputPerMillion,
-                           value.comparison?.pricing.outputPerMillion].compactMap({ $0 }) {
-                guard number.isFinite, number >= 0 else { throw CocoaError(.fileReadCorruptFile) }
-            }
-            if let secondary = value.comparison {
-                guard ["http", "https"].contains(secondary.baseURL.scheme), secondary.baseURL.host != nil,
-                      !secondary.model.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
-            }
+            try value.validate()
             return value
         } catch {
             throw SettingsError.invalid("model.json 无效：\(error.localizedDescription)。请检查模型地址、必填字段和非负单价。")
+        }
+    }
+
+    public func save(root: URL) throws {
+        try validate()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try encoder.encode(self).write(to: root.appendingPathComponent("model.json"), options: .atomic)
+    }
+
+    private func validate() throws {
+        guard ["http", "https"].contains(baseURL.scheme), baseURL.host != nil,
+              !model.isEmpty, !reasoningEffort.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
+        for number in [pricing?.inputPerMillion, pricing?.cachedInputPerMillion,
+                       pricing?.outputPerMillion, dailyBudget, monthlyBudget,
+                       comparison?.pricing.inputPerMillion, comparison?.pricing.cachedInputPerMillion,
+                       comparison?.pricing.outputPerMillion].compactMap({ $0 }) {
+            guard number.isFinite, number >= 0 else { throw CocoaError(.fileReadCorruptFile) }
+        }
+        if let secondary = comparison {
+            guard ["http", "https"].contains(secondary.baseURL.scheme), secondary.baseURL.host != nil,
+                  !secondary.model.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
         }
     }
 

@@ -554,7 +554,9 @@ do {
 }
 
 // 先读配置（日志上限在其中），再接管输出。
-let collectorConfig = loadConfig(root: root)
+var collectorConfig = loadConfig(root: root)
+var configurationMonitor = CollectorConfigurationMonitor(root: root)
+var lastConfigurationError: String?
 redirectOutput(to: root.appendingPathComponent("collector.log"))
 print("--- \(ISO8601DateFormatter().string(from: Date())) 启动 ---")
 
@@ -642,6 +644,20 @@ var debugTicks = 0
 
 let timer = Timer.scheduledTimer(withTimeInterval: sampleInterval, repeats: true) { _ in
     MainActor.assumeIsolated {
+        do {
+            if let updated = try configurationMonitor.poll() {
+                windowTextSampler.update(nil) { _, _ in }
+                session.applyConfiguration(updated)
+                collectorConfig = updated
+                if !updated.windowTextApplications.isEmpty { NSApplication.shared.setActivationPolicy(.prohibited) }
+                lastConfigurationError = nil
+                print("采集配置已更新。")
+            }
+        } catch {
+            let message = "采集配置未应用，继续使用上次有效设置：\(error)"
+            if message != lastConfigurationError { warn(message) }
+            lastConfigurationError = message
+        }
         // 每周期读一次运行开关。文件很小，读取开销可忽略。
         let control = CollectorControl.load(root: root)
         let wasPaused = session.isPaused

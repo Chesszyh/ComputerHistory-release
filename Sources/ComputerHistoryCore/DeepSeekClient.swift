@@ -36,7 +36,7 @@ public struct DeepSeekClient: Sendable {
         public var description: String {
             switch self {
             case .missingAPIKey:
-                return "未找到 DEEPSEEK_API_KEY。请先 export 该环境变量。"
+                return "未找到模型密钥。请在菜单栏的模型设置中填写，或设置 DEEPSEEK_API_KEY 环境变量。"
             case .http(let status, let body):
                 return "接口返回 HTTP \(status)：\(body.prefix(300))"
             case .malformedResponse(let detail):
@@ -74,7 +74,8 @@ public struct DeepSeekClient: Sendable {
         rootDirectory: URL? = nil
     ) throws -> DeepSeekClient {
         if let rootDirectory, let config = try ModelSettings.load(root: rootDirectory) {
-            let key = environment["DEEPSEEK_API_KEY"] ?? ""
+            let key = config.requiresAPIKey
+                ? (try ModelAPIKey.load(root: rootDirectory) ?? environment["DEEPSEEK_API_KEY"] ?? "") : ""
             if config.requiresAPIKey, key.isEmpty { throw ClientError.missingAPIKey }
             return DeepSeekClient(apiKey: config.requiresAPIKey ? key : "", baseURL: config.baseURL,
                                   model: config.model, timeout: 180, settings: config)

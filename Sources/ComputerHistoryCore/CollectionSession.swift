@@ -53,7 +53,7 @@ public final class CollectionSession {
         }
     }
 
-    private let config: Configuration
+    private var config: Configuration
     private var writer: SegmentWriter?
     private var nextID = 1
     /// 上一帧已编号的树，直接用于差分；避免"渲染再反解"的绕行。
@@ -72,6 +72,22 @@ public final class CollectionSession {
     private var lastWindowText: (context: WindowTextContext, text: String)?
     private var away: AwayPeriods
     public var isAway: Bool { away.startedAt != nil }
+
+    public func applyConfiguration(_ updated: CollectorConfig) {
+        // 策略变化后丢弃旧缓冲，避免把新名单排除的文本写入历史。
+        windowTextEpoch += 1
+        windowTextContext = nil
+        lastWindowText = nil
+        textTracker.resetBaseline()
+        textContext = nil
+        inputActivity = nil
+        previousTree = nil
+        lastSnapshotText = nil
+        treeApp = nil
+        treeContext = nil
+        config = Configuration(rootDirectory: config.rootDirectory, config: updated,
+                               tracksSuppression: config.tracksSuppression)
+    }
 
     /// 最近一次清理结果，供 CLI 汇报。
     public private(set) var lastPruneReport: PruneReport?
