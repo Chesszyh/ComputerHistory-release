@@ -49,10 +49,10 @@ bash scripts/test-menubar-panel.sh scripts/test-menubar-usage.swift
 bash scripts/test-menubar-panel.sh scripts/test-menubar-settings.swift
 ```
 
-用量与设置面板用例使用临时合成记录，验证分组及请求详情标题整行点击、详情返回后的展开与滚动位置、提示词保存和恢复默认，以及原生模型／采集表单的编辑、保存和校验；不启动真实采集器、写入密钥或访问模型服务。Intel CI 运行器没有可用的 Metal 设备，创建有序窗口的用量面板用例只在 Apple Silicon 执行；Intel 仍运行分页、单元、进程集成与打包步骤。
+用量与设置面板用例使用临时合成记录，验证分组及请求详情标题整行点击、详情返回后的展开与滚动位置、提示词保存和恢复默认，以及原生模型／采集表单的编辑、保存和校验；不启动真实采集器、写入密钥或访问模型服务。
 
 ## CI 与版本发布
 
-公开仓库的 CI 在 `main` 推送、合并请求和手动触发时运行，分别使用 Apple Silicon 与 Intel macOS 执行 Debug／Release 单元测试、进程集成、模拟模型和菜单分页测试。私有样本与大数据基准保持显式启用，不属于常规 CI。
+公开仓库的 CI 在 `main` 推送、合并请求和手动触发时运行，使用 Apple Silicon macOS 执行 Debug／Release 单元测试、进程集成、模拟模型和菜单测试。私有样本与大数据基准保持显式启用，不属于常规 CI。
 
-发布前更新 `VERSION`，等待相应提交的两个 CI 任务通过。CI 附件包含 `scripts/package-release.sh` 从公开源码构建的两种处理器压缩包。将版本标签指向该提交，创建 Release 并上传同一次 CI 的两个压缩包；用户下载和启动说明由 `docs/distribution.md` 维护。
+发布前更新 `VERSION`，等待相应提交的 CI 任务通过。CI 附件包含 `scripts/package-release.sh` 从公开源码构建的 Apple Silicon 压缩包。将版本标签指向该提交，创建 Release 并上传同一次 CI 的压缩包；用户下载和启动说明由 `docs/distribution.md` 维护。

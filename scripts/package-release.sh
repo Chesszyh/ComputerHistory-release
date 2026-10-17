@@ -2,7 +2,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 version="$(cat VERSION)"
-arch="$(uname -m)"
+if [[ "$(uname -m)" != "arm64" ]]; then
+    echo "只构建 Apple Silicon（arm64）包。" >&2
+    exit 1
+fi
+arch="arm64"
 swift build -c release
 bin_dir="$(swift build -c release --show-bin-path)"
 stage="$(mktemp -d)"

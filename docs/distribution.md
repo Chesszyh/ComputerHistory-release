@@ -1,6 +1,6 @@
 # 下载与运行
 
-从 [Releases](https://github.com/Chesszyh/ComputerHistory-release/releases/latest) 下载与电脑处理器对应的压缩包：Apple Silicon 使用 `arm64`，Intel 使用 `x86_64`。运行环境为 macOS 13 或更高版本。解压后包含命令行程序、菜单栏程序和许可证，无需安装 Swift 工具链。
+从 [Releases](https://github.com/Chesszyh/ComputerHistory-release/releases/latest) 下载 Apple Silicon（`arm64`）压缩包。运行环境为 macOS 13 或更高版本。解压后包含命令行程序、菜单栏程序和许可证，无需安装 Swift 工具链。
 
 在解压目录打开终端，先检查权限：
 

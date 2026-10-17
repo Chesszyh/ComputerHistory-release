@@ -23,8 +23,6 @@ jobs:
         include:
           - runner: macos-15
             arch: arm64
-          - runner: macos-15-intel
-            arch: x86_64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
@@ -40,14 +38,7 @@ jobs:
       - name: History pagination
         run: bash scripts/test-menubar-panel.sh
       - name: Usage navigation and summary settings
-        run: |
-          # Intel Actions runners have no usable Metal device for an ordered
-          # SwiftUI window; the same panel is exercised on the arm64 runner.
-          if [[ "$(uname -m)" == "x86_64" ]]; then
-            echo "Skipping ordered-window UI test on x86_64."
-            exit 0
-          fi
-          bash scripts/test-menubar-panel.sh scripts/test-menubar-usage.swift
+        run: bash scripts/test-menubar-panel.sh scripts/test-menubar-usage.swift
       - name: Debug tests
         run: swift test
       - name: Debug integration tests
