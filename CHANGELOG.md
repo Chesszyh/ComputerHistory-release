@@ -3,7 +3,7 @@
 ## 0.2.1 - 2026-10-17
 
 ### Fixes & Improvements
-- **Release Verification**: The menu usage regression test now locates the request group header from the list document instead of fixed window coordinates. The released tree passes both menu panel tests on Apple Silicon; Intel CI runs the remaining checks because its runner lacks a Metal device for ordered windows.
+- **Release Verification**: The menu usage regression test now locates the request group header from the list document instead of fixed window coordinates. The released tree passes both menu panel tests on Apple Silicon; v0.2.1 also ran the remaining checks on Intel CI. Later releases publish Apple Silicon builds only.
 - **Documentation**: Corrected the 0.2.0 notes for OCR screen-recording permission, configurable settings fields, and prompt customization.
 
 ## 0.2.0 - 2026-10-17
