@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 - 2026-10-17
+
+### Fixes & Improvements
+- **Release Verification**: The menu usage regression test now locates the request group header from the list document instead of fixed window coordinates, so the released tree passes both menu panel tests.
+- **Documentation**: Corrected the 0.2.0 notes for OCR screen-recording permission, configurable settings fields, and prompt customization.
+
 ## 0.2.0 - 2026-10-17
 
 ### Features
