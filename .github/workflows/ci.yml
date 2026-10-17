@@ -39,6 +39,8 @@ jobs:
           uname -m
       - name: History pagination
         run: bash scripts/test-menubar-panel.sh
+      - name: Usage navigation and summary settings
+        run: bash scripts/test-menubar-panel.sh scripts/test-menubar-usage.swift
       - name: Debug tests
         run: swift test
       - name: Debug integration tests

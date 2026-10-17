@@ -108,13 +108,14 @@ public struct NarrativeGenerator: Sendable {
                            usedModel: false, usage: nil)
         }
 
+        let prompt = try SummarySettings.load(root: rootDirectory)[.narrative]
         var added = 0
         var totalUsage: DeepSeekClient.Usage?
         // 小批次逐次保存，长日历史不会超出远端小模型的上下文，失败也不重付已保存批次。
         for offset in stride(from: 0, to: pending.count, by: 4) {
             let batch = Array(pending[offset..<min(offset + 4, pending.count)])
             let completion = try client.complete(
-                system: Self.systemPrompt,
+                system: prompt,
                 user: Self.userPrompt(day: day, sources: batch, priorItems: priorItems),
                 maxTokens: 1800, recordingAt: rootDirectory, task: "narrative",
                 sources: batch.map { $0.fileURL.lastPathComponent })
@@ -339,6 +340,8 @@ public struct NarrativeGenerator: Sendable {
 
     /// 系统提示按使用者给定的规格撰写：目标是活动索引而非工作报告。
     public static let systemPrompt = """
+    \(SummarySettings.activityRules)
+
     直接描述来源支持的动作、对象和结果。单个控件的来源类别只约束那个片段。
     不复述来源中的通用免责声明，不写“无法确认归因、发送、保存或逐字输入”。
     缺少结果时省略结果，不虚构结束状态；明确出现的失败或阻塞仍要保留。

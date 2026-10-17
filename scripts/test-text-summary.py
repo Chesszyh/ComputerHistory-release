@@ -109,12 +109,38 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
         def regenerate():
             return subprocess.run([binary, 'memorize', '--out', directory, '--segment', segment_id, '--overwrite'],
                                   env=local_env, capture_output=True, text=True, timeout=30)
+        summary_settings = {
+            'tenMinutePrompt': requests[0]['messages'][0]['content'] + '\nSYNTHETIC TEN MINUTE OVERRIDE',
+            'sixHourPrompt': 'SYNTHETIC SIX HOUR OVERRIDE',
+            'narrativePrompt': requests[1]['messages'][0]['content'] + '\nSYNTHETIC NARRATIVE OVERRIDE',
+        }
+        (root / 'summary.json').write_text(json.dumps(summary_settings))
         assert regenerate().returncode == 0
+        assert requests[-1]['messages'][0]['content'] == summary_settings['tenMinutePrompt']
         assert authorizations[-1] is None, 'remote unkeyed server received an unrelated cloud credential'
         records = [json.loads(p.read_text()) for p in (root / 'requests').glob('*.json')]
         priced = next(r for r in records if r['model'] == 'synthetic-local')
         assert abs(priced['estimatedCost'] - 0.0004008) < 1e-9
         assert priced['pricing'] == config['pricing']
+        narrative = subprocess.run([binary, 'narrative', '--out', directory, '--overwrite'],
+                                   env=local_env, capture_output=True, text=True, timeout=30)
+        assert narrative.returncode == 0, narrative.stderr
+        assert requests[-1]['messages'][0]['content'] == summary_settings['narrativePrompt']
+        six_hour = subprocess.run([binary, 'memorize', '--out', directory, '--granularity', '6h'],
+                                  env=local_env, capture_output=True, text=True, timeout=30)
+        assert six_hour.returncode == 0, six_hour.stderr
+        assert requests[-1]['messages'][0]['content'] == summary_settings['sixHourPrompt']
+        before = len(requests)
+        (root / 'summary.json').write_text('{"tenMinutePrompt": " "}')
+        invalid = regenerate()
+        assert invalid.returncode != 0 and 'summary.json' in invalid.stderr
+        assert len(requests) == before, 'invalid summary settings sent a model request'
+        # No-model generation remains local even while model prompt settings are broken.
+        factual = subprocess.run([binary, 'memorize', '--out', directory, '--segment', segment_id,
+                                  '--overwrite', '--no-model'], env=local_env,
+                                 capture_output=True, text=True, timeout=30)
+        assert factual.returncode == 0 and len(requests) == before
+        (root / 'summary.json').write_text(json.dumps(summary_settings))
         mode = 'http_error'
         assert regenerate().returncode == 0  # memory persists an explicitly failed factual fallback
         records = [json.loads(p.read_text()) for p in (root / 'requests').glob('*.json')]
@@ -165,7 +191,7 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
         assert shadow['input'] == primary['input'] and shadow['system'] == primary['system']
         assert shadow['output'] == 'SHADOW OUTPUT' and shadow['estimatedCost'] == 0
         assert 'SHADOW OUTPUT' not in next((root / 'memories').glob(f'{segment_id}-*.md')).read_text()
-        print('PASS: evidence, request ledger, pricing, failure/empty usage, budgets, batch resume, and isolated comparison')
+        print('PASS: evidence, request ledger, pricing, failure/empty usage, budgets, batch resume, and isolated comparison, and prompt overrides')
     finally:
         server.shutdown()
         server.server_close()

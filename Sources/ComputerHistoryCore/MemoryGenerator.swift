@@ -143,9 +143,10 @@ public struct MemoryGenerator: Sendable {
         if let client {
             let prior = previousMemoryPath.flatMap { try? String(contentsOfFile: $0,
                                                                 encoding: .utf8) }
+            let prompt = try SummarySettings.load(root: rootDirectory)[.tenMinute]
             do {
             let completion = try client.complete(
-                system: Self.systemPrompt,
+                system: prompt,
                 user: Self.userPrompt(digest: digest, events: events, priorMemory: prior),
                 maxTokens: 2400, recordingAt: rootDirectory, task: "10min", sources: [segmentID])
             let text = completion.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -322,9 +323,10 @@ public struct MemoryGenerator: Sendable {
         var modelNote: String?
         var modelTitle: String?
         if let client {
+            let prompt = try SummarySettings.load(root: rootDirectory)[.sixHour]
             do {
                 let completion = try client.complete(
-                    system: Self.sixHourSystemPrompt,
+                    system: prompt,
                     user: Self.sixHourUserPrompt(bucket: bucket, digest: digest,
                                                 summaries: summaries),
                     maxTokens: 3200, recordingAt: rootDirectory, task: "6h", sources: ids)
@@ -385,6 +387,8 @@ public struct MemoryGenerator: Sendable {
     }
 
     public static let sixHourSystemPrompt = """
+    \(SummarySettings.activityRules)
+
     你为一份本地活动记录写**六小时**跨度的汇总记忆。读者是记录者本人，
     几周后会回看。输入是该时段内若干份十分钟粒度的记忆摘要。
 
@@ -586,6 +590,8 @@ public struct MemoryGenerator: Sendable {
     // MARK: - 提示词
 
     public static let systemPrompt = """
+    \(SummarySettings.activityRules)
+
     你为一份本地活动记录写记忆摘要。读者是记录者本人，几周后会回看。
 
     只依据用户提供的事实，不要推测未出现的内容。若某类信息没有给出，
@@ -627,7 +633,9 @@ public struct MemoryGenerator: Sendable {
         }
 
         out += "## 应用活动\n"
-        for activity in digest.activities.prefix(10) {
+        let activities = Array(digest.activities.prefix(10))
+        let textBudget = 6000 / max(1, activities.count)
+        for activity in activities {
             out += "\n### \(activity.displayName)（\(activity.bundleIdentifier)）\n"
             out += "- 活跃 \(hm(activity.firstSeen))–\(hm(activity.lastSeen))，"
             out += "\(activity.eventCount) 条事件"
@@ -647,7 +655,8 @@ public struct MemoryGenerator: Sendable {
                     out += "  - \(MemoryWriter.truncate(u, 120))\n"
                 }
             }
-            out += MemoryWriter.textEvidenceSection(for: activity, limit: 8)
+            let text = MemoryWriter.textEvidenceSection(for: activity, limit: 8, textLimit: 1200)
+            out += text.count <= textBudget ? text : String(text.prefix(textBudget - 2)) + "…\n"
         }
         out += "\n## 按时间排列的界面与交互证据\n"
         out += ActivityEvidence.material(events: events, segmentID: digest.segmentID, characterBudget: 8000)

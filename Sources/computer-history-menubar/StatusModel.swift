@@ -25,6 +25,13 @@ final class StatusModel: ObservableObject {
     @Published var showsUsage = false
     @Published var requestDetail: ModelRequest?
     @Published var requestError: String?
+    @Published var usageFilter = ModelRequestFilter()
+    @Published var expandedRequestGroups: Set<String> = []
+    @Published var showsSummarySettings = false
+    @Published var summaryStage: SummarySettings.Stage = .tenMinute
+    @Published var summaryDraft = ""
+    @Published var summaryMessage: String?
+    @Published var summarySettingsError: String?
     private let requestLoader = ModelRequestLoader()
 
     private var contentVersion = 0
@@ -423,6 +430,41 @@ final class StatusModel: ObservableObject {
         detailTask = nil
         requestDetail = nil
         showsUsage = false
+    }
+
+    func openSummarySettings() {
+        loadSummaryDraft()
+        showsSummarySettings = true
+    }
+
+    func loadSummaryDraft() {
+        summaryMessage = nil
+        summarySettingsError = nil
+        do { summaryDraft = try SummarySettings.load(root: root)[summaryStage] }
+        catch {
+            summaryDraft = ""
+            summarySettingsError = String(describing: error)
+        }
+    }
+
+    func saveSummaryDraft() {
+        do {
+            var settings = try SummarySettings.load(root: root)
+            settings[summaryStage] = summaryDraft
+            try settings.save(root: root)
+            summarySettingsError = nil
+            summaryMessage = "已保存，后续生成任务生效"
+        } catch { summarySettingsError = String(describing: error); summaryMessage = nil }
+    }
+
+    func openConfiguration(_ name: String) {
+        let file = root.appendingPathComponent(name)
+        if FileManager.default.fileExists(atPath: file.path) {
+            if !NSWorkspace.shared.open(file) { summarySettingsError = "无法打开 \(name)，请从数据目录中选择编辑器打开。" }
+        } else {
+            summarySettingsError = "\(name) 尚不存在，可在数据目录中按采集说明创建。"
+            NSWorkspace.shared.open(root)
+        }
     }
 
     func closeDetail() {

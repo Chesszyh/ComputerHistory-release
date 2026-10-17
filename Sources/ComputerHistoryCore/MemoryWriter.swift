@@ -228,7 +228,7 @@ public enum MemoryWriter {
     private static let uncertainTextLabel = "控件变化"
 
     /// 模型取材和本地事实版本共用，证据级别与引用不能在渲染时丢失。
-    static func textEvidenceSection(for activity: SegmentDigest.AppActivity, limit: Int = 20) -> String {
+    static func textEvidenceSection(for activity: SegmentDigest.AppActivity, limit: Int = 20, textLimit: Int = 200) -> String {
         let excerpts = activity.selectedTextExcerpts(limit: limit)
         var out = ""
         for (edited, label) in [(true, editedTextLabel), (false, uncertainTextLabel)] {
@@ -238,7 +238,7 @@ public enum MemoryWriter {
             for item in group {
                 var revision = item.wasReplaced ? "后续已覆盖部分或全部内容；" : ""
                 if !item.replaces.isEmpty { revision += "覆盖来源 \(item.replaces.joined(separator: ", "))；" }
-                out += "  - [\(revision)\(format(item.timestamp)); \(item.segmentID)#\(item.eventID)] `\(escape(truncate(item.text, 200)))`\n"
+                out += "  - [\(revision)\(format(item.timestamp)); \(item.segmentID)#\(item.eventID)] `\(escape(truncate(item.text, textLimit)))`\n"
             }
         }
         return out

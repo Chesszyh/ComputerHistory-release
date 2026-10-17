@@ -18,33 +18,36 @@ public enum ActivityEvidence {
                    !(keyboard.target?.placeholder == text && keyboard.textEvidence != .editedValue),
                    !replaced.contains("\(segmentID)#\(event.id)") {
                     let label = keyboard.textEvidence == .editedValue ? "编辑片段" : "控件变化"
-                    facts.append("\(label)：\(MemoryWriter.truncate(text, 300))")
-                }
-                if let key = keyboard.keyEquivalent, !key.isEmpty {
-                    facts.append("按键：\((keyboard.modifiers + [key == "\r" ? "Return" : key]).joined(separator: "+"))")
+                    facts.append("\(label)：\(MemoryWriter.truncate(text, 2400))")
                 }
             }
             if let target = event.mouse?.target {
-                let label = [target.title, target.description, target.role].compactMap { $0 }.first ?? "控件"
-                facts.append("点击：\(MemoryWriter.truncate(label, 100))")
+                if let label = [target.title, target.description].compactMap({ $0 }).first,
+                   !isChatChrome(label, app: app) {
+                    facts.append("点击：\(MemoryWriter.truncate(label, 100))")
+                }
             }
             if let ax = event.ax {
                 // 按渲染节点切分，续行仍属于该节点；不能把旧差分的 ~ 续行误作新增内容。
-                let nodes = screenNodes(ax)
+                let nodes = screenNodes(ax).filter { !isChatChrome($0, app: app) }
                 let fresh = nodes.filter { seenScreen.insert(context + "\n" + $0).inserted }
                 let selected = evenlySpaced(fresh, limit: 6)
                 if !selected.isEmpty { facts.append("界面显示：" + selected.joined(separator: "；")) }
+                else if ax.mode == .fullTree, nodes.isEmpty {
+                    facts.append("仅记录到应用或窗口，未读取到有效正文")
+                }
             }
             if facts.isEmpty, event.kind == .windowChanged { facts.append("查看窗口") }
             if !facts.isEmpty { observations.append(reference + "\n" + facts.joined(separator: "\n")) }
         }
         // 先覆盖整个时间范围，再填预算，避免只保留长段开头。
         let selected = evenlySpaced(observations, limit: max(1, characterBudget / 650))
+        let slotBudget = max(0, characterBudget / max(1, selected.count) - 2)
+        guard slotBudget > 0 else { return "" }
         var out = ""
         for item in selected {
-            let remaining = characterBudget - out.count
-            guard remaining > 0 else { break }
-            out += String(item.prefix(remaining)) + "\n\n"
+            let text = item.count <= slotBudget ? item : String(item.prefix(slotBudget - 1)) + "…"
+            out += text + "\n\n"
         }
         return out
     }
@@ -59,21 +62,43 @@ public enum ActivityEvidence {
     static func screenNodes(_ ax: EventStreamAXTree) -> [String] {
         var result: [String] = [], buffer = ""
         var include = false
-        let header = try! NSRegularExpression(pattern: #"^[~+\-]?\t*\d+ "#)
-        for part in ax.text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = String(part)
-            let range = NSRange(line.startIndex..., in: line)
-            if header.firstMatch(in: line, range: range) != nil {
-                if include, !buffer.isEmpty { result.append(MemoryWriter.truncate(buffer, 400)) }
-                include = ax.mode == .fullTree || line.hasPrefix("+")
-                buffer = include ? line : ""
-            } else if include, !line.hasPrefix("Removed element IDs:") {
-                // 单个节点只保留有界文本，避免超大控件值占满材料。
-                if buffer.count < 600 { buffer += " " + String(line.prefix(600 - buffer.count)) }
+        func appendNode() {
+            let text = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty { result.append(MemoryWriter.truncate(text, 1400)) }
+        }
+        for raw in ax.text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = AXTextParser.parseLine(String(raw), mode: ax.mode)
+            switch line {
+            case .element(_, _, nil, _, _):
+                if include, buffer.count < 1600 { buffer += " " + String(raw.prefix(1600 - buffer.count)) }
+            case .element(let marker, _, _, _, let detail):
+                appendNode()
+                include = ax.mode == .fullTree || marker == "+"
+                // 元素编号和 role 是树结构，不能解释为窗口数量或活动内容。
+                buffer = include ? readableDetail(detail ?? "") : ""
+            case .continuation(let text) where include:
+                if buffer.count < 1600 { buffer += " " + String(text.prefix(1600 - buffer.count)) }
+            default: break
             }
         }
-        if include, !buffer.isEmpty { result.append(MemoryWriter.truncate(buffer, 400)) }
+        appendNode()
         return result
+    }
+
+    private static func readableDetail(_ detail: String) -> String {
+        let text = detail
+            .replacingOccurrences(of: #"^\([^)]*\)\s*"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"(?:^|, )ID: [^,]*"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.range(of: #"^_?[A-Za-z][A-Za-z0-9_]*:$"#, options: .regularExpression) != nil { return "" }
+        return text
+    }
+
+    private static func isChatChrome(_ text: String, app: EventStreamApp) -> Bool {
+        guard ["com.google.Chrome", "com.openai.chat", "com.openai.codex"].contains(app.bundleIdentifier ?? "") else { return false }
+        let value = text.replacingOccurrences(of: #"^(?:Title|Value|Description|Placeholder):\s*"#,
+            with: "", options: .regularExpression).filter { !$0.isWhitespace }
+        return ["询问ChatGPT", "询问ChatGPT…", "询问ChatGPT...", "重新生成回复", "回答已完成"].contains(value)
     }
 
     static func summary(in text: String, limit: Int = 1800) -> String {
