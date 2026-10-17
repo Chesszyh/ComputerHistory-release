@@ -23,19 +23,22 @@ public final class CollectionSession {
         public var policy: ObservationPolicy
         /// 落盘保留策略。
         public var retention: CollectorConfig.Retention
+        public var windowTextApplications: [String]
 
         public init(
             rootDirectory: URL,
             maxNodesPerSnapshot: Int = 4000,
             tracksSuppression: Bool = true,
             policy: ObservationPolicy = .init(),
-            retention: CollectorConfig.Retention = .init()
+            retention: CollectorConfig.Retention = .init(),
+            windowTextApplications: [String] = []
         ) {
             self.rootDirectory = rootDirectory
             self.maxNodesPerSnapshot = maxNodesPerSnapshot
             self.tracksSuppression = tracksSuppression
             self.policy = policy
             self.retention = retention
+            self.windowTextApplications = windowTextApplications
         }
 
         /// 由配置文件构造。
@@ -45,7 +48,8 @@ public final class CollectionSession {
                       maxNodesPerSnapshot: config.maxNodesPerSnapshot,
                       tracksSuppression: tracksSuppression,
                       policy: config.policy,
-                      retention: config.retention)
+                      retention: config.retention,
+                      windowTextApplications: config.windowTextApplications)
         }
     }
 
@@ -58,6 +62,14 @@ public final class CollectionSession {
     private var treeContext: EventStreamWindow?
     private var treeApp: EventStreamApp?
     private var isRunning = false
+    public struct WindowTextContext: Sendable, Equatable {
+        public var app: EventStreamApp
+        public var window: EventStreamWindow?
+        var epoch: Int
+    }
+    public private(set) var windowTextContext: WindowTextContext?
+    private var windowTextEpoch = 0
+    private var lastWindowText: (context: WindowTextContext, text: String)?
     private var away: AwayPeriods
     public var isAway: Bool { away.startedAt != nil }
 
@@ -70,6 +82,9 @@ public final class CollectionSession {
         didSet {
             guard isPaused != oldValue else { return }
             // 恢复时必须重新建立基线，避免把暂停期间的编辑补记为输入。
+            windowTextEpoch += 1
+            windowTextContext = nil
+            lastWindowText = nil
             textTracker.resetBaseline()
             textContext = nil
             inputActivity = nil
@@ -131,6 +146,9 @@ public final class CollectionSession {
     /// 结束采集。写 `session.ended` 并封口当前 segment。
     public func stop(now: Date = Date()) throws {
         guard isRunning else { return }
+        windowTextEpoch += 1
+        windowTextContext = nil
+        lastWindowText = nil
         // 收尾前把未满一个停顿周期的输入落盘，避免丢尾部。
         flushTextInput(at: now)
         textTracker.resetBaseline()
@@ -149,6 +167,7 @@ public final class CollectionSession {
     ///
     /// 调用频率由外部决定；真实服务在窗口/应用切换时触发。
     public func sampleFrontmost(now: Date = Date(), force: Bool = false) {
+        windowTextContext = nil
         guard isRunning, !isPaused else { return }
         guard let app = FrontmostApplication.current(), observeAvailability(app: app, now: now) else { return }
 
@@ -166,6 +185,32 @@ public final class CollectionSession {
         }
 
         recordSnapshot(roots: roots, app: app, window: window, now: now, force: force)
+        updateWindowTextContext(roots: roots, app: app, window: window)
+    }
+
+    func updateWindowTextContext(roots: [UIElementRender], app: EventStreamApp, window: EventStreamWindow?) {
+        guard isRunning, !isPaused, !isAway,
+              config.windowTextApplications.contains(app.bundleIdentifier ?? ""),
+              !config.policy.shouldSuppress(app: app, window: window),
+              !AXTreeReader.hasReadableContent(roots) else { windowTextContext = nil; return }
+        windowTextContext = WindowTextContext(app: app, window: window, epoch: windowTextEpoch)
+    }
+
+    public func recordWindowText(_ result: WindowTextReader.Result, context: WindowTextContext, now: Date = Date()) {
+        guard isRunning, !isPaused, !isAway, context == windowTextContext,
+              !config.policy.shouldSuppress(app: context.app, window: context.window),
+              !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if let lastWindowText, lastWindowText.context == context, lastWindowText.text == result.text { return }
+        var window = context.window ?? EventStreamWindow()
+        if let expected = window.windowID, expected != result.windowID { return }
+        window.windowID = result.windowID
+        let lines = result.text.split(separator: "\n").enumerated().map { index, text in
+            "\(index) 文本 Value: \(text)"
+        }.joined(separator: "\n")
+        append(kind: .windowChanged, at: now, app: context.app, window: window,
+               mouse: nil, keyboard: nil, selection: nil,
+               ax: .init(mode: .fullTree, text: lines, source: "window_ocr"))
+        lastWindowText = (context, result.text)
     }
 
     func recordSnapshot(roots: [UIElementRender], app: EventStreamApp,
@@ -176,7 +221,10 @@ public final class CollectionSession {
         let switched = treeApp?.processIdentifier != app.processIdentifier
             || treeContext?.windowID != window?.windowID || treeContext?.url != window?.url
         let expired = writer.map { SegmentClock.isExpired($0.startedAt, now: now) } ?? false
-        if switched || expired { previousTree = nil; lastSnapshotText = nil }
+        if switched || expired {
+            previousTree = nil; lastSnapshotText = nil
+            windowTextEpoch += 1; windowTextContext = nil; lastWindowText = nil
+        }
         treeApp = app; treeContext = window
         let changed = treeText != lastSnapshotText
         // 相同界面只记录一次，输入事件独立保存动作。
@@ -352,6 +400,7 @@ public final class CollectionSession {
         guard !isPaused else { return false }
         var changed = false
         if AwayPeriods.isLoginWindow(app), away.startedAt == nil {
+            windowTextEpoch += 1; windowTextContext = nil; lastWindowText = nil
             flushTextInput(at: now)
             away.startedAt = now
             changed = true

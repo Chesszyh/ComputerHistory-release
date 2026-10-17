@@ -655,7 +655,11 @@ public struct MemoryGenerator: Sendable {
                     out += "  - \(MemoryWriter.truncate(u, 120))\n"
                 }
             }
-            let text = MemoryWriter.textEvidenceSection(for: activity, limit: 8, textLimit: 1200)
+            var content = activity
+            let app = EventStreamApp(bundleIdentifier: activity.bundleIdentifier)
+            content.textExcerpts.removeAll { $0.evidence != .editedValue && ActivityEvidence.isChatChrome($0.text, app: app) }
+            content.typedTexts.removeAll { ActivityEvidence.isChatChrome($0, app: app) }
+            let text = MemoryWriter.textEvidenceSection(for: content, limit: 8, textLimit: 1200)
             out += text.count <= textBudget ? text : String(text.prefix(textBudget - 2)) + "…\n"
         }
         out += "\n## 按时间排列的界面与交互证据\n"

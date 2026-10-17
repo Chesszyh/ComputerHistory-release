@@ -15,6 +15,7 @@ public enum ActivityEvidence {
             var facts: [String] = []
             if let keyboard = event.keyboard {
                 if let text = keyboard.text, !text.isEmpty,
+                   (keyboard.textEvidence == .editedValue || !isChatChrome(text, app: app)),
                    !(keyboard.target?.placeholder == text && keyboard.textEvidence != .editedValue),
                    !replaced.contains("\(segmentID)#\(event.id)") {
                     let label = keyboard.textEvidence == .editedValue ? "编辑片段" : "控件变化"
@@ -94,7 +95,7 @@ public enum ActivityEvidence {
         return text
     }
 
-    private static func isChatChrome(_ text: String, app: EventStreamApp) -> Bool {
+    static func isChatChrome(_ text: String, app: EventStreamApp) -> Bool {
         guard ["com.google.Chrome", "com.openai.chat", "com.openai.codex"].contains(app.bundleIdentifier ?? "") else { return false }
         let value = text.replacingOccurrences(of: #"^(?:Title|Value|Description|Placeholder):\s*"#,
             with: "", options: .regularExpression).filter { !$0.isWhitespace }

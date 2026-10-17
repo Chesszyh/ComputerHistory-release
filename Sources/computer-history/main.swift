@@ -1,8 +1,9 @@
 import Foundation
+import AppKit
 import ComputerHistoryCore
 
 // 本地活动采集。需要 Accessibility 权限（系统设置 → 隐私与安全性 → 辅助功能），
-// 通过辅助功能读取界面文本，不抓取屏幕图像。
+// 默认读取辅助功能文本；显式配置的窗口文字识别只在本机处理图像，不保存截图。
 
 let args = Array(CommandLine.arguments.dropFirst())
 let flags = Set(args)
@@ -572,8 +573,12 @@ func todayLabel() -> String {
     return f.string(from: Date())
 }
 
+if !collectorConfig.windowTextApplications.isEmpty {
+    NSApplication.shared.setActivationPolicy(.prohibited)
+}
 let session = CollectionSession(
     configuration: .init(rootDirectory: root, config: collectorConfig))
+let windowTextSampler = WindowTextSampler()
 session.isPaused = !CollectorControl.load(root: root).recording
 let sampleInterval: TimeInterval = 1.0
 let runSeconds = value(of: "--seconds").flatMap(Double.init)
@@ -611,6 +616,7 @@ final class Shutdown {
     func run() -> Int32 {
         guard !done else { return 0 }
         done = true
+        windowTextSampler.update(nil) { _, _ in }
         defer { lease.release() }
         do { try session.stop() }
         catch {
@@ -649,6 +655,20 @@ let timer = Timer.scheduledTimer(withTimeInterval: sampleInterval, repeats: true
         // 文本输入按同一周期轮询；切块由跟踪器内部的停顿阈值决定，
         // 与采样周期解耦。
         session.sampleTextInput()
+        windowTextSampler.update(session.windowTextContext, read: { pid, windowID in
+            try await WindowTextReader.read(pid: pid, windowID: windowID, isAllowed: {
+                await MainActor.run {
+                    CollectorControl.load(root: root).recording
+                        && FrontmostApplication.current()?.processIdentifier == pid
+                }
+            })
+        }) { context, result in
+            let current = FrontmostApplication.current()
+            guard CollectorControl.load(root: root).recording,
+                  current?.processIdentifier == context.app.processIdentifier,
+                  FrontmostApplication.frontWindow(for: current) == context.window else { return }
+            session.recordWindowText(result, context: context)
+        }
         if debugText && !session.isPaused && !session.isAway {
             let app = FrontmostApplication.current()
             let window = FrontmostApplication.frontWindow(for: app)

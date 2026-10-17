@@ -20,6 +20,7 @@ public struct CollectorConfig: Sendable {
 
     /// 日志文件大小上限，超出即截断重开。
     public var maxLogBytes: Int
+    public var windowTextApplications: [String]
 
     public struct Retention: Sendable {
         /// 数据中心（`segments/`）总字节上限。超出后由旧到新删除整个 segment。
@@ -41,12 +42,14 @@ public struct CollectorConfig: Sendable {
         policy: ObservationPolicy = .conservative,
         maxNodesPerSnapshot: Int = 4000,
         retention: Retention = .init(),
-        maxLogBytes: Int = 8 * 1024 * 1024
+        maxLogBytes: Int = 8 * 1024 * 1024,
+        windowTextApplications: [String] = []
     ) {
         self.policy = policy
         self.maxNodesPerSnapshot = maxNodesPerSnapshot
         self.retention = retention
         self.maxLogBytes = maxLogBytes
+        self.windowTextApplications = windowTextApplications
     }
 
     // MARK: - 持久化
@@ -81,10 +84,16 @@ public struct CollectorConfig: Sendable {
         guard let dict = any as? [String: Any] else {
             throw ConfigError.notAnObject
         }
-        try ConfigValidation.keys(dict, allowed: ["maxNodesPerSnapshot", "maxLogBytes", "retention", "policy"], path: "config")
+        try ConfigValidation.keys(dict, allowed: ["maxNodesPerSnapshot", "maxLogBytes", "retention", "policy", "windowTextApplications"], path: "config")
         var config = CollectorConfig()
         if let n = try ConfigValidation.integer(dict, "maxNodesPerSnapshot", minimum: 1) { config.maxNodesPerSnapshot = n }
         if let n = try ConfigValidation.integer(dict, "maxLogBytes", minimum: 1) { config.maxLogBytes = n }
+        if let raw = dict["windowTextApplications"] {
+            guard let apps = raw as? [String], apps.allSatisfy({ !$0.isEmpty && $0 == $0.trimmingCharacters(in: .whitespacesAndNewlines) }) else {
+                throw ConfigError.invalidField("windowTextApplications", expected: "应用标识字符串数组")
+            }
+            config.windowTextApplications = apps
+        }
         if let r = try ConfigValidation.object(dict, "retention") {
             try ConfigValidation.keys(r, allowed: ["maxTotalBytes", "maxAgeDays", "unsummarizedMaxAgeDays"], path: "retention")
             if let n = try ConfigValidation.integer(r, "maxTotalBytes", minimum: 0) { config.retention.maxTotalBytes = n }
@@ -113,6 +122,7 @@ public struct CollectorConfig: Sendable {
         let obj: [String: Any] = [
             "maxNodesPerSnapshot": maxNodesPerSnapshot,
             "maxLogBytes": maxLogBytes,
+            "windowTextApplications": windowTextApplications,
             "retention": [
                 "maxTotalBytes": retention.maxTotalBytes,
                 "maxAgeDays": retention.maxAgeDays,

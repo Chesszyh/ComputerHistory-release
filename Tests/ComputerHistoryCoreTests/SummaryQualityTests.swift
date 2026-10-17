@@ -60,4 +60,14 @@ final class SummaryQualityTests: XCTestCase {
         XCTAssertTrue(material.contains("indented continuation"))
         XCTAssertFalse(material.contains("1 标准窗口"))
     }
+
+    func testUncertainChatHintIsOmittedButGenuineEditedWordsRemain() {
+        let hint = EventStreamRecord(id: 1, timestamp: Date(), kind: .keyboardTextInput,
+            app: app, keyboard: .init(text: "询问 ChatGPT", textEvidence: .uncertainValueChange))
+        let digest = SegmentDigest.make(events: [hint], segmentID: "fixture")
+        XCTAssertFalse(MemoryGenerator.userPrompt(digest: digest, events: [hint], priorMemory: nil).contains("询问 ChatGPT"))
+        var edited = hint
+        edited.keyboard?.textEvidence = .editedValue
+        XCTAssertTrue(ActivityEvidence.material(events: [edited], segmentID: "fixture").contains("询问 ChatGPT"))
+    }
 }

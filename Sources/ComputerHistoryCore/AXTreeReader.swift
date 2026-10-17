@@ -39,6 +39,17 @@ public enum AXTreeReader {
         return []
     }
 
+    static func hasReadableContent(_ roots: [UIElementRender]) -> Bool {
+        if roots.contains(where: { ($0.detailText ?? "").contains("Value:") }) { return true }
+        var pending = roots.flatMap(\.children)
+        while let node = pending.popLast() {
+            let detail = node.detailText ?? ""
+            if detail.contains("Value:") || detail.contains("Title:") { return true }
+            pending.append(contentsOf: node.children)
+        }
+        return false
+    }
+
     // MARK: - 单个元素转换
 
     static func convert(
@@ -67,9 +78,11 @@ public enum AXTreeReader {
         budget: inout Int,
         depth: Int,
         maxDepth: Int,
-        seenHashes: inout [UInt: Int]
+        seenHashes: inout [UInt: Int],
+        ancestors: [AXUIElement] = []
     ) -> UIElementRender? {
-        guard budget > 0, depth <= maxDepth else { return nil }
+        guard budget > 0, depth <= maxDepth,
+              !ancestors.contains(where: { CFEqual($0, element) }) else { return nil }
         budget -= 1
 
         let role = copyString(element, kAXRoleAttribute as String) ?? ""
@@ -86,7 +99,7 @@ public enum AXTreeReader {
             for kid in kids {
                 if let c = convert(kid, budget: &budget,
                                    depth: depth + 1, maxDepth: maxDepth,
-                                   seenHashes: &seenHashes) {
+                                   seenHashes: &seenHashes, ancestors: ancestors + [element]) {
                     children.append(c)
                 }
             }
@@ -115,9 +128,12 @@ public enum AXTreeReader {
         return role.hasPrefix("AX") ? String(role.dropFirst(2)) : role
     }
 
-    /// 属性串。顺序与实测一致：Description → Help → Value → ID → URL → Placeholder。
+    /// 属性串保留标题、描述、帮助、值与定位信息。
     static func buildDetail(_ element: AXUIElement) -> String? {
         var parts: [String] = []
+        if let v = copyString(element, kAXTitleAttribute as String), !v.isEmpty {
+            parts.append("Title: \(v)")
+        }
         if let v = copyString(element, kAXDescriptionAttribute as String), !v.isEmpty {
             parts.append("Description: \(v)")
         }

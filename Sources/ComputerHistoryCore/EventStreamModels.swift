@@ -151,10 +151,12 @@ public struct EventStreamAXElement: Codable, Sendable, Equatable {
 public struct EventStreamAXTree: Codable, Sendable, Equatable {
     public var mode: Mode
     public var text: String
+    public var source: String?
 
-    public init(mode: Mode, text: String) {
+    public init(mode: Mode, text: String, source: String? = nil) {
         self.mode = mode
         self.text = text
+        self.source = source
     }
 
     /// 反汇编确认只有两个 case（`tst w0, #0x1`）。
