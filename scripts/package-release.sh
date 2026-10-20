@@ -7,7 +7,11 @@ if [[ "$(uname -m)" != "arm64" ]]; then
     exit 1
 fi
 arch="arm64"
-bash scripts/build.sh -c release
+case "${1:-}" in
+    "") bash scripts/build.sh -c release ;;
+    --skip-build) ;;
+    *) echo "Usage: $0 [--skip-build]" >&2; exit 2 ;;
+esac
 bin_dir="$(swift build -c release --show-bin-path)"
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT

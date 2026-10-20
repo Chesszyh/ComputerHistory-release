@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import ComputerHistoryCore
 
-@main struct PanelRegression {
+struct HistoryRegression {
     @MainActor static func main() {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

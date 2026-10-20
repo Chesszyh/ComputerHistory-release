@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import ComputerHistoryCore
 
-@main struct ReportsRegression {
+struct ReportsRegression {
     @MainActor static func main() throws {
         DispatchQueue.global().asyncAfter(deadline: .now() + 90) {
             FileHandle.standardError.write(Data("FAIL: report panel regression exceeded 90 seconds\n".utf8))

@@ -67,9 +67,26 @@ python3 scripts/test-menubar-catalog.py
 
 ## CI 与版本发布
 
-公开仓库的 CI 在 `main` 推送、合并请求和手动触发时运行，使用 Apple Silicon macOS 执行 Debug／Release 单元测试、进程集成、模拟模型和菜单测试。私有样本与大数据基准保持显式启用，不属于常规 CI。
+公开仓库的 CI 在 `main` 推送、合并请求和手动触发时运行。Debug、Release 和原生菜单检查在独立的 Apple Silicon macOS 任务中并行执行；每个配置中的五组集成测试并发运行，日志分别保留为 CI 附件。私有样本与大数据基准保持显式启用，不属于常规 CI。
 
-发布前更新 `VERSION`，等待相应提交的 CI 任务通过。CI 附件包含 `scripts/package-release.sh` 从公开源码构建的 Apple Silicon 压缩包。将版本标签指向该提交，创建 Release 并上传同一次 CI 的压缩包；用户下载和启动说明由 `docs/distribution.md` 维护。
+本机可使用相同的并发集成入口，`--jobs 1` 可用于逐项排障：
+
+```bash
+python3 scripts/test-integration.py .build/release/computer-history --logs .build/integration-release
+python3 scripts/test-build-tools.py
+```
+
+原生菜单测试共用 `scripts/build-menubar-tests.py` 构建的程序，按编译器、源码、核心模块及对象文件内容复用；输入变化时重新编译。各用例在独立进程中顺序运行，避免剪贴板和原生窗口状态互相影响。CI 手动触发的 `native_case` 可只检查一个面板；这种局部检查不能用于发布。
+
+发布前更新 `VERSION` 与双语 CHANGELOG，等待相应提交的完整 CI 通过。Release 任务直接打包已测试的程序，不再重新构建。随后手动运行 **Publish verified release** 工作流，填写该次完整 CI 的 `run_id`；工作流检出受测提交，验证同次 CI 的 Apple Silicon 压缩包，创建注释标签和 GitHub Release。此入口不重新运行构建或测试。普通推送只运行 CI，不创建 Release。用户下载和启动说明由 `docs/distribution.md` 维护。
+
+也可从公开仓库检出的受测提交执行本机检查；加上 `--publish` 才会创建标签和 Release：
+
+```bash
+python3 scripts/publish-release.py --run-id <完整CI编号> --output .build/release-publication
+```
+
+发布入口核对仓库、提交、三个完整 CI 任务、包内文件、架构、系统依赖、最低系统版本、签名和命令行启动；已存在的 Release 不覆盖。私有源码到公开仓库的允许清单导出仍在私有工作区完成，公开工作流不读取私有开发仓库。
 
 报告面板交互使用独立合成材料，检查复制、TXT 导出、备份开关与返回，不访问模型或 GitHub；测试结束恢复剪贴板：
 

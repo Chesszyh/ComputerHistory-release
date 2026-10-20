@@ -1,0 +1,45 @@
+name: Publish verified release
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Successful full CI run containing the release binaries'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Resolve tested commit
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          commit="$(gh run view "$RUN_ID" --json headSha --jq .headSha)"
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$commit" >> "$GITHUB_OUTPUT"
+      - name: Checkout tested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+          persist-credentials: false
+      - name: Verify artifact and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: python3 scripts/publish-release.py --run-id "$RUN_ID" --output .build/release-publication --publish

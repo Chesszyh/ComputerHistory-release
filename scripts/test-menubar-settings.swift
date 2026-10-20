@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import ComputerHistoryCore
 
-@main struct SettingsRegression {
+struct SettingsRegression {
     @MainActor static func main() throws {
         DispatchQueue.global().asyncAfter(deadline: .now() + 90) {
             FileHandle.standardError.write(Data("FAIL: native settings regression exceeded 90 seconds\n".utf8))

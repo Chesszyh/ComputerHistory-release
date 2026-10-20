@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import ComputerHistoryCore
 
-@main struct CatalogRegression {
+struct CatalogRegression {
     @MainActor static func main() throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
