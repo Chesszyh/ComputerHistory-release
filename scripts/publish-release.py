@@ -72,7 +72,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--publish', action='store_true')
     args = parser.parse_args()
-    repo_args = ['--repo', args.repo] if args.repo else []
+    repo_args = [args.repo] if args.repo else []
     repo = gh_json('repo', 'view', *repo_args, '--json', 'nameWithOwner,visibility')
     if repo['visibility'] != 'PUBLIC':
         raise ValueError('Run this entry point against the public repository')

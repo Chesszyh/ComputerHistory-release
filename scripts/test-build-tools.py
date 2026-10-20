@@ -22,6 +22,25 @@ integration = load('test-integration')
 
 
 class BuildToolsTests(unittest.TestCase):
+    def test_explicit_repository_and_existing_release_stop_before_download_or_write(self):
+        commit = 'a' * 40
+        run = {'repository': {'full_name': 'example/public'}, 'head_sha': commit,
+               'path': '.github/workflows/ci.yml', 'conclusion': 'success', 'status': 'completed'}
+        jobs = [{'name': name, 'conclusion': 'success'} for name in release.REQUIRED_JOBS]
+        with patch('sys.argv', ['publish-release.py', '--repo', 'example/public', '--run-id', '123',
+                                '--output', '/unused', '--publish']), \
+                patch.object(release, 'gh_json', side_effect=[
+                    {'nameWithOwner': 'example/public', 'visibility': 'PUBLIC'}, run, {'jobs': jobs}]) as api, \
+                patch.object(release, 'command', return_value=commit), \
+                patch.object(release.subprocess, 'run') as process:
+            process.return_value.returncode = 0
+            with self.assertRaisesRegex(ValueError, 'already has a Release'):
+                release.main()
+            self.assertEqual(api.call_args_list[0].args,
+                             ('repo', 'view', 'example/public', '--json', 'nameWithOwner,visibility'))
+            self.assertEqual(api.call_count, 3)
+            self.assertEqual(process.call_count, 1)
+
     def test_only_full_success_for_same_repository_and_commit_can_publish(self):
         run = {'repository': {'full_name': 'example/public'}, 'head_sha': 'a' * 40,
                'path': '.github/workflows/ci.yml', 'conclusion': 'success', 'status': 'completed'}
