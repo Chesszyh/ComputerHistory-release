@@ -4,6 +4,12 @@ import ComputerHistoryCore
 
 @main struct SettingsRegression {
     @MainActor static func main() throws {
+        DispatchQueue.global().asyncAfter(deadline: .now() + 90) {
+            FileHandle.standardError.write(Data("FAIL: native settings regression exceeded 90 seconds\n".utf8))
+            exit(1)
+        }
+        func stage(_ name: String) { print("SETTINGS: " + name); fflush(stdout) }
+        stage("request disclosure")
         _ = NSApplication.shared
         let host = NSHostingView(rootView: RequestDisclosure(title: "原始输入", text: "Synthetic request payload\nSecond line")
             .padding(14).frame(width: 380))
@@ -30,9 +36,11 @@ import ComputerHistoryCore
         var config = CollectorConfig()
         config.policy.blocklist = [.application("com.apple.Passwords")]
         try config.jsonData().write(to: CollectorConfig.fileURL(rootDirectory: root))
+        stage("load synthetic settings")
         let model = StatusModel(root: root)
         defer { model.shutdown() }
         model.loadConfigurationDrafts()
+        stage("OCR application checkboxes")
         model.collectorDraft.windowTextApplications = ["example.synthetic-ocr"]
         let ocrHost = NSHostingView(rootView: ApplicationListEditor(
             apps: Binding(get: { model.collectorDraft.windowTextApplications }, set: { model.collectorDraft.windowTextApplications = $0 }),
@@ -59,6 +67,7 @@ import ComputerHistoryCore
         precondition(model.collectorDraft.windowTextDisabledApplications.isEmpty, "OCR checkbox must re-enable the application")
         model.saveCollectorConfiguration()
         precondition(try! CollectorConfig.load(rootDirectory: root).windowTextApplications == ["example.synthetic-ocr"])
+        stage("native model form")
         model.openSummarySettings()
         model.settingsTab = .model
         let panel = NSHostingView(rootView: StatusPanel(model: model).environment(\.colorScheme, .dark))
@@ -102,6 +111,7 @@ import ComputerHistoryCore
         edit("model-reasoning", value: "")
         saveByClick()
         precondition(try! ModelSettings.load(root: root)?.reasoningEffort == nil, "Blank effort must remain unspecified")
+        stage("model group persistence")
         let originalID = model.primaryGroupID
         model.addModelGroup()
         let newID = model.editingGroupID
@@ -117,6 +127,7 @@ import ComputerHistoryCore
         model.loadConfigurationDrafts()
         precondition(model.modelGroups.count == 2 && model.primaryGroupID == newID)
         precondition(model.modelGroups[0].settings.model == "edited-in-form", "Changing selection must retain other groups")
+        stage("summary deletion and trash")
         try ActivityNarrative(items: [.init(id: "synthetic-delete", timestamp: Date(), title: "Synthetic summary",
             summary: "Synthetic duplicate", apps: [], sourceMemories: [])]).save(root: root)
         model.refreshAll()
@@ -161,6 +172,7 @@ import ComputerHistoryCore
         precondition(try! TimelineDeletions.load(root: root).records.isEmpty, "Purged entries must leave the trash")
         window.contentView = panel
         window.setContentSize(NSSize(width: 380, height: 640))
+        stage("collector form")
         model.settingsTab = .collector
         settle()
         edit("collector-days", value: "6")
@@ -177,6 +189,7 @@ import ComputerHistoryCore
         model.saveCollectorConfiguration()
         precondition(try! String(contentsOf: CollectorConfig.fileURL(rootDirectory: root), encoding: .utf8) == "invalid JSON",
             "A failed load must not silently replace a user's configuration")
+        stage("backup settings")
         model.settingsTab = .backup
         settle()
         model.backupRepository = "example/synthetic-private"

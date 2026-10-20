@@ -40,6 +40,7 @@ jobs:
       - name: Usage navigation and summary settings
         run: bash scripts/test-menubar-panel.sh scripts/test-menubar-usage.swift
       - name: Model groups, collector settings, and summary trash
+        timeout-minutes: 3
         run: bash scripts/test-menubar-panel.sh scripts/test-menubar-settings.swift
       - name: Model catalog and reasoning metadata
         run: python3 scripts/test-menubar-catalog.py
