@@ -24,6 +24,8 @@ public final class CollectionSession {
         /// 落盘保留策略。
         public var retention: CollectorConfig.Retention
         public var windowTextApplications: [String]
+        public var windowTextDisabledApplications: [String]
+        public var activityWatchEnabled: Bool
 
         public init(
             rootDirectory: URL,
@@ -31,7 +33,9 @@ public final class CollectionSession {
             tracksSuppression: Bool = true,
             policy: ObservationPolicy = .init(),
             retention: CollectorConfig.Retention = .init(),
-            windowTextApplications: [String] = []
+            windowTextApplications: [String] = [],
+            windowTextDisabledApplications: [String] = [],
+            activityWatchEnabled: Bool = false
         ) {
             self.rootDirectory = rootDirectory
             self.maxNodesPerSnapshot = maxNodesPerSnapshot
@@ -39,6 +43,8 @@ public final class CollectionSession {
             self.policy = policy
             self.retention = retention
             self.windowTextApplications = windowTextApplications
+            self.windowTextDisabledApplications = windowTextDisabledApplications
+            self.activityWatchEnabled = activityWatchEnabled
         }
 
         /// 由配置文件构造。
@@ -49,10 +55,15 @@ public final class CollectionSession {
                       tracksSuppression: tracksSuppression,
                       policy: config.policy,
                       retention: config.retention,
-                      windowTextApplications: config.windowTextApplications)
+                      windowTextApplications: config.windowTextApplications,
+                      windowTextDisabledApplications: config.windowTextDisabledApplications,
+                      activityWatchEnabled: config.activityWatchEnabled)
         }
     }
 
+    private var activityWatchSince = Date()
+    private var activityWatchCursor: Date?
+    private var accessibilityActivation = AccessibilityActivation()
     private var config: Configuration
     private var writer: SegmentWriter?
     private var nextID = 1
@@ -74,6 +85,8 @@ public final class CollectionSession {
     public var isAway: Bool { away.startedAt != nil }
 
     public func applyConfiguration(_ updated: CollectorConfig) {
+        activityWatchSince = Date()
+        activityWatchCursor = nil
         // 策略变化后丢弃旧缓冲，避免把新名单排除的文本写入历史。
         windowTextEpoch += 1
         windowTextContext = nil
@@ -97,6 +110,8 @@ public final class CollectionSession {
     public var isPaused = false {
         didSet {
             guard isPaused != oldValue else { return }
+            activityWatchSince = Date()
+            activityWatchCursor = nil
             // 恢复时必须重新建立基线，避免把暂停期间的编辑补记为输入。
             windowTextEpoch += 1
             windowTextContext = nil
@@ -197,6 +212,7 @@ public final class CollectionSession {
 
         var roots: [UIElementRender] = []
         if let pid = app.processIdentifier {
+            accessibilityActivation.prepare(pid: pid, now: now)
             roots = AXTreeReader.read(pid: pid, maxNodes: config.maxNodesPerSnapshot)
         }
 
@@ -207,9 +223,30 @@ public final class CollectionSession {
     func updateWindowTextContext(roots: [UIElementRender], app: EventStreamApp, window: EventStreamWindow?) {
         guard isRunning, !isPaused, !isAway,
               config.windowTextApplications.contains(app.bundleIdentifier ?? ""),
+              !config.windowTextDisabledApplications.contains(app.bundleIdentifier ?? ""),
               !config.policy.shouldSuppress(app: app, window: window),
               !AXTreeReader.hasReadableContent(roots) else { windowTextContext = nil; return }
         windowTextContext = WindowTextContext(app: app, window: window, epoch: windowTextEpoch)
+    }
+
+    public func recordActivityWatch(_ snapshot: ActivityWatchSnapshot, now: Date = Date()) {
+        guard let current = FrontmostApplication.current() else { return }
+        recordActivityWatch(snapshot, current: current, now: now)
+    }
+
+    func recordActivityWatch(_ snapshot: ActivityWatchSnapshot, current: EventStreamApp, now: Date) {
+        guard config.activityWatchEnabled, isRunning, !isPaused, !isAway,
+              snapshot.application == current.name || snapshot.application == current.bundleIdentifier else { return }
+        let window = EventStreamWindow(title: snapshot.title, url: snapshot.url)
+        guard !config.policy.shouldSuppress(app: current, window: window) else { return }
+        var evidence = snapshot.evidence
+        evidence.startedAt = max(evidence.startedAt, activityWatchSince, activityWatchCursor ?? activityWatchSince)
+        evidence.endedAt = min(evidence.endedAt, now)
+        guard evidence.endedAt > evidence.startedAt else { return }
+        if append(kind: .windowChanged, at: now, app: current, window: window,
+                  mouse: nil, keyboard: nil, selection: nil, ax: nil, activityWatch: evidence) {
+            activityWatchCursor = evidence.endedAt
+        }
     }
 
     public func recordWindowText(_ result: WindowTextReader.Result, context: WindowTextContext, now: Date = Date()) {
@@ -462,6 +499,7 @@ public final class CollectionSession {
         return EventStreamAXTree(mode: .fullTree, text: currentText)
     }
 
+    @discardableResult
     private func append(
         kind: EventStreamEventKind,
         at date: Date,
@@ -470,30 +508,33 @@ public final class CollectionSession {
         mouse: EventStreamMouseInteraction?,
         keyboard: EventStreamKeyboardInteraction?,
         selection: EventStreamSelection?,
-        ax: EventStreamAXTree?
-    ) {
+        ax: EventStreamAXTree?,
+        activityWatch: ActivityWatchEvidence? = nil
+    ) -> Bool {
         // 暂停期间一律不写入。输入事件由事件监听回调触发，不经过采样入口，
         // 因此这里也要挡一次。
-        guard !isPaused, !isAway else { return }
+        guard !isPaused, !isAway else { return false }
 
         // 抑制判定：命中则只计数，不落主文件。
         if config.policy.shouldSuppress(app: app, window: window) {
             if config.tracksSuppression { writer?.noteSuppressed() }
-            return
+            return false
         }
         do {
             try rotateIfNeeded(now: date, force: false)
-            guard let writer else { return }
+            guard let writer else { return false }
             let record = EventStreamRecord(
                 id: nextID, timestamp: date, kind: kind,
                 app: app, window: window, mouse: mouse,
-                keyboard: keyboard, selection: selection, ax: ax)
+                keyboard: keyboard, selection: selection, ax: ax, activityWatch: activityWatch)
             try writer.append(record)
             nextID += 1
             totalEventsWritten += 1
+            return true
         } catch {
             FileHandle.standardError.write(
                 "写入事件失败：\(error)\n".data(using: .utf8)!)
+            return false
         }
     }
 

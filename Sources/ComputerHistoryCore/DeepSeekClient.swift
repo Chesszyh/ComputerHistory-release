@@ -1,9 +1,6 @@
 import Foundation
 
-/// DeepSeek 对话补全客户端，用于把段摘要写成记忆。
-///
-/// 只做一件事：发一次非流式请求、取回文本。不重试、不并发——记忆生成是
-/// 后台低频任务，出错时交由调用方决定是否跳过该段。
+/// OpenAI 兼容的非流式对话客户端；主请求失败后，仅为本次请求尝试降级模型。
 public struct DeepSeekClient: Sendable {
 
     public struct Usage: Codable, Sendable, Equatable {
@@ -32,6 +29,7 @@ public struct DeepSeekClient: Sendable {
         case http(status: Int, body: String)
         case malformedResponse(String)
         case transport(String)
+        case budgetExceeded(String)
 
         public var description: String {
             switch self {
@@ -41,6 +39,7 @@ public struct DeepSeekClient: Sendable {
                 return "接口返回 HTTP \(status)：\(body.prefix(300))"
             case .malformedResponse(let detail):
                 return "响应格式不符：\(detail)"
+            case .budgetExceeded(let detail): return detail
             case .transport(let detail):
                 return "请求失败：\(detail)"
             }
@@ -55,17 +54,18 @@ public struct DeepSeekClient: Sendable {
     private let model: String
     private let timeout: TimeInterval
     private let settings: ModelSettings?
+    private let fallbackAPIKey: String
 
     public init(apiKey: String,
                 baseURL: URL = DeepSeekClient.defaultBaseURL,
                 model: String = DeepSeekClient.defaultModel,
                 timeout: TimeInterval = 120,
-                settings: ModelSettings? = nil) {
+                settings: ModelSettings? = nil, fallbackAPIKey: String = "") {
         self.apiKey = apiKey
         self.baseURL = baseURL
         self.model = model
         self.timeout = timeout
-        self.settings = settings
+        self.settings = settings; self.fallbackAPIKey = fallbackAPIKey
     }
 
     /// 从环境变量构造。密钥缺失时抛错，避免静默降级成"生成成功但内容为空"。
@@ -75,10 +75,11 @@ public struct DeepSeekClient: Sendable {
     ) throws -> DeepSeekClient {
         if let rootDirectory, let config = try ModelSettings.load(root: rootDirectory) {
             let key = config.requiresAPIKey
-                ? (try ModelAPIKey.load(root: rootDirectory) ?? environment["DEEPSEEK_API_KEY"] ?? "") : ""
-            if config.requiresAPIKey, key.isEmpty { throw ClientError.missingAPIKey }
+                ? (try ModelAPIKey.load(root: rootDirectory, groupID: config.credentialGroupID) ?? environment["DEEPSEEK_API_KEY"] ?? "") : ""
+            if config.requiresAPIKey, key.isEmpty, config.fallback == nil { throw ClientError.missingAPIKey }
             return DeepSeekClient(apiKey: config.requiresAPIKey ? key : "", baseURL: config.baseURL,
-                                  model: config.model, timeout: 180, settings: config)
+                                  model: config.model, timeout: config.timeoutSeconds ?? 60, settings: config,
+                                  fallbackAPIKey: environment["COMPUTER_HISTORY_FALLBACK_API_KEY"] ?? "")
         }
         guard let key = environment["DEEPSEEK_API_KEY"], !key.isEmpty else {
             throw ClientError.missingAPIKey
@@ -106,15 +107,60 @@ public struct DeepSeekClient: Sendable {
         }
     }
 
-    /// 发一次补全请求。
-    ///
-    /// 总结默认关闭思考；服务端用量与实际请求正文一起保存。
-    public func complete(system: String, user: String,
+    /// 执行一次逻辑总结请求；每次实际模型尝试分别记录输入、输出和用量。
+    public func complete(system: String, user: String, maxTokens: Int = 8000,
+                         temperature: Double = 0.3, reasoningEffort: String = "",
+                         recordingAt root: URL? = nil, task: String = "summary", sources: [String] = []) throws -> Completion {
+        let id = UUID().uuidString
+        do {
+            let response = try completeAttempt(id: id, system: system, user: user, maxTokens: maxTokens,
+                temperature: temperature, reasoningEffort: reasoningEffort, recordingAt: root, task: task, sources: sources)
+            guard !response.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, response.finishReason != "length" else {
+                throw ClientError.malformedResponse("主模型返回空内容或输出截断")
+            }
+            if let root { try ModelHealth.record(root: root, error: nil, usedFallback: false) }
+            return response
+        } catch ClientError.budgetExceeded(let message) {
+            throw ClientError.budgetExceeded(message)
+        } catch {
+            guard error is ClientError else { throw error }
+            let primaryError = String(describing: error)
+            guard let secondary = settings?.fallback else {
+                if let root { try ModelHealth.record(root: root, error: primaryError, usedFallback: false) }
+                throw error
+            }
+            let config = ModelSettings(baseURL: secondary.baseURL, model: secondary.model,
+                requiresAPIKey: secondary.requiresAPIKey != false, reasoningEffort: secondary.reasoningEffort,
+                pricing: secondary.pricing, requestStyle: secondary.requestStyle, timeoutSeconds: secondary.timeoutSeconds)
+            do {
+                let key: String
+                if secondary.requiresAPIKey == false { key = "" }
+                else if let root { key = try ModelAPIKey.load(root: root, fallback: true, groupID: secondary.credentialGroupID) ?? fallbackAPIKey }
+                else { key = fallbackAPIKey }
+                let fallback = DeepSeekClient(apiKey: key, baseURL: secondary.baseURL, model: secondary.model,
+                    timeout: secondary.timeoutSeconds ?? 45, settings: config)
+                let response = try fallback.completeAttempt(id: UUID().uuidString, fallbackOf: id,
+                    system: system, user: user, maxTokens: maxTokens, temperature: temperature,
+                    recordingAt: root, task: task, sources: sources)
+                guard !response.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, response.finishReason != "length" else {
+                    throw ClientError.malformedResponse("降级模型返回空内容或输出截断")
+                }
+                if let root { try ModelHealth.record(root: root, error: nil, usedFallback: true) }
+                return response
+            } catch {
+                let message = "主模型：\(primaryError)；降级模型：\(error)"
+                if let root { try ModelHealth.record(root: root, error: message, usedFallback: true) }
+                throw ClientError.transport(message)
+            }
+        }
+    }
+
+    private func completeAttempt(id: String, fallbackOf: String? = nil, system: String, user: String,
                          maxTokens: Int = 8000,
                          temperature: Double = 0.3,
-                         reasoningEffort: String = "none",
+                         reasoningEffort: String = "",
                          recordingAt root: URL? = nil, task: String = "summary",
-                         sources: [String] = [], comparisonOf: String? = nil) throws -> Completion {
+                         sources: [String] = []) throws -> Completion {
         let started = Date()
         let startedUptime = ProcessInfo.processInfo.systemUptime
         let pricing = settings?.pricing
@@ -128,61 +174,50 @@ public struct DeepSeekClient: Sendable {
             let today = previous.filter { cal.isDate($0.startedAt, inSameDayAs: started) }.compactMap(\.estimatedCost).reduce(0, +)
             let month = previous.filter { cal.isDate($0.startedAt, equalTo: started, toGranularity: .month) }.compactMap(\.estimatedCost).reduce(0, +)
             if let cap = settings.dailyBudget, today >= cap {
-                throw ClientError.transport("已达到今日总结预算（\(pricing.currency) \(cap)）")
+                throw ClientError.budgetExceeded("已达到今日总结预算（\(pricing.currency) \(cap)）")
             }
             if let cap = settings.monthlyBudget, month >= cap {
-                throw ClientError.transport("已达到本月总结预算（\(pricing.currency) \(cap)）")
+                throw ClientError.budgetExceeded("已达到本月总结预算（\(pricing.currency) \(cap)）")
             }
         }
         var request = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))
         request.httpMethod = "POST"
         request.timeoutInterval = timeout
-        if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
+        if !apiKey.isEmpty && settings?.requiresAPIKey != false { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let payload: [String: Any] = [
+        let effort = settings?.reasoningEffort ?? reasoningEffort
+        var payload: [String: Any] = [
             "model": model,
-            "messages": [
-                ["role": "system", "content": system],
-                ["role": "user", "content": user],
-            ],
-            "max_tokens": maxTokens,
-            "temperature": temperature,
-            "reasoning_effort": settings?.reasoningEffort ?? reasoningEffort,
+            "messages": [["role": "system", "content": system], ["role": "user", "content": user]],
             "stream": false,
         ]
+        if !effort.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { payload["reasoning_effort"] = effort.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if settings?.requestStyle == .reasoning {
+            payload["max_completion_tokens"] = max(12000, maxTokens + 8000)
+        } else {
+            payload["max_tokens"] = maxTokens
+            payload["temperature"] = temperature
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
-        var record = ModelRequest(id: UUID().uuidString, startedAt: started,
+        var record = ModelRequest(id: id, startedAt: started,
             model: model, endpoint: baseURL.absoluteString, task: task, sources: sources,
-            status: "running", system: system, input: user, pricing: pricing, comparisonOf: comparisonOf)
+            status: "running", system: system, input: user, pricing: pricing, fallbackOf: fallbackOf)
         record.worker = CollectorProcessIdentity.read(pid: getpid())
         // 请求前落盘失败就不外发，避免产生无法查询的付费请求。
         if let root { try record.save(root: root) }
 
-        if let root, let secondary = settings?.comparison {
-            let parentID = record.id
-            let config = ModelSettings(baseURL: secondary.baseURL, model: secondary.model,
-                requiresAPIKey: false, reasoningEffort: secondary.reasoningEffort, pricing: secondary.pricing)
-            let client = DeepSeekClient(apiKey: "", baseURL: secondary.baseURL,
-                model: secondary.model, timeout: 180, settings: config)
-            ModelComparison.pending.enter()
-            ModelComparison.queue.async {
-                defer { ModelComparison.pending.leave() }
-                do {
-                    _ = try client.complete(system: system, user: user, maxTokens: maxTokens,
-                        temperature: temperature, recordingAt: root, task: task,
-                        sources: sources, comparisonOf: parentID)
-                } catch {
-                    FileHandle.standardError.write("对照模型请求失败：\(error)\n".data(using: .utf8)!)
-                }
-            }
+        if settings?.requiresAPIKey == true && apiKey.isEmpty {
+            record.status = "failed"; record.error = String(describing: ClientError.missingAPIKey); record.finishedAt = Date()
+            if let root { try record.save(root: root) }
+            throw ClientError.missingAPIKey
         }
 
         let semaphore = DispatchSemaphore(value: 0)
         let result = ResponseState()
 
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        let networkTask = URLSession.shared.dataTask(with: request) { data, response, error in
             defer { semaphore.signal() }
             if let error {
                 result.store(.failure(ClientError.transport(error.localizedDescription)))
@@ -199,12 +234,17 @@ public struct DeepSeekClient: Sendable {
                 return
             }
             result.store(Self.parse(data))
-        }.resume()
-        semaphore.wait()
+        }
+        networkTask.resume()
+        let completionResult: Result<Completion, Error>
+        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
+            networkTask.cancel()
+            completionResult = .failure(ClientError.transport("模型请求超过 \(Int(timeout)) 秒总耗时上限"))
+        } else { completionResult = result.load() }
 
         record.finishedAt = Date()
         record.durationSeconds = ProcessInfo.processInfo.systemUptime - startedUptime
-        switch result.load() {
+        switch completionResult {
         case .success(let completion):
             record.output = completion.text
             record.usage = completion.usage

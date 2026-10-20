@@ -31,6 +31,7 @@ public struct UIElementRender: Equatable, Sendable {
     /// 行尾附加信息（属性串）。为空则不追加。
     public var detailText: String?
     public var children: [UIElementRender]
+    public var accessibilityRole: String?
 
     public init(
         id: Int,
@@ -38,7 +39,8 @@ public struct UIElementRender: Equatable, Sendable {
         elementID: Int? = nil,
         text: String,
         detailText: String? = nil,
-        children: [UIElementRender] = []
+        children: [UIElementRender] = [],
+        accessibilityRole: String? = nil
     ) {
         self.id = id
         self.identityPath = identityPath
@@ -46,6 +48,7 @@ public struct UIElementRender: Equatable, Sendable {
         self.text = text
         self.detailText = detailText
         self.children = children
+        self.accessibilityRole = accessibilityRole
     }
 }
 

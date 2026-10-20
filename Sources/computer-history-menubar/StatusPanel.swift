@@ -8,7 +8,11 @@ struct StatusPanel: View {
 
     var body: some View {
         Group {
-            if model.showsSummarySettings {
+            if model.showsTrash {
+                TrashPane(model: model)
+            } else if model.showsReports {
+                ReportsPane(model: model)
+            } else if model.showsSummarySettings {
                 SummarySettingsPane(model: model)
             } else if model.showsUsage {
                 ModelUsagePane(model: model)
@@ -40,38 +44,22 @@ struct StatusPanel: View {
                 VStack(alignment: .leading, spacing: 14) {
                     RuntimeSection(model: model)
                     SettingsSection(model: model)
-                    Button { model.showsUsage = true } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "chart.xyaxis.line")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(Color.accentColor)
-                                .frame(width: 14)
-                            Text("总结用量与费用")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.primary)
-                            Spacer()
-                            HStack(spacing: 4) {
-                                Text("\(model.modelRequests.count) 次请求")
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Color.primary.opacity(0.03))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
-                                )
-                        )
-                        .contentShape(Rectangle())
+                    VStack(spacing: 1) {
+                        PanelNavigationRow(title: "总结用量与费用", icon: "chart.xyaxis.line", detail: "\(model.modelRequests.count) 次请求") { model.showsUsage = true }
+                        PanelNavigationRow(title: "日报、周报与导出", icon: "doc.text") { model.openReports() }
+                            .accessibilityIdentifier("open-reports")
                     }
-                    .buttonStyle(.plain)
+                    .background(Color.primary.opacity(0.035))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    if let error = model.modelFailure {
+                        Button { model.showsUsage = true } label: {
+                            Label("总结请求失败：" + error, systemImage: "exclamationmark.circle")
+                                .font(.system(size: 10)).foregroundStyle(.orange).lineLimit(2)
+                        }.buttonStyle(.plain)
+                    }
+                    if let error = model.timelineError {
+                        Text(error).font(.system(size: 10)).foregroundStyle(.red)
+                    }
                     TimelineSection(model: model)
                 }
                 .padding(.horizontal, 14)
@@ -132,6 +120,9 @@ struct StatusPanel: View {
                 model.copyRecentSummary()
             }
             Spacer()
+            Button { model.showsTrash = true } label: {
+                Label("回收站", systemImage: "trash").font(.system(size: 10))
+            }.buttonStyle(.plain).foregroundStyle(.secondary).accessibilityIdentifier("open-trash")
 
             ToolbarIconButton(icon: "power", tooltip: "退出计算机历史") {
                 NSApplication.shared.terminate(nil)
@@ -594,6 +585,11 @@ struct TimelineRow: View {
             .animation(.easeOut(duration: 0.12), value: model.copiedItemID)
             .contentShape(Rectangle())
             .onHover { isHovered = $0 }
+            .contextMenu {
+                if !item.isAway {
+                    Button("删除总结", role: .destructive) { model.deleteTimelineItem(item) }
+                }
+            }
 
             if model.isExpanded(item.id) {
                 SummaryDetails(item: item, model: model)
@@ -622,6 +618,8 @@ struct SummaryDetails: View {
                 .fill(Color.primary.opacity(0.06))
                 .frame(height: 1)
 
+            Button("删除总结", role: .destructive) { model.deleteTimelineItem(item) }
+                .font(.system(size: 10)).help("从时间线删除；保留原始记录和来源记忆")
             DetailLine("层级", item.isNarrative ? "叙述层（模型归纳）" : "记忆层（原始记录）")
             DetailLine("时刻", fullTime)
             DetailLine("覆盖", item.coveredCount > 1
@@ -1145,7 +1143,7 @@ struct SettingsSection: View {
                     Divider().opacity(0.4)
                     ToggleRow(
                         title: "模型总结",
-                        subtitle: "关闭后只采集，不生成记忆与叙述",
+                        subtitle: "关闭后暂停自动总结",
                         isOn: Binding(
                             get: { model.control.summarizing },
                             set: { model.setSummarizing($0) }))
@@ -1159,28 +1157,12 @@ struct SettingsSection: View {
                             get: { model.loginItemEnabled },
                             set: { model.setLoginItem($0) }))
                     Divider().opacity(0.4)
-                    Button { model.openSummarySettings() } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "slider.horizontal.3")
-                                .font(.system(size: 10, weight: .medium))
-                            Text("总结提示词与配置…")
-                                .font(.system(size: 11, weight: .medium))
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .foregroundStyle(Color.accentColor)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 7)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(Color.accentColor.opacity(0.08))
-                        )
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.top, 4)
+                    ToggleRow(title: "GitHub 私有备份", subtitle: "每天备份整理后的活动和报告", isOn: Binding(
+                        get: { model.effectiveBackupEnabled }, set: { model.setBackupEnabled($0) }))
+                        .accessibilityIdentifier("backup-quick-toggle")
+                    Divider().opacity(0.4)
+                    PanelNavigationRow(title: "总结提示词与配置", icon: "slider.horizontal.3") { model.openSummarySettings() }
+
                 }
                 .padding(.top, 4)
             }
@@ -1298,6 +1280,8 @@ struct ModelUsagePane: View {
                                 Text("十分钟记忆").tag("10min")
                                 Text("六小时汇总").tag("6h")
                                 Text("活动整理").tag("narrative")
+                                Text("日报").tag("daily")
+                                Text("周报").tag("weekly")
                             }
                             Picker("来源", selection: $model.usageFilter.source) {
                                 ForEach(ModelRequestFilter.Source.allCases, id: \.self) { Text($0.rawValue).tag($0) }
@@ -1419,9 +1403,15 @@ struct ModelUsagePane: View {
             }
             if let error = request.error { textBlock("错误", error) }
             textBlock("模型输出", request.output ?? "尚无输出")
+            if let parent = request.fallbackOf, let primary = model.modelRequests.first(where: { $0.id == parent }) {
+                Button("查看失败的主模型请求") { model.openRequest(primary) }.buttonStyle(.plain).foregroundStyle(Color.accentColor)
+            }
+            ForEach(model.modelRequests.filter { $0.fallbackOf == request.id }) { fallback in
+                Button("查看降级结果 · " + fallback.model) { model.openRequest(fallback) }.buttonStyle(.plain).foregroundStyle(Color.accentColor)
+            }
             if let parent = request.comparisonOf {
                 if let primary = model.modelRequests.first(where: { $0.id == parent }) {
-                    Button("查看正式结果") { model.openRequest(primary) }
+                    Button("查看主模型请求") { model.openRequest(primary) }
                         .buttonStyle(.plain).foregroundStyle(Color.accentColor)
                 }
             } else {
@@ -1519,7 +1509,7 @@ struct ModelRequestGroup: View {
                         Button { model.openRequest(request) } label: {
                             VStack(alignment: .leading, spacing: 5) {
                                 HStack(spacing: 6) {
-                                    Text(request.comparisonOf == nil ? "正式" : "对照")
+                                    Text(request.fallbackOf != nil ? "降级" : (request.comparisonOf == nil ? "主模型" : "历史对照"))
                                         .font(.system(size: 9, weight: .semibold))
                                         .padding(.horizontal, 5)
                                         .padding(.vertical, 1.5)
@@ -1598,6 +1588,8 @@ struct ModelRequestGroup: View {
         case "10min": return "十分钟记忆"
         case "6h": return "六小时汇总"
         case "narrative": return "活动整理"
+        case "daily": return "日报"
+        case "weekly": return "周报"
         default: return records.first?.task ?? "请求"
         }
     }
@@ -1642,5 +1634,106 @@ struct RequestDisclosure: View {
             .padding(.top, 6)
             }
         }
+    }
+}
+
+struct PanelNavigationRow: View {
+    let title: String
+    let icon: String
+    var detail: String = ""
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon).font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.accentColor).frame(width: 16)
+                Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(.primary)
+                Spacer(minLength: 4)
+                if !detail.isEmpty { Text(detail).font(.system(size: 10)).foregroundStyle(.secondary).monospacedDigit() }
+                Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 10).frame(minHeight: 34).contentShape(Rectangle())
+        }.buttonStyle(.plain)
+    }
+}
+
+struct PanelBackButton: View {
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Label("返回", systemImage: "chevron.left").font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.accentColor).padding(.horizontal, 8).padding(.vertical, 4)
+                .background(Color.accentColor.opacity(0.12)).clipShape(RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain)
+    }
+}
+
+
+struct TrashPane: View {
+    @ObservedObject var model: StatusModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Button { model.showsTrash = false } label: { Label("返回", systemImage: "chevron.left") }
+                    .buttonStyle(.plain).foregroundStyle(Color.accentColor)
+                Spacer()
+                Text("回收站").font(.system(size: 14, weight: .semibold))
+                Spacer()
+                Text("\(model.deletedSummaries.count) 条").font(.system(size: 10)).foregroundStyle(.secondary)
+            }.padding(14)
+            Divider()
+            if let error = model.timelineError {
+                Text(error).font(.system(size: 10)).foregroundStyle(.red).padding(.horizontal, 14)
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if model.deletedSummaries.isEmpty {
+                        Text("回收站为空").font(.system(size: 12)).foregroundStyle(.secondary).padding(.top, 30)
+                    }
+                    ForEach(model.deletedSummaries) { record in
+                        TrashRecordCard(record: record, model: model)
+                    }
+                }.padding(.horizontal, 14).padding(.bottom, 14)
+            }
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+struct TrashRecordCard: View {
+    let record: TimelineDeletions.Record
+    @ObservedObject var model: StatusModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(record.item.title).font(.system(size: 12, weight: .semibold)).textSelection(.enabled)
+            if record.item.timestamp != .distantPast {
+                DetailLine("时段", date(record.item.timestamp) + " — " + date(record.item.endTimestamp))
+            }
+            DetailLine("删除于", record.deletedAt.map(date) ?? "未记录")
+            DetailLine("类型", record.item.isNarrative ? "活动整理" : "来源记忆")
+            if !record.item.summary.isEmpty {
+                Text(record.item.summary).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            }
+            if !record.item.apps.isEmpty { DetailLine("应用", record.item.apps.joined(separator: "、")) }
+            if !record.item.memoryFiles.isEmpty {
+                DetailLine("来源", record.item.memoryFiles.map(\.lastPathComponent).joined(separator: "\n"))
+            }
+            HStack {
+                Button("恢复") { model.restoreSummary(record) }
+                    .disabled(record.item.timestamp == .distantPast)
+                    .accessibilityIdentifier("trash-restore")
+                Spacer()
+                Button("彻底删除", role: .destructive) { model.purgeSummary(record) }.accessibilityIdentifier("trash-purge")
+            }.font(.system(size: 11))
+        }
+        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.04)).clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func date(_ value: Date) -> String {
+        value.formatted(.dateTime.month().day().hour().minute())
     }
 }

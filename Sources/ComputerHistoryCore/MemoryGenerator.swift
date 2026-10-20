@@ -190,18 +190,25 @@ public struct MemoryGenerator: Sendable {
     ///   - since: 只处理首条事件不早于该时刻的段。用于在链条出问题后
     ///     从断点起重写——链条是顺序的，断点之后的都必须重建。
     public func generateMissing(limit: Int? = nil, overwrite: Bool = false,
-                                since: Date? = nil) -> [Outcome] {
+                                since: Date? = nil, recentFirst: Bool = false) -> [Outcome] {
         var outcomes: [Outcome] = []
         // 前驱只从已经遍历的段选择，避免重写或补洞时引用自身和未来记录。
         let ordered = orderedSegments()
         var previous: String?
+        let selected: Set<String>?
+        if recentFirst, let limit {
+            selected = Set(ordered.filter { order in
+                (since == nil || order.firstEventAt >= since!) &&
+                (overwrite || !Self.hasUsableMemory(at: memoriesDirectory.appendingPathComponent(MemoryWriter.fileName(segmentID: order.segmentID))))
+            }.suffix(limit).map(\.segmentID))
+        } else { selected = nil }
 
         for order in ordered {
             if let limit, outcomes.count >= limit { break }
             let segmentID = order.segmentID
             let target = memoriesDirectory
                 .appendingPathComponent(MemoryWriter.fileName(segmentID: segmentID))
-            if let since, order.firstEventAt < since {
+            if selected.map({ !$0.contains(segmentID) }) == true || (since != nil && order.firstEventAt < since!) {
                 if FileManager.default.fileExists(atPath: target.path) { previous = target.path }
                 continue
             }

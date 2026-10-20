@@ -39,18 +39,30 @@ jobs:
         run: bash scripts/test-menubar-panel.sh
       - name: Usage navigation and summary settings
         run: bash scripts/test-menubar-panel.sh scripts/test-menubar-usage.swift
+      - name: Model groups, collector settings, and summary trash
+        run: bash scripts/test-menubar-panel.sh scripts/test-menubar-settings.swift
+      - name: Model catalog and reasoning metadata
+        run: python3 scripts/test-menubar-catalog.py
+      - name: Report controls and export
+        run: bash scripts/test-menubar-panel.sh scripts/test-menubar-reports.swift
       - name: Debug tests
         run: swift test
       - name: Debug integration tests
         run: |
           python3 scripts/test-process-control.py .build/debug/computer-history
           python3 scripts/test-text-summary.py .build/debug/computer-history
+          python3 scripts/test-reports.py .build/debug/computer-history
+          python3 scripts/test-model-fallback.py .build/debug/computer-history
+          python3 scripts/test-scheduling.py .build/debug/computer-history
       - name: Release tests
         run: swift test -c release
       - name: Release integration tests
         run: |
           python3 scripts/test-process-control.py .build/release/computer-history
           python3 scripts/test-text-summary.py .build/release/computer-history
+          python3 scripts/test-reports.py .build/release/computer-history
+          python3 scripts/test-model-fallback.py .build/release/computer-history
+          python3 scripts/test-scheduling.py .build/release/computer-history
       - name: Package binaries
         run: bash scripts/package-release.sh
       - name: Upload binaries

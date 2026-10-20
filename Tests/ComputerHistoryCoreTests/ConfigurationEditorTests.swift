@@ -9,12 +9,12 @@ final class ConfigurationEditorTests: XCTestCase {
         return root
     }
 
-    func testModelFormRoundTripsComparisonPricingAndBudgets() throws {
+    func testModelFormRoundTripsFallbackPricingAndBudgets() throws {
         let root = try temporaryRoot()
         let settings = ModelSettings(baseURL: URL(string: "http://127.0.0.1:1234/v1")!, model: "synthetic-model",
             requiresAPIKey: false, reasoningEffort: "custom", pricing: .init(currency: "USD", inputPerMillion: 1.5,
                 cachedInputPerMillion: 0.2, outputPerMillion: 3), dailyBudget: 5, monthlyBudget: 30,
-            comparison: .init(baseURL: URL(string: "http://127.0.0.1:1235/v1")!, model: "synthetic-comparison",
+            fallback: .init(baseURL: URL(string: "http://127.0.0.1:1235/v1")!, model: "synthetic-fallback",
                 reasoningEffort: "none", pricing: .init(inputPerMillion: 0, cachedInputPerMillion: 0, outputPerMillion: 0)))
         try settings.save(root: root)
         var draft = ModelSettingsDraft(try ModelSettings.load(root: root), environment: [:])
@@ -28,15 +28,25 @@ final class ConfigurationEditorTests: XCTestCase {
         XCTAssertEqual(saved.pricing, settings.pricing)
         XCTAssertEqual(saved.dailyBudget, 5)
         XCTAssertEqual(saved.monthlyBudget, 30)
-        XCTAssertEqual(saved.comparison?.model, "synthetic-comparison")
-        XCTAssertEqual(saved.comparison?.pricing, settings.comparison?.pricing)
-        draft.hasComparison = false
+        XCTAssertEqual(saved.fallback?.model, "synthetic-fallback")
+        XCTAssertEqual(saved.fallback?.pricing, settings.fallback?.pricing)
+        draft.hasFallback = false
         draft.hasPricing = false
         draft.dailyBudget = ""
         draft.monthlyBudget = ""
         try draft.value().save(root: root)
-        XCTAssertNil(try ModelSettings.load(root: root)?.comparison)
+        XCTAssertNil(try ModelSettings.load(root: root)?.fallback)
         XCTAssertNil(try ModelSettings.load(root: root)?.pricing)
+    }
+
+    func testOldComparisonSettingsDoNotEnableFallback() throws {
+        let root = try temporaryRoot()
+        let text = #"{"baseURL":"http://127.0.0.1:1234/v1","model":"synthetic","requiresAPIKey":false,"reasoningEffort":"none","comparison":{"model":"old-shadow"}}"#
+        try Data(text.utf8).write(to: root.appendingPathComponent("model.json"))
+        let loaded = try XCTUnwrap(ModelSettings.load(root: root))
+        XCTAssertNil(loaded.fallback)
+        try loaded.save(root: root)
+        XCTAssertFalse(try String(contentsOf: root.appendingPathComponent("model.json"), encoding: .utf8).contains("comparison"))
     }
 
     func testFormRejectsInvalidValuesBeforeWriting() throws {

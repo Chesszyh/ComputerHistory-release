@@ -1,6 +1,6 @@
 # ComputerHistory
 
-macOS 本地活动记录工具。通过 Accessibility（辅助功能，简称 AX）读取前台应用的界面文本，记录窗口变化、点击、快捷键和可归因的文本变化，按时间段保存。辅助功能缺少正文的应用可显式启用[本地窗口文字识别](docs/collector.md#采集行为与局限)。支持 DeepSeek 和兼容接口的自托管模型生成记忆摘要，并在菜单栏查看时间线、逐次请求和费用。
+macOS 本地活动记录工具。通过 Accessibility（辅助功能，简称 AX）读取前台应用的界面文本，记录窗口变化、点击、快捷键和可归因的文本变化，按时间段保存。辅助功能缺少正文的应用可显式启用[本地窗口文字识别](docs/collector.md#采集行为与局限)。可选接入[本机 ActivityWatch](docs/collector.md#activitywatch-补充来源)补充窗口与空闲记录。支持 DeepSeek 和兼容接口的自托管模型生成记忆摘要，并在菜单栏查看时间线、逐次请求和费用。
 
 本项目为独立实现，与 OpenAI、ChatGPT 或 DeepSeek 无隶属关系，不承诺与其他产品完整兼容。
 
@@ -21,12 +21,14 @@ macOS 本地活动记录工具。通过 Accessibility（辅助功能，简称 AX
 在源码目录执行：
 
 ```bash
-swift build -c release
+bash scripts/build.sh -c release
 swift test
 python3 scripts/test-process-control.py .build/release/computer-history
 ```
 
 常规测试使用合成数据，不需要模型密钥。三项私有兼容性样本测试默认跳过；集成测试使用临时目录、暂停真实桌面采集，并以本地模拟接口验证不联网的生成路径。
+
+菜单栏可[删除时间线中的总结](docs/collector.md#删除时间线总结)，并在[模型设置](docs/collector.md#模型与用量配置)中管理模型组、切换主模型与备用模型。
 
 ## 开始记录
 
@@ -63,20 +65,25 @@ python3 scripts/test-process-control.py .build/release/computer-history
 # 不联网：为已封口的段生成事实摘要
 ./.build/release/computer-history memorize --no-model --limit 6
 
-# 不联网：生成已结束的六小时时段汇总
-./.build/release/computer-history memorize --no-model --granularity 6h
+# 使用当前模型生成指定日期的日报；当天生成截至当前的预览
+./.build/release/computer-history report --day 2026-10-18
+
+# 导出给其他 AI 的材料，不调用模型
+./.build/release/computer-history export --day 2026-10-18 --material --file activities.md
 
 # 检查已有十分钟记忆的自引用、未来引用和成环
 ./.build/release/computer-history verify
 ```
 
+菜单栏“日报、周报与导出”可生成、查看、复制报告，或复制给其他 AI 的活动材料，并导出 Markdown／TXT。监督进程自动补齐已结束时段的日报、周报，不再自动生成六小时汇总；已有六小时记录继续可读。可选的 GitHub 私有备份默认关闭，在“设置 → 总结提示词与配置 → 备份”设置仓库，并可直接用设置区开关启停。详细行为与命令见[报告、导出与备份](docs/collector.md#报告导出与备份)。
+
 模型接入可在菜单栏“设置 → 总结提示词与配置 → 模型”填写服务地址、模型名称和密钥，或使用 `DEEPSEEK_API_KEY`。命令行也可用 `DEEPSEEK_MODEL` 与 `DEEPSEEK_BASE_URL` 覆盖模型和地址。默认值见 [DeepSeekClient.swift](Sources/ComputerHistoryCore/DeepSeekClient.swift) 的 `defaultModel` / `defaultBaseURL`；请按服务账户的实际可用模型设置。
 
 自托管模型在数据目录创建 `model.json`，格式见[模型与用量配置](docs/collector.md#模型与用量配置)。可将模型部署在另一台电脑，本机只发送整理后的材料。配置文件优先于模型环境变量；`requiresAPIKey: false` 的服务不接收 DeepSeek 密钥。
 
-不带 `--no-model` 的生成任务会发送活动材料；`supervise` 定期执行生成入口。模型失败时保留带失败标记的事实摘要，后续周期会重试。菜单栏的“总结用量与费用”可查看每次请求的实际输入、输出、token 用量和费用估算。可用 `comparison` 将同一输入并行交给第二个模型；正式时间线只使用主模型结果，对照结果在请求详情中查看。旧版本没有保存的用量不会补算。
+不带 `--no-model` 的生成任务会发送活动材料；`supervise` 在事件段封口后尽快执行记忆生成，日报和备份使用独立后台队列。模型失败时保留带失败标记的事实摘要，后续周期会重试。菜单栏的“总结用量与费用”可查看每次请求的实际输入、输出、token 用量和费用估算。可配置 `fallback` 降级模型：主模型请求失败、超时或输出不可用时，仅为该次请求尝试降级；下一次仍先请求主模型。成功的降级结果写入正式总结，各次尝试的输入、输出及关联均可在请求详情中查看。旧版本没有保存的用量不会补算。
 
-用量页支持今天、昨天、本周（周一起）和本月筛选，并可选择任务类型及正式／对照请求。合计随筛选范围变化，请求按日期和任务分组展开。详情先显示模型输出，原始来源、系统提示词和原始输入默认折叠。分组和请求详情的折叠标题整行可点击展开，查看请求详情后返回保留展开状态和浏览位置。菜单栏“设置 → 总结提示词与配置”提供提示词、模型和采集表单；配置文件编辑位于高级选项，生效方式见[模型与用量配置](docs/collector.md#模型与用量配置)。
+用量页支持今天、昨天、本周（周一起）和本月筛选，并可选择任务类型及主模型／降级请求及历史对照记录。合计随筛选范围变化，请求按日期和任务分组展开。详情先显示模型输出，原始来源、系统提示词和原始输入默认折叠。分组和请求详情的折叠标题整行可点击展开，查看请求详情后返回保留展开状态和浏览位置。菜单栏“设置 → 总结提示词与配置”提供提示词、模型和采集表单；配置文件编辑位于高级选项，生效方式见[模型与用量配置](docs/collector.md#模型与用量配置)。
 
 ## 文档
 

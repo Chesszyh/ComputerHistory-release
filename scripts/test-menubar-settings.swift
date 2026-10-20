@@ -32,6 +32,33 @@ import ComputerHistoryCore
         try config.jsonData().write(to: CollectorConfig.fileURL(rootDirectory: root))
         let model = StatusModel(root: root)
         defer { model.shutdown() }
+        model.loadConfigurationDrafts()
+        model.collectorDraft.windowTextApplications = ["example.synthetic-ocr"]
+        let ocrHost = NSHostingView(rootView: ApplicationListEditor(
+            apps: Binding(get: { model.collectorDraft.windowTextApplications }, set: { model.collectorDraft.windowTextApplications = $0 }),
+            disabledApps: Binding(get: { model.collectorDraft.windowTextDisabledApplications }, set: { model.collectorDraft.windowTextDisabledApplications = $0 }))
+            .frame(width: 340))
+        window.contentView = ocrHost
+        window.setContentSize(NSSize(width: 340, height: ocrHost.fittingSize.height))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        func clickOCRCheckbox() {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = NSEvent.mouseEvent(with: type,
+                    location: NSPoint(x: 15, y: window.contentLayoutRect.height - 12), modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)!
+                window.sendEvent(event)
+            }
+            RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        }
+        clickOCRCheckbox()
+        precondition(model.collectorDraft.windowTextDisabledApplications == ["example.synthetic-ocr"], "OCR checkbox must disable the listed application")
+        model.saveCollectorConfiguration()
+        precondition(try! CollectorConfig.load(rootDirectory: root).windowTextDisabledApplications == ["example.synthetic-ocr"])
+        clickOCRCheckbox()
+        precondition(model.collectorDraft.windowTextDisabledApplications.isEmpty, "OCR checkbox must re-enable the application")
+        model.saveCollectorConfiguration()
+        precondition(try! CollectorConfig.load(rootDirectory: root).windowTextApplications == ["example.synthetic-ocr"])
         model.openSummarySettings()
         model.settingsTab = .model
         let panel = NSHostingView(rootView: StatusPanel(model: model).environment(\.colorScheme, .dark))
@@ -46,7 +73,7 @@ import ComputerHistoryCore
             (parent as? NSTextField).map { [$0] } ?? parent.subviews.flatMap(fields)
         }
         func edit(_ id: String, value: String) {
-            let placeholders = ["model-name": "deepseek-flash", "collector-days": "0 表示不按天数清理"]
+            let placeholders = ["model-name": "deepseek-flash", "model-reasoning": "留空使用服务默认值", "collector-days": "0 表示不按天数清理"]
             guard let field = fields(panel).first(where: { $0.placeholderString == placeholders[id] }) else {
                 fatalError("Missing settings field: \(id)")
             }
@@ -65,10 +92,75 @@ import ComputerHistoryCore
         }
         settle()
         edit("model-name", value: "edited-in-form")
-        precondition(model.modelDraft.model == "edited-in-form", "Native model field must update the draft")
+        precondition(model.modelGroups[0].settings.model == "edited-in-form", "Native model field must update the draft")
         saveByClick()
         precondition(try! ModelSettings.load(root: root)?.model == "edited-in-form", "Save button must persist the model form")
         precondition(model.modelSettingsError == nil)
+        edit("model-reasoning", value: "provider-custom-level")
+        saveByClick()
+        precondition(try! ModelSettings.load(root: root)?.reasoningEffort == "provider-custom-level")
+        edit("model-reasoning", value: "")
+        saveByClick()
+        precondition(try! ModelSettings.load(root: root)?.reasoningEffort == nil, "Blank effort must remain unspecified")
+        let originalID = model.primaryGroupID
+        model.addModelGroup()
+        let newID = model.editingGroupID
+        model.modelGroups[1].name = "Synthetic second source"
+        model.modelGroups[1].settings.model = "second-source"
+        model.modelGroups[1].settings.requiresAPIKey = false
+        model.primaryGroupID = newID
+        model.fallbackGroupID = originalID
+        model.saveModelConfiguration()
+        precondition(model.modelSettingsError == nil)
+        precondition(try! ModelSettings.load(root: root)?.model == "second-source")
+        precondition(try! ModelSettings.load(root: root)?.fallback?.model == "edited-in-form")
+        model.loadConfigurationDrafts()
+        precondition(model.modelGroups.count == 2 && model.primaryGroupID == newID)
+        precondition(model.modelGroups[0].settings.model == "edited-in-form", "Changing selection must retain other groups")
+        try ActivityNarrative(items: [.init(id: "synthetic-delete", timestamp: Date(), title: "Synthetic summary",
+            summary: "Synthetic duplicate", apps: [], sourceMemories: [])]).save(root: root)
+        model.refreshAll()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        let deletionItem = model.timelineGroups.flatMap(\.items).first!
+        let deletionHost = NSHostingView(rootView: SummaryDetails(item: deletionItem, model: model).frame(width: 360))
+        window.contentView = deletionHost
+        window.setContentSize(NSSize(width: 380, height: deletionHost.fittingSize.height))
+        settle()
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = NSEvent.mouseEvent(with: type, location: NSPoint(x: 40, y: window.contentLayoutRect.height - 18),
+                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)!
+            window.sendEvent(event)
+        }
+        settle()
+        precondition(try! TimelineDeletions.load(root: root).ids.contains(deletionItem.deletionID), "Rendered delete button must persist deletion")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        precondition(model.deletedSummaries.first!.item.summary == deletionItem.summary)
+        let record = model.deletedSummaries.first!
+        let trashCard = NSHostingView(rootView: TrashRecordCard(record: record, model: model).frame(width: 352))
+        window.contentView = trashCard
+        window.setContentSize(NSSize(width: 352, height: trashCard.fittingSize.height))
+        settle()
+        func clickTrashAction(x: CGFloat) {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: 20), modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)!
+                window.sendEvent(event)
+            }
+            settle()
+        }
+        clickTrashAction(x: 30)
+        precondition(try! TimelineDeletions.load(root: root).ids.isEmpty, "Rendered restore button must restore deleted messages")
+        model.deleteTimelineItem(deletionItem)
+        settle()
+        clickTrashAction(x: 310)
+        precondition(try! TimelineDeletions.load(root: root).purgedIDs.contains(deletionItem.deletionID), "Rendered purge button must remove the message permanently from trash")
+
+        model.showsTrash = false
+        precondition(try! TimelineDeletions.load(root: root).records.isEmpty, "Purged entries must leave the trash")
+        window.contentView = panel
+        window.setContentSize(NSSize(width: 380, height: 640))
         model.settingsTab = .collector
         settle()
         edit("collector-days", value: "6")
@@ -85,6 +177,15 @@ import ComputerHistoryCore
         model.saveCollectorConfiguration()
         precondition(try! String(contentsOf: CollectorConfig.fileURL(rootDirectory: root), encoding: .utf8) == "invalid JSON",
             "A failed load must not silently replace a user's configuration")
-        print("PASS: full-row request disclosure, native model/collector editing, save buttons, validation, and malformed-file preservation")
+        model.settingsTab = .backup
+        settle()
+        model.backupRepository = "example/synthetic-private"
+        model.backupEnabled = true
+        saveByClick()
+        precondition(try! BackupSettings.load(root: root)?.enabled == true, "Backup settings save button must persist enabled state")
+        model.setBackupEnabled(false)
+        precondition(try! BackupSettings.load(root: root)?.enabled == false, "Quick toggle must persist disabled state")
+        precondition(!model.effectiveBackupEnabled)
+        print("PASS: full-row request disclosure, native model/collector editing, model-group persistence and swap, rendered summary deletion and trash restoration, save buttons, validation, and malformed-file preservation")
     }
 }

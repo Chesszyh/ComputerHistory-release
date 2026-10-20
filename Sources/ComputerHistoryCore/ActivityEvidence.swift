@@ -13,6 +13,11 @@ public enum ActivityEvidence {
                            event.window?.title, event.window?.url].compactMap { $0 }.joined(separator: " | ")
             let reference = "[\(MemoryGenerator.hm(event.timestamp)); \(segmentID)#\(event.id)] \(context)"
             var facts: [String] = []
+            if let activity = event.activityWatch {
+                let state = activity.status == "afk" ? "空闲" : activity.status == "not-afk" ? "活动" : "状态未知"
+                let seconds = Int(max(0, activity.endedAt.timeIntervalSince(activity.startedAt)))
+                facts.append("ActivityWatch：\(state)，观测区间 \(seconds) 秒（窗口与网址元数据）")
+            }
             if let keyboard = event.keyboard {
                 if let text = keyboard.text, !text.isEmpty,
                    (keyboard.textEvidence == .editedValue || !isChatChrome(text, app: app)),

@@ -1,6 +1,6 @@
 import Foundation
 
-public struct TrayTimelineItem: Sendable, Equatable, Identifiable {
+public struct TrayTimelineItem: Codable, Sendable, Equatable, Identifiable {
     public var id: String
     public var timestamp: Date
     public var title: String
@@ -12,6 +12,7 @@ public struct TrayTimelineItem: Sendable, Equatable, Identifiable {
     public var eventCount: Int?
     public var endTimestamp: Date
     public var isAway: Bool = false
+    public var deletionID: String { (isNarrative ? "narrative:" : "memory:") + id }
     public var hasDetail: Bool { !memoryFiles.isEmpty }
 }
 
@@ -26,6 +27,7 @@ public struct TraySnapshot: Sendable {
     public var control: CollectorControl
     public var groups: [TrayTimelineGroup]
     public var contentVersion: Int
+    public var deletedSummaries: [TimelineDeletions.Record]
     /// 本轮实际读取的事件字节与解析的记忆数，用于固定数据性能验证。
     public var eventBytesRead: Int
     public var memoriesParsed: Int
@@ -52,9 +54,11 @@ public actor TraySnapshotLoader {
     private var narrative = ActivityNarrative()
     private var previousTimelineEntries: [TimelineSource] = []
     private var previousNarrative: [ActivityNarrative.Item] = []
+    private var previousDeletions = TimelineDeletions()
     private var previousAway = AwayPeriods()
     private var previousTimeZone: TimeZone?
     private var groups: [TrayTimelineGroup] = []
+    private var deletedSummaries: [TimelineDeletions.Record] = []
     private var contentVersion = 0
 
     private struct TimelineSource: Equatable {
@@ -186,10 +190,17 @@ public actor TraySnapshotLoader {
         if parsed > 0 || removedMemories || narrativeChanged { contentVersion += 1 }
         let sources = index.entries.map { TimelineSource(url: $0.fileURL, date: $0.startedAt,
                                            title: $0.title, summary: $0.summary, apps: $0.applications) }
+        let deletions = (try? TimelineDeletions.load(root: root)) ?? previousDeletions
         let away = AwayPeriods.load(root: root)
-        if away != previousAway { contentVersion += 1 }
-        if away != previousAway || sources != previousTimelineEntries || narrative.items != previousNarrative || previousTimeZone != timeZone {
-            groups = Self.timeline(index: index, narrative: narrative, away: away, timeZone: timeZone)
+        if away != previousAway || deletions != previousDeletions { contentVersion += 1 }
+        if deletions != previousDeletions || away != previousAway || sources != previousTimelineEntries || narrative.items != previousNarrative || previousTimeZone != timeZone {
+            let allGroups = Self.timeline(index: index, narrative: narrative, away: away, restored: deletions.restoredItems, timeZone: timeZone)
+            deletedSummaries = deletions.trashEntries(candidates: allGroups.flatMap(\.items))
+            groups = allGroups.compactMap { group in
+                let items = group.items.filter { !deletions.ids.contains($0.deletionID) }
+                return items.isEmpty ? nil : TrayTimelineGroup(day: group.day, items: items)
+            }
+            previousDeletions = deletions
             previousTimelineEntries = sources
             previousNarrative = narrative.items
             previousTimeZone = timeZone
@@ -201,13 +212,13 @@ public actor TraySnapshotLoader {
         let status = CollectorStatus(process: CollectorStatus.readProcess(root: root, fileManager: fm), data: data,
                      memories: CollectorStatus.memoryStats(index: index, data: data), rootDirectory: root)
         return TraySnapshot(status: status, control: CollectorControl.load(root: root), groups: groups,
-                            contentVersion: contentVersion, eventBytesRead: bytesRead, memoriesParsed: parsed)
+                            contentVersion: contentVersion, deletedSummaries: deletedSummaries, eventBytesRead: bytesRead, memoriesParsed: parsed)
     }
 
-    private static func timeline(index: MemoryIndex, narrative: ActivityNarrative, away: AwayPeriods,
+    private static func timeline(index: MemoryIndex, narrative: ActivityNarrative, away: AwayPeriods, restored: [TrayTimelineItem],
                                  timeZone: TimeZone) -> [TrayTimelineGroup] {
         let lookup = Dictionary(uniqueKeysWithValues: index.entries.map { ($0.id, $0.fileURL) })
-        var covered: Set<String> = []
+        var covered = Set(restored.filter(\.isNarrative).flatMap { $0.memoryFiles.map(\.lastPathComponent) })
         var byDay: [String: [TrayTimelineItem]] = [:]
         let date = DateFormatter()
         date.locale = Locale(identifier: "en_US_POSIX")
@@ -231,6 +242,10 @@ public actor TraySnapshotLoader {
                 id: entry.id, timestamp: entry.startedAt, title: entry.title, summary: entry.summary,
                 apps: entry.applications, isNarrative: false, memoryFiles: [entry.fileURL],
                 coveredCount: 1, eventCount: nil, endTimestamp: entry.startedAt))
+        }
+        let existingIDs = Set(byDay.values.flatMap { $0 }.map(\.deletionID))
+        for item in restored where !existingIDs.contains(item.deletionID) {
+            byDay[date.string(from: item.timestamp), default: []].append(item)
         }
         for period in away.periods where period.end.timeIntervalSince(period.start) >= 60 {
             byDay[date.string(from: period.start), default: []].append(TrayTimelineItem(

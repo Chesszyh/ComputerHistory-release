@@ -7,7 +7,6 @@ import ComputerHistoryCore
 
 let args = Array(CommandLine.arguments.dropFirst())
 let flags = Set(args)
-atexit { ModelComparison.waitForPendingRequests() }
 
 let defaultRoot = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent(".computer-history")
@@ -26,6 +25,14 @@ func usage() {
       computer-history segments             列出可生成记忆的段
       computer-history narrative [--limit N] [--day <yyyy-MM-dd>] [--print]
                                             把记忆归纳成前端叙述条目
+      computer-history report [--kind daily|weekly] [--day yyyy-MM-dd] [--no-model] [--overwrite] [--print]
+                                            生成日报或周报；省略日期补齐已结束时段
+      computer-history export --day yyyy-MM-dd [--kind daily|weekly] [--material]
+                              [--format md|txt] [--file <路径>] [--copy]
+                                            导出报告或给 AI 的活动材料（不调用模型）
+      computer-history backup [--repository owner/repo] [--disable] [--automatic]
+                                            设置或执行可选 GitHub 私有备份
+      computer-history model-key [--fallback] 从标准输入保存所选主模型组或备用模型组的密钥
       computer-history verify               校验记忆链完整性
       computer-history --check              检查权限与落盘目录
       computer-history --status             查看长期运行状态
@@ -39,8 +46,8 @@ func usage() {
 
     collect 仅在本地采集；生成任务使用 model.json 配置的服务或 DeepSeek 环境变量。
     请求输入、输出、用量与估算费用保存在 requests/，可在菜单栏查看。
-    --no-model 禁止生成任务调用模型，适用于以上三个生成入口。
-    supervise 默认定期生成记忆；--memorize-interval 0 关闭定时生成（仍接受手动请求）。
+    --no-model 禁止生成任务调用模型，适用于全部生成入口。
+    supervise 在新段封口后生成记忆；日报和备份使用独立队列。--memorize-interval 0 关闭定时生成（仍接受手动请求）。
     """)
 }
 
@@ -157,6 +164,88 @@ if flags.contains("verify") {
         }
     }
     exit(issues.isEmpty ? 0 : 1)
+}
+
+if flags.contains("model-key") {
+    do {
+        let data = FileHandle.standardInput.readDataToEndOfFile()
+        guard let key = String(data: data, encoding: .utf8), !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ReportError.invalid("请从标准输入提供模型密钥。")
+        }
+        let settings = try ModelSettings.load(root: outputRoot())
+        let fallback = flags.contains("--fallback")
+        let groupID = fallback ? settings?.fallback?.credentialGroupID : settings?.credentialGroupID
+        if fallback, settings?.credentialGroupID != nil, settings?.fallback == nil {
+            throw ReportError.invalid("请先在 model.json 中选择备用模型组。")
+        }
+        try ModelAPIKey.save(key.trimmingCharacters(in: .whitespacesAndNewlines), root: outputRoot(), fallback: fallback, groupID: groupID)
+        print("模型密钥已保存到系统钥匙串。")
+        exit(0)
+    } catch { warn(String(describing: error)); exit(1) }
+}
+
+if flags.contains("report") || flags.contains("export") {
+    let root = outputRoot()
+    do {
+        guard let kind = ReportKind(rawValue: value(of: "--kind") ?? "daily") else {
+            throw ReportError.invalid("--kind 只支持 daily 或 weekly。")
+        }
+        if flags.contains("export") {
+            let date = try value(of: "--day").map { try ReportPeriod.parseDay($0) } ?? Date()
+            let period = ReportPeriod(kind: kind, date: date)
+            let text: String
+            if flags.contains("--material") { text = try ActivityExport.aiMaterial(root: root, period: period) }
+            else {
+                guard let report = try ActivityReport.load(root: root, period: period) else {
+                    throw ReportError.invalid("尚无\(period.title)，请先生成报告，或使用 --material 导出活动材料。")
+                }
+                text = report.markdown
+            }
+            let format = value(of: "--format") ?? "md"
+            guard ["md", "txt"].contains(format) else { throw ReportError.invalid("--format 只支持 md 或 txt。") }
+            if let path = value(of: "--file") {
+                try ActivityExport.write(ActivityExport.formatted(text, format: format), to: URL(fileURLWithPath: (path as NSString).expandingTildeInPath))
+            } else if !flags.contains("--copy") { print(ActivityExport.formatted(text, format: format)) }
+            if flags.contains("--copy") {
+                NSPasteboard.general.clearContents()
+                guard NSPasteboard.general.setString(ActivityExport.formatted(text, format: format), forType: .string) else { throw ReportError.invalid("写入剪贴板失败，请重试。") }
+            }
+        } else {
+            guard let lock = ProcessLock(url: GenerationLock.lockURL("report", root: root)) else {
+                throw ReportError.invalid("报告正在生成，请稍后重试。")
+            }
+            defer { lock.release() }
+            let client = flags.contains("--no-model") ? nil : try DeepSeekClient.fromEnvironment(rootDirectory: root)
+            let generator = ReportGenerator(root: root, client: client)
+            if let day = value(of: "--day") {
+                let period = ReportPeriod(kind: kind, date: try ReportPeriod.parseDay(day))
+                let report = try generator.generate(period: period, overwrite: flags.contains("--overwrite"))
+                print(flags.contains("--print") ? report.markdown : "已生成\(report.title)\(report.preview ? "（截至当前）" : "")。")
+            } else {
+                let count = try generator.generateMissing()
+                print("已补齐 \(count) 份日报／周报。")
+            }
+        }
+        exit(0)
+    } catch { warn(String(describing: error)); exit(1) }
+}
+
+if flags.contains("backup") {
+    let root = outputRoot()
+    do {
+        if flags.contains("--disable") {
+            if var settings = try BackupSettings.load(root: root) { settings.enabled = false; try settings.save(root: root) }
+            print("GitHub 备份已关闭。"); exit(0)
+        }
+        if let repository = value(of: "--repository") {
+            try BackupSettings(repository: repository).save(root: root)
+            print("已启用 GitHub 私有备份：\(repository)。"); exit(0)
+        }
+        let status = try GitHubBackup(root: root).sync(automatic: flags.contains("--automatic"))
+        if let commit = status.commit { print("备份远端已确认：\(commit)") }
+        else { print("GitHub 备份未启用。") }
+        exit(0)
+    } catch { warn(String(describing: error)); exit(1) }
 }
 
 if flags.contains("narrative") {
@@ -311,7 +400,7 @@ if flags.contains("memorize") {
             if since == nil { warn("--since 需形如 2026-10-14T16:00:00"); exit(1) }
         }
         outcomes = generator.generateMissing(
-            limit: limit, overwrite: flags.contains("--overwrite"), since: since)
+            limit: limit, overwrite: flags.contains("--overwrite"), since: since, recentFirst: flags.contains("--recent-first"))
     }
 
     if outcomes.isEmpty {
@@ -330,6 +419,10 @@ if flags.contains("memorize") {
             print("\n" + String(repeating: "─", count: 60) + "\n")
             print(text)
         }
+    }
+    if client != nil, outcomes.contains(where: { MemoryIndex.parse(fileURL: $0.memoryURL)?.generationStatus == "failed" }) {
+        warn("模型总结失败，已保留带失败标记的事实摘要；请检查请求详情。")
+        exit(1)
     }
     exit(0)
 }
@@ -423,7 +516,15 @@ if flags.contains("supervise") {
     var running: (pid: pid_t, label: String)?
 
     var nextLogCheck = Date()
-    var nextMemorize = Date().addingTimeInterval(memorizeInterval)
+    var nextMemorize = Date()
+    var nextBackground = Date()
+    var completedRealtime = false
+    var backgroundRequested = false
+    var memoryCountAtLaunch = 0
+    var pendingBackground: [GenerationTask] = []
+    var runningBackground: (pid: pid_t, label: String)?
+    let backlog = MemoryGenerator(rootDirectory: root, memoriesDirectory: root.appendingPathComponent("memories"))
+    var observedSegments = Set(backlog.completedSegmentIDs())
     while true {
         Thread.sleep(forTimeInterval: 1)
 
@@ -440,11 +541,13 @@ if flags.contains("supervise") {
             if code == 0 || code == 74 {
                 print(code == 0 ? "采集器正常停止，监督退出。" : "采集器停止时封口失败，监督退出；请检查日志与存储。")
                 if let running { _ = CollectorSupervisor.terminate(running.pid) }
+                if let runningBackground { _ = CollectorSupervisor.terminate(runningBackground.pid) }
                 exit(code)
             }
             if code == 73 {
                 print("已有采集实例，监督退出。")
                 if let running { _ = CollectorSupervisor.terminate(running.pid) }
+                if let runningBackground { _ = CollectorSupervisor.terminate(runningBackground.pid) }
                 exit(0)
             }
             print("采集器异常退出（码 \(code)），\(Int(retryDelay)) 秒后重启…")
@@ -458,12 +561,34 @@ if flags.contains("supervise") {
         }
 
         // ② 回收已结束的生成任务，随即启动下一个。
-        if let current = running, CollectorSupervisor.reap(current.pid) != nil {
-            print("生成任务完成：\(current.label)")
+        if let current = running, let code = CollectorSupervisor.reap(current.pid) {
+            print(code == 0 ? "生成任务完成：\(current.label)" : "生成任务失败：\(current.label)（退出码 \(code)），请检查日志。")
+            if current.label == "叙述层" { completedRealtime = true }
+            let memoryCount = ((try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("memories").path)) ?? []).count
+            if current.label == "十分钟记忆", code == 0, memoryCount > memoryCountAtLaunch,
+               ModelHealth.load(root: root)?.error == nil,
+               backlog.completedSegmentIDs().contains(where: {
+                   !FileManager.default.fileExists(atPath: root.appendingPathComponent("memories").appendingPathComponent(MemoryWriter.fileName(segmentID: $0)).path)
+               }) { nextMemorize = Date() }
             running = nil
+        }
+        if let current = runningBackground, let code = CollectorSupervisor.reap(current.pid) {
+            print(code == 0 ? "生成任务完成：\(current.label)" : "生成任务失败：\(current.label)（退出码 \(code)），请检查日志。")
+            runningBackground = nil
+        }
+        if runningBackground == nil, !pendingBackground.isEmpty {
+            let task = pendingBackground.removeFirst()
+            let arguments = task.arguments + (flags.contains("--no-model") ? ["--no-model"] : [])
+            if let pid = CollectorSupervisor.spawnDetachedChild(executable: exe, arguments: arguments) {
+                runningBackground = (pid, task.label)
+                print("生成任务启动：\(task.label)")
+            }
         }
         if running == nil, !pending.isEmpty {
             let task = pending.removeFirst()
+            if task.label == "十分钟记忆" {
+                memoryCountAtLaunch = ((try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("memories").path)) ?? []).count
+            }
             let generationArguments = task.arguments + (flags.contains("--no-model") ? ["--no-model"] : [])
             if let pid = CollectorSupervisor.spawnDetachedChild(
                 executable: exe, arguments: generationArguments) {
@@ -474,6 +599,18 @@ if flags.contains("supervise") {
 
         // ③ 到点或收到手动请求时排队新一轮生成。上一轮未跑完时不重复排队。
         let control = CollectorControl.load(root: root)
+        let sealed = Set(backlog.completedSegmentIDs())
+        if !sealed.subtracting(observedSegments).isEmpty, memorizeInterval > 0 { nextMemorize = Date() }
+        observedSegments = sealed
+        if completedRealtime, control.summarizing, (memorizeInterval > 0 || backgroundRequested),
+           Date() >= nextBackground, pendingBackground.isEmpty, runningBackground == nil {
+            backgroundRequested = false
+            nextBackground = Date().addingTimeInterval(memorizeInterval)
+            pendingBackground = [
+                GenerationTask(label: "日报／周报", arguments: ["report", "--out", root.path]),
+                GenerationTask(label: "GitHub 私有备份", arguments: ["backup", "--automatic", "--out", root.path]),
+            ]
+        }
         let manual = control.flushRequested
         if (manual || memorizeInterval > 0), manual || Date() >= nextMemorize {
             // 上一轮没跑完时不排队，也**不清除请求标记**——清早了这次请求就丢了。
@@ -487,18 +624,14 @@ if flags.contains("supervise") {
             }
             if manual {
                 try? CollectorControl.update(root: root, flushRequested: false)
+                backgroundRequested = true; nextBackground = Date()
                 print("收到立即生成请求。")
             }
             nextMemorize = Date().addingTimeInterval(memorizeInterval)
             pending = [
                 GenerationTask(label: "十分钟记忆",
                                arguments: ["memorize", "--out", root.path,
-                                           "--limit", String(memorizeBatch)]),
-                // 六小时粒度：已生成的会跳过，未结束的时段不生成，
-                // 实际开销约等于本周期新结束的时段数。
-                GenerationTask(label: "六小时汇总",
-                               arguments: ["memorize", "--out", root.path,
-                                           "--granularity", "6h", "--limit", "1"]),
+                                           "--limit", String(memorizeBatch), "--recent-first"]),
                 // 叙述层只处理当天：更早的日期其记忆已稳定，不必反复归纳。
                 GenerationTask(label: "叙述层",
                                arguments: ["narrative", "--out", root.path,
@@ -581,6 +714,7 @@ if !collectorConfig.windowTextApplications.isEmpty {
 let session = CollectionSession(
     configuration: .init(rootDirectory: root, config: collectorConfig))
 let windowTextSampler = WindowTextSampler()
+let activityWatchSampler = ActivityWatchSampler()
 session.isPaused = !CollectorControl.load(root: root).recording
 let sampleInterval: TimeInterval = 1.0
 let runSeconds = value(of: "--seconds").flatMap(Double.init)
@@ -619,6 +753,7 @@ final class Shutdown {
         guard !done else { return 0 }
         done = true
         windowTextSampler.update(nil) { _, _ in }
+        activityWatchSampler.update(enabled: false) { _ in }
         defer { lease.release() }
         do { try session.stop() }
         catch {
@@ -647,6 +782,7 @@ let timer = Timer.scheduledTimer(withTimeInterval: sampleInterval, repeats: true
         do {
             if let updated = try configurationMonitor.poll() {
                 windowTextSampler.update(nil) { _, _ in }
+                activityWatchSampler.update(enabled: false) { _ in }
                 session.applyConfiguration(updated)
                 collectorConfig = updated
                 if !updated.windowTextApplications.isEmpty { NSApplication.shared.setActivationPolicy(.prohibited) }
@@ -668,6 +804,10 @@ let timer = Timer.scheduledTimer(withTimeInterval: sampleInterval, repeats: true
             print("已暂停记录。")
         }
         session.sampleFrontmost()
+        activityWatchSampler.update(enabled: collectorConfig.activityWatchEnabled && !session.isPaused && !session.isAway) { snapshot in
+            guard CollectorControl.load(root: root).recording else { return }
+            session.recordActivityWatch(snapshot)
+        }
         // 文本输入按同一周期轮询；切块由跟踪器内部的停顿阈值决定，
         // 与采样周期解耦。
         session.sampleTextInput()

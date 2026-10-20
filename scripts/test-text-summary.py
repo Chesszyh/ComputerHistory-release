@@ -10,6 +10,8 @@ import sys
 import tempfile
 import threading
 
+os.environ["COMPUTER_HISTORY_NOTIFICATIONS"] = "0"
+
 binary = str(Path(sys.argv[1]).resolve())
 requests = []
 mode = "ok"
@@ -85,7 +87,7 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
         assert 'synthetic-placeholder' not in user
         assert '控件变化' in user
         assert '不证明发送或逐字键入' not in user
-        assert requests[0]['reasoning_effort'] == 'none'
+        assert 'reasoning_effort' not in requests[0]
         assert f'{segment_id}#34' in user
         text = next((root / 'memories').glob('*.md')).read_text()
         assert 'effective-34' in text and '控件变化' in text
@@ -142,19 +144,19 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
         assert factual.returncode == 0 and len(requests) == before
         (root / 'summary.json').write_text(json.dumps(summary_settings))
         mode = 'http_error'
-        assert regenerate().returncode == 0  # memory persists an explicitly failed factual fallback
+        assert regenerate().returncode != 0  # failure is reported while the factual memory remains available
         records = [json.loads(p.read_text()) for p in (root / 'requests').glob('*.json')]
         failed = next(r for r in records if r['status'] == 'failed')
         assert failed.get('usage') is None and failed.get('estimatedCost') is None
         assert '503' in failed['error']
         mode = 'empty'
-        assert regenerate().returncode == 0
+        assert regenerate().returncode != 0
         records = [json.loads(p.read_text()) for p in (root / 'requests').glob('*.json')]
         assert any(r['status'] == 'empty' and r['usage']['totalTokens'] == 130 for r in records)
         before = len(requests)
         config['dailyBudget'] = 0
         (root / 'model.json').write_text(json.dumps(config))
-        assert regenerate().returncode == 0
+        assert regenerate().returncode != 0
         assert len(requests) == before, 'budget limit still sent a model request'
         del config['dailyBudget']
         (root / 'model.json').write_text(json.dumps(config))
@@ -178,20 +180,13 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
         assert len(requests) == before + 1, 'saved batch was charged again on resume'
         saved = json.loads((root / 'narrative.json').read_text())
         assert len({name for item in saved['items'] for name in item['sourceMemories']}) == 8
-        config['comparison'] = {'baseURL': config['baseURL'], 'model': 'synthetic-shadow',
-                                'reasoningEffort': 'none', 'pricing': {'currency': 'CNY',
-                                'inputPerMillion': 0, 'cachedInputPerMillion': 0, 'outputPerMillion': 0}}
+        config['fallback'] = {'baseURL': config['baseURL'], 'model': 'synthetic-shadow',
+                              'requiresAPIKey': False, 'reasoningEffort': 'none'}
         (root / 'model.json').write_text(json.dumps(config))
         before = len(requests)
         assert regenerate().returncode == 0
-        assert len(requests) == before + 2
-        records = [json.loads(p.read_text()) for p in (root / 'requests').glob('*.json')]
-        shadow = next(r for r in records if r.get('comparisonOf'))
-        primary = next(r for r in records if r['id'] == shadow['comparisonOf'])
-        assert shadow['input'] == primary['input'] and shadow['system'] == primary['system']
-        assert shadow['output'] == 'SHADOW OUTPUT' and shadow['estimatedCost'] == 0
-        assert 'SHADOW OUTPUT' not in next((root / 'memories').glob(f'{segment_id}-*.md')).read_text()
-        print('PASS: evidence, request ledger, pricing, failure/empty usage, budgets, batch resume, and isolated comparison, and prompt overrides')
+        assert len(requests) == before + 1, 'healthy primary must not call the fallback'
+        print('PASS: evidence, request ledger, pricing, failure/empty usage, budgets, batch resume, prompt overrides, and fallback idle on primary success')
     finally:
         server.shutdown()
         server.server_close()

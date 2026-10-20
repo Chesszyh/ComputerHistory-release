@@ -7,7 +7,7 @@ import ComputerHistoryCore
 /// 托盘应用的状态源。
 ///
 /// 分两个刷新节奏：当前活动每秒更新（跟随前台应用），
-/// 采集状态与记忆索引每 10 秒更新（读磁盘，没必要更频繁）。
+/// 采集状态与记忆索引由后台加载器定期刷新。
 @MainActor
 final class StatusModel: ObservableObject {
 
@@ -22,6 +22,20 @@ final class StatusModel: ObservableObject {
     @Published private(set) var status: CollectorStatus
     @Published private(set) var timelineCount = 0
     @Published private(set) var modelRequests: [ModelRequest] = []
+    @Published var showsReports = false
+    @Published var reportKind: ReportKind = .daily
+    @Published var reportDate = Date()
+    @Published private(set) var reportText = ""
+    @Published private(set) var reportMaterial = ""
+    @Published private(set) var reportBusy = false
+    @Published var reportMessage: String?
+    @Published var reportError: String?
+    @Published private(set) var effectiveBackupEnabled = false
+    @Published var backupRepository = ""
+    @Published var backupEnabled = false
+    @Published private(set) var backupLoaded = false
+    @Published private(set) var backupMessage = ""
+    private var reportTask: Task<Void, Never>?
     @Published var showsUsage = false
     @Published var requestDetail: ModelRequest?
     @Published var requestError: String?
@@ -32,13 +46,19 @@ final class StatusModel: ObservableObject {
     @Published var summaryDraft = ""
     @Published var summaryMessage: String?
     @Published var summarySettingsError: String?
-    enum SettingsTab: String, CaseIterable { case prompts = "提示词", model = "模型", collector = "采集" }
+    enum SettingsTab: String, CaseIterable { case prompts = "提示词", model = "模型", collector = "采集", backup = "备份" }
     @Published var settingsTab: SettingsTab = .prompts
-    @Published var modelDraft = ModelSettingsDraft()
+    @Published var modelGroups: [ModelGroupDraft] = []
+    @Published var editingGroupID = ""
+    @Published var primaryGroupID = ""
+    @Published var fallbackGroupID = ""
+    @Published var dailyBudget = ""
+    @Published var monthlyBudget = ""
+    @Published var timelineError: String?
+    @Published var showsTrash = false
+    @Published private(set) var deletedSummaries: [TimelineDeletions.Record] = []
     @Published var collectorDraft = CollectorSettingsDraft()
-    @Published var apiKeyDraft = ""
-    @Published var apiKeyStatus = ""
-    @Published var removesAPIKey = false
+    @Published private(set) var modelFailure: String?
     @Published var modelSettingsError: String?
     @Published var collectorSettingsError: String?
     @Published var modelSettingsMessage: String?
@@ -100,8 +120,8 @@ final class StatusModel: ObservableObject {
             .sink { [weak self] _ in self?.refreshLive() }
             .store(in: &cancellables)
 
-        // 采集状态与记忆：每 10 秒一次。
-        Timer.publish(every: 10, on: .main, in: .common).autoconnect()
+        // 采集状态与记忆在后台刷新，复用未变化文件的缓存。
+        Timer.publish(every: 3, on: .main, in: .common).autoconnect()
             .sink { [weak self] _ in self?.refreshSlow() }
             .store(in: &cancellables)
     }
@@ -137,11 +157,16 @@ final class StatusModel: ObservableObject {
         refreshTask = Task { [weak self] in
             let snapshot = await loader.load(root: root)
             let requests = await self?.requestLoader.load(root: root) ?? []
+            let health = await Task.detached { ModelHealth.load(root: root) }.value
+            let enabled = await Task.detached { (try? BackupSettings.load(root: root))?.enabled ?? false }.value
             guard let self, !self.stopped else { return }
+            self.modelFailure = health?.error
+            self.effectiveBackupEnabled = enabled
             if self.modelRequests != requests { self.modelRequests = requests }
             if self.status != snapshot.status { self.status = snapshot.status }
             if self.control != snapshot.control { self.control = snapshot.control }
             self.contentVersion = snapshot.contentVersion
+            if self.deletedSummaries != snapshot.deletedSummaries { self.deletedSummaries = snapshot.deletedSummaries }
             let count = snapshot.groups.reduce(0) { $0 + $1.items.count }
             if self.timelineCount != count { self.timelineCount = count }
             if self.allTimelineGroups != snapshot.groups {
@@ -176,12 +201,123 @@ final class StatusModel: ObservableObject {
         refreshTask?.cancel()
         liveTask?.cancel()
         detailTask?.cancel()
+        reportTask?.cancel()
         cancellables.removeAll()
     }
 
     func refreshAll() {
         refreshLive()
         refreshSlow()
+    }
+
+    func openReports() {
+        showsReports = true
+        loadReports()
+    }
+
+    func loadReports() {
+        guard !reportBusy else { return }
+        let root = root, period = ReportPeriod(kind: reportKind, date: reportDate)
+        reportBusy = true; reportError = nil; reportMessage = nil
+        reportTask = Task { [weak self] in
+            let result = await Task.detached { () -> (String, String, BackupSettings?, BackupStatus, String?) in
+                do {
+                    let settings = try BackupSettings.load(root: root)
+                    let report = try ActivityReport.load(root: root, period: period)
+                    let material = (try? ActivityExport.aiMaterial(root: root, period: period)) ?? ""
+                    return (report?.markdown ?? "", material, settings, BackupStatus.load(root: root), nil)
+                } catch { return ("", "", nil, BackupStatus.load(root: root), String(describing: error)) }
+            }.value
+            guard let self, !self.stopped else { return }
+            self.reportText = result.0; self.reportMaterial = result.1
+            self.backupRepository = result.2?.repository ?? ""
+            self.backupEnabled = result.2?.enabled ?? false
+            self.backupLoaded = result.4 == nil
+            self.reportError = result.4
+            if let error = result.3.error { self.backupMessage = error }
+            else if let date = result.3.lastSuccess {
+                self.backupMessage = "最近备份：" + date.formatted(date: .abbreviated, time: .shortened)
+            } else { self.backupMessage = "尚无成功备份" }
+            self.reportBusy = false
+        }
+    }
+
+    func generateReport() {
+        runReportCommand(["report", "--kind", reportKind.rawValue, "--day", ReportPeriod.day(reportDate), "--overwrite"], message: "报告已生成")
+    }
+
+    func runReportCommand(_ arguments: [String], message: String) {
+        guard !reportBusy else { return }
+        let root = root
+        let binary = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("computer-history")
+        reportBusy = true; reportError = nil; reportMessage = nil
+        reportTask = Task { [weak self] in
+            let error = await Task.detached { () -> String? in
+                do {
+                    try LocalCommand.run(binary.path, arguments + ["--out", root.path], timeout: 1800)
+                    return nil
+                } catch { return String(describing: error) }
+            }.value
+            guard let self, !self.stopped else { return }
+            self.reportBusy = false
+            if let error { self.reportError = error }
+            else {
+                self.loadReports()
+                self.reportMessage = message
+            }
+        }
+    }
+
+    func copyReport(material: Bool) {
+        let text = material ? reportMaterial : reportText
+        guard !text.isEmpty else { return }
+        writeToPasteboard(text)
+        reportMessage = material ? "已复制给 AI 的材料" : "已复制报告"
+    }
+
+    func saveReport(to url: URL, material: Bool) {
+        do {
+            try ActivityExport.write(ActivityExport.formatted(material ? reportMaterial : reportText, format: url.pathExtension), to: url)
+            reportMessage = "已导出 \(url.lastPathComponent)"; reportError = nil
+        } catch { reportError = String(describing: error) }
+    }
+
+    func setBackupEnabled(_ enabled: Bool) {
+        do {
+            guard var settings = try BackupSettings.load(root: root) else {
+                settingsTab = .backup; openSummarySettings()
+                reportError = "请先填写独立的 GitHub 私有仓库。"
+                return
+            }
+            settings.enabled = enabled; try settings.save(root: root)
+            effectiveBackupEnabled = enabled; backupEnabled = enabled
+        } catch {
+            settingsTab = .backup; openSummarySettings(); reportError = String(describing: error)
+        }
+    }
+
+    private func loadBackupSettings() {
+        do {
+            let settings = try BackupSettings.load(root: root)
+            backupRepository = settings?.repository ?? ""; backupEnabled = settings?.enabled ?? false
+            effectiveBackupEnabled = backupEnabled; backupLoaded = true
+            let status = BackupStatus.load(root: root)
+            backupMessage = status.error ?? status.lastSuccess.map { "最近备份：" + $0.formatted(date: .abbreviated, time: .shortened) } ?? "尚无成功备份"
+        } catch { backupLoaded = false; reportError = String(describing: error) }
+    }
+
+    func saveBackupSettings() {
+        guard backupLoaded else { return }
+        do {
+            if backupRepository.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !backupEnabled {
+                if var settings = try BackupSettings.load(root: root) { settings.enabled = false; try settings.save(root: root) }
+            } else {
+                try BackupSettings(repository: backupRepository.trimmingCharacters(in: .whitespacesAndNewlines), enabled: backupEnabled).save(root: root)
+            }
+            effectiveBackupEnabled = backupEnabled
+            reportMessage = backupEnabled ? "已启用每日私有备份" : "GitHub 备份已关闭"
+            reportError = nil
+        } catch { reportError = String(describing: error) }
     }
 
     // MARK: - 菜单栏图标
@@ -452,20 +588,28 @@ final class StatusModel: ObservableObject {
     }
 
     func loadConfigurationDrafts() {
+        loadBackupSettings()
         modelSettingsError = nil
         collectorSettingsError = nil
         modelSettingsMessage = nil
         collectorSettingsMessage = nil
-        apiKeyDraft = ""
-        removesAPIKey = false
         modelConfigurationLoaded = false
         collectorConfigurationLoaded = false
         do {
-            modelDraft = ModelSettingsDraft(try ModelSettings.load(root: root))
+            let groups = try ModelGroups.load(root: root)
+            modelGroups = try groups.groups.map { group in
+                var draft = ModelGroupDraft(group)
+                if try ModelAPIKey.contains(root: root, groupID: group.id) {
+                    draft.hasStoredAPIKey = true
+                }
+                return draft
+            }
+            primaryGroupID = groups.primaryGroupID
+            fallbackGroupID = groups.fallbackGroupID ?? ""
+            editingGroupID = groups.primaryGroupID
+            dailyBudget = groups.dailyBudget.map(String.init(describing:)) ?? ""
+            monthlyBudget = groups.monthlyBudget.map(String.init(describing:)) ?? ""
             modelConfigurationLoaded = true
-            let stored = try ModelAPIKey.load(root: root)
-            apiKeyStatus = stored != nil ? "已保存到系统钥匙串"
-                : (ProcessInfo.processInfo.environment["DEEPSEEK_API_KEY"]?.isEmpty == false ? "当前从环境变量读取密钥" : "尚未填写密钥")
         } catch { modelSettingsError = String(describing: error) }
         do {
             collectorDraft = CollectorSettingsDraft(try CollectorConfig.load(rootDirectory: root))
@@ -474,21 +618,126 @@ final class StatusModel: ObservableObject {
         catch { collectorSettingsError = String(describing: error) }
     }
 
+    func fetchModelCatalog(groupID: String) {
+        guard let index = modelGroups.firstIndex(where: { $0.id == groupID }), !modelGroups[index].catalogLoading else { return }
+        modelGroups[index].catalogLoading = true
+        modelGroups[index].catalogMessage = nil
+        let draft = modelGroups[index]
+        let primary = primaryGroupID, fallback = fallbackGroupID, root = root
+        Task {
+            do {
+                guard let url = URL(string: draft.settings.baseURL), ["http", "https"].contains(url.scheme), url.host != nil else {
+                    throw ConfigurationInputError.invalid("请先填写完整的服务地址。")
+                }
+                let key = try await Task.detached {
+                    if !draft.settings.requiresAPIKey { return "" }
+                    if !draft.apiKey.isEmpty { return draft.apiKey }
+                    if !draft.removesAPIKey, let saved = try ModelAPIKey.load(root: root, groupID: draft.id) { return saved }
+                    let env = ProcessInfo.processInfo.environment
+                    return draft.id == primary ? env["DEEPSEEK_API_KEY"] ?? "" :
+                        (draft.id == fallback ? env["COMPUTER_HISTORY_FALLBACK_API_KEY"] ?? "" : "")
+                }.value
+                let catalog = try await ModelCatalog.fetch(baseURL: url, apiKey: key)
+                guard let current = modelGroups.firstIndex(where: { $0.id == groupID }),
+                      modelGroups[current].settings.baseURL == draft.settings.baseURL else {
+                    if let current = modelGroups.firstIndex(where: { $0.id == groupID }) { modelGroups[current].catalogLoading = false }
+                    return
+                }
+                var seen: Set<String> = []
+                let entries = catalog.data.filter { !$0.id.isEmpty && seen.insert($0.id).inserted }
+                modelGroups[current].availableModels = entries
+                modelGroups[current].manualModel = entries.isEmpty
+                modelGroups[current].catalogMessage = entries.isEmpty ? "服务未返回模型，可手动填写。" : "已读取 \(entries.count) 个模型"
+                modelGroups[current].catalogLoading = false
+                if !entries.isEmpty, modelGroups[current].settings.model.isEmpty { modelGroups[current].settings.model = entries[0].id }
+            } catch {
+                guard let current = modelGroups.firstIndex(where: { $0.id == groupID }) else { return }
+                modelGroups[current].catalogLoading = false
+                modelGroups[current].manualModel = true
+                modelGroups[current].catalogMessage = "未能读取模型列表，可手动填写：\(error)"
+            }
+        }
+    }
+
+    func apiKeyStatus(for group: ModelGroupDraft) -> String {
+        if group.hasStoredAPIKey { return "已保存到系统钥匙串" }
+        let environment = ProcessInfo.processInfo.environment
+        if group.id == primaryGroupID, environment["DEEPSEEK_API_KEY"]?.isEmpty == false {
+            return "当前从主模型环境变量读取密钥"
+        }
+        if group.id == fallbackGroupID, environment["COMPUTER_HISTORY_FALLBACK_API_KEY"]?.isEmpty == false {
+            return "当前从备用模型环境变量读取密钥"
+        }
+        return "尚未填写密钥"
+    }
+
+    func addModelGroup() {
+        let group = ModelGroup(name: "新模型组", settings: ModelSettings(
+            baseURL: DeepSeekClient.defaultBaseURL, model: DeepSeekClient.defaultModel))
+        modelGroups.append(ModelGroupDraft(group))
+        editingGroupID = group.id
+    }
+
+    func removeEditingModelGroup() {
+        guard modelGroups.count > 1, editingGroupID != primaryGroupID, editingGroupID != fallbackGroupID else { return }
+        modelGroups.removeAll { $0.id == editingGroupID }
+        editingGroupID = primaryGroupID
+    }
+
     func saveModelConfiguration() {
         guard modelConfigurationLoaded else { return }
         do {
-            let settings = try modelDraft.value()
-            let replacesKey = !apiKeyDraft.isEmpty
-            if replacesKey { try ModelAPIKey.save(apiKeyDraft, root: root) }
-            else if removesAPIKey { try ModelAPIKey.remove(root: root) }
+            func budget(_ text: String) throws -> Double? {
+                if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
+                guard let value = Double(text), value.isFinite, value >= 0 else {
+                    throw ConfigurationInputError.invalid("预算请填写非负数字，或留空表示不限制。")
+                }
+                return value
+            }
+            let settings = try ModelGroups(groups: modelGroups.map { try $0.value() },
+                primaryGroupID: primaryGroupID, fallbackGroupID: fallbackGroupID.isEmpty ? nil : fallbackGroupID,
+                dailyBudget: budget(dailyBudget), monthlyBudget: budget(monthlyBudget))
+            _ = try settings.resolved()
+            for group in modelGroups {
+                if !group.apiKey.isEmpty { try ModelAPIKey.save(group.apiKey, root: root, groupID: group.id) }
+                else if group.removesAPIKey { try ModelAPIKey.remove(root: root, groupID: group.id) }
+            }
             try settings.save(root: root)
-            if replacesKey { apiKeyStatus = "已保存到系统钥匙串" }
-            else if removesAPIKey { apiKeyStatus = "未保存密钥；可从环境变量读取" }
-            apiKeyDraft = ""
-            removesAPIKey = false
+            for index in modelGroups.indices {
+                if !modelGroups[index].apiKey.isEmpty { modelGroups[index].hasStoredAPIKey = true }
+                else if modelGroups[index].removesAPIKey { modelGroups[index].hasStoredAPIKey = false }
+                modelGroups[index].apiKey = ""
+                modelGroups[index].removesAPIKey = false
+            }
             modelSettingsError = nil
-            modelSettingsMessage = "已保存，下一次总结使用新设置"
+            modelSettingsMessage = "已保存，下一次总结使用所选模型组"
         } catch { modelSettingsError = String(describing: error); modelSettingsMessage = nil }
+    }
+
+    func deleteTimelineItem(_ item: TimelineItem) {
+        guard !item.isAway else { return }
+        do {
+            try TimelineDeletions.delete(item, root: root)
+            expandedRows.remove(item.id)
+            timelineError = nil
+            refreshAll()
+        } catch { timelineError = "删除总结失败：\(error)" }
+    }
+
+    func restoreSummary(_ record: TimelineDeletions.Record) {
+        do {
+            try TimelineDeletions.restore(id: record.id, root: root, item: record.item)
+            timelineError = nil
+            refreshAll()
+        } catch { timelineError = "恢复总结失败：\(error)" }
+    }
+
+    func purgeSummary(_ record: TimelineDeletions.Record) {
+        do {
+            try TimelineDeletions.purge(id: record.id, root: root)
+            timelineError = nil
+            refreshAll()
+        } catch { timelineError = "彻底删除总结失败：\(error)" }
     }
 
     func saveCollectorConfiguration() {
@@ -528,6 +777,7 @@ final class StatusModel: ObservableObject {
             case .prompts: summarySettingsError = message
             case .model: modelSettingsError = message
             case .collector: collectorSettingsError = message
+            case .backup: reportError = message
             }
         }
         if FileManager.default.fileExists(atPath: file.path) {

@@ -7,7 +7,7 @@ if [[ "$(uname -m)" != "arm64" ]]; then
     exit 1
 fi
 arch="arm64"
-swift build -c release
+bash scripts/build.sh -c release
 bin_dir="$(swift build -c release --show-bin-path)"
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
@@ -16,7 +16,11 @@ mkdir -p "$stage/$name" dist
 for executable in computer-history computer-history-menubar; do
     cp "$bin_dir/$executable" "$stage/$name/$executable"
     strip -S "$stage/$name/$executable"
-    codesign --force --sign - "$stage/$name/$executable"
+    if command -v local-codesign >/dev/null 2>&1; then
+        local-codesign "$stage/$name/$executable"
+    else
+        codesign --force --sign - "$stage/$name/$executable"
+    fi
     codesign --verify "$stage/$name/$executable"
 done
 cp LICENSE "$stage/$name/LICENSE"

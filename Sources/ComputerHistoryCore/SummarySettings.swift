@@ -4,6 +4,8 @@ public struct SummarySettings: Codable, Sendable, Equatable {
     public var tenMinutePrompt: String?
     public var sixHourPrompt: String?
     public var narrativePrompt: String?
+    public var dailyPrompt: String?
+    public var weeklyPrompt: String?
 
     public init() {}
 
@@ -11,12 +13,16 @@ public struct SummarySettings: Codable, Sendable, Equatable {
         case tenMinute = "十分钟记忆"
         case sixHour = "六小时汇总"
         case narrative = "活动整理"
+        case daily = "日报"
+        case weekly = "周报"
 
         public var defaultPrompt: String {
             switch self {
             case .tenMinute: return MemoryGenerator.systemPrompt
             case .sixHour: return MemoryGenerator.sixHourSystemPrompt
             case .narrative: return NarrativeGenerator.systemPrompt
+            case .daily: return ReportKind.daily.prompt
+            case .weekly: return ReportKind.weekly.prompt
             }
         }
     }
@@ -27,6 +33,8 @@ public struct SummarySettings: Codable, Sendable, Equatable {
             case .tenMinute: return tenMinutePrompt ?? stage.defaultPrompt
             case .sixHour: return sixHourPrompt ?? stage.defaultPrompt
             case .narrative: return narrativePrompt ?? stage.defaultPrompt
+            case .daily: return dailyPrompt ?? stage.defaultPrompt
+            case .weekly: return weeklyPrompt ?? stage.defaultPrompt
             }
         }
         set {
@@ -35,6 +43,8 @@ public struct SummarySettings: Codable, Sendable, Equatable {
             case .tenMinute: tenMinutePrompt = override
             case .sixHour: sixHourPrompt = override
             case .narrative: narrativePrompt = override
+            case .daily: dailyPrompt = override
+            case .weekly: weeklyPrompt = override
             }
         }
     }
@@ -45,8 +55,8 @@ public struct SummarySettings: Codable, Sendable, Equatable {
         do {
             let data = try Data(contentsOf: file)
             guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  Set(object.keys).isSubset(of: ["tenMinutePrompt", "sixHourPrompt", "narrativePrompt"]) else {
-                throw SettingsError.invalid("只支持 tenMinutePrompt、sixHourPrompt、narrativePrompt。")
+                  Set(object.keys).isSubset(of: ["tenMinutePrompt", "sixHourPrompt", "narrativePrompt", "dailyPrompt", "weeklyPrompt"]) else {
+                throw SettingsError.invalid("只支持 tenMinutePrompt、sixHourPrompt、narrativePrompt、dailyPrompt、weeklyPrompt。")
             }
             let value = try JSONDecoder().decode(Self.self, from: data)
             try value.validate()
@@ -66,7 +76,7 @@ public struct SummarySettings: Codable, Sendable, Equatable {
 
     private func validate() throws {
         for (name, prompt) in [("tenMinutePrompt", tenMinutePrompt), ("sixHourPrompt", sixHourPrompt),
-                               ("narrativePrompt", narrativePrompt)] {
+                               ("narrativePrompt", narrativePrompt), ("dailyPrompt", dailyPrompt), ("weeklyPrompt", weeklyPrompt)] {
             if let prompt, prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 throw SettingsError.invalid("\(name) 不能为空；恢复默认请删除该字段。")
             }

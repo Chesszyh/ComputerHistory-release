@@ -21,6 +21,8 @@ public struct CollectorConfig: Sendable {
     /// 日志文件大小上限，超出即截断重开。
     public var maxLogBytes: Int
     public var windowTextApplications: [String]
+    public var windowTextDisabledApplications: [String]
+    public var activityWatchEnabled: Bool
 
     public struct Retention: Sendable {
         /// 数据中心（`segments/`）总字节上限。超出后由旧到新删除整个 segment。
@@ -43,13 +45,17 @@ public struct CollectorConfig: Sendable {
         maxNodesPerSnapshot: Int = 4000,
         retention: Retention = .init(),
         maxLogBytes: Int = 8 * 1024 * 1024,
-        windowTextApplications: [String] = []
+        windowTextApplications: [String] = [],
+        windowTextDisabledApplications: [String] = [],
+        activityWatchEnabled: Bool = false
     ) {
         self.policy = policy
         self.maxNodesPerSnapshot = maxNodesPerSnapshot
         self.retention = retention
         self.maxLogBytes = maxLogBytes
         self.windowTextApplications = windowTextApplications
+        self.windowTextDisabledApplications = windowTextDisabledApplications
+        self.activityWatchEnabled = activityWatchEnabled
     }
 
     // MARK: - 持久化
@@ -84,15 +90,24 @@ public struct CollectorConfig: Sendable {
         guard let dict = any as? [String: Any] else {
             throw ConfigError.notAnObject
         }
-        try ConfigValidation.keys(dict, allowed: ["maxNodesPerSnapshot", "maxLogBytes", "retention", "policy", "windowTextApplications"], path: "config")
+        try ConfigValidation.keys(dict, allowed: ["maxNodesPerSnapshot", "maxLogBytes", "retention", "policy", "windowTextApplications", "windowTextDisabledApplications", "activityWatchEnabled"], path: "config")
         var config = CollectorConfig()
         if let n = try ConfigValidation.integer(dict, "maxNodesPerSnapshot", minimum: 1) { config.maxNodesPerSnapshot = n }
         if let n = try ConfigValidation.integer(dict, "maxLogBytes", minimum: 1) { config.maxLogBytes = n }
-        if let raw = dict["windowTextApplications"] {
-            guard let apps = raw as? [String], apps.allSatisfy({ !$0.isEmpty && $0 == $0.trimmingCharacters(in: .whitespacesAndNewlines) }) else {
-                throw ConfigError.invalidField("windowTextApplications", expected: "应用标识字符串数组")
+        for key in ["windowTextApplications", "windowTextDisabledApplications"] {
+            if let raw = dict[key] {
+                guard let apps = raw as? [String], apps.allSatisfy({ !$0.isEmpty && $0 == $0.trimmingCharacters(in: .whitespacesAndNewlines) }) else {
+                    throw ConfigError.invalidField(key, expected: "应用标识字符串数组")
+                }
+                if key == "windowTextApplications" { config.windowTextApplications = apps }
+                else { config.windowTextDisabledApplications = apps }
             }
-            config.windowTextApplications = apps
+        }
+        if let raw = dict["activityWatchEnabled"] {
+            guard let flag = raw as? NSNumber, CFGetTypeID(flag) == CFBooleanGetTypeID() else {
+                throw ConfigError.invalidField("activityWatchEnabled", expected: "布尔值")
+            }
+            config.activityWatchEnabled = flag.boolValue
         }
         if let r = try ConfigValidation.object(dict, "retention") {
             try ConfigValidation.keys(r, allowed: ["maxTotalBytes", "maxAgeDays", "unsummarizedMaxAgeDays"], path: "retention")
@@ -123,6 +138,8 @@ public struct CollectorConfig: Sendable {
             "maxNodesPerSnapshot": maxNodesPerSnapshot,
             "maxLogBytes": maxLogBytes,
             "windowTextApplications": windowTextApplications,
+            "windowTextDisabledApplications": windowTextDisabledApplications,
+            "activityWatchEnabled": activityWatchEnabled,
             "retention": [
                 "maxTotalBytes": retention.maxTotalBytes,
                 "maxAgeDays": retention.maxAgeDays,

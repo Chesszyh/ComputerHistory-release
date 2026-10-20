@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.2 - 2026-10-20
+
+### Features
+- Add daily and weekly reports, Markdown/TXT export, and optional private GitHub backups.
+- Save reusable model groups and select primary and fallback groups independently; retain each group's credentials in macOS Keychain.
+- Fetch available model names and advertised reasoning levels from model services, with manual entry when metadata is unavailable. A blank reasoning level uses the service default.
+- Delete individual timeline summaries and manage them in a persistent trash with restore and permanent removal controls.
+- Optionally read the local ActivityWatch service for current window, URL, and active/idle observations. Preserve source metadata and apply collection filters without importing earlier history.
+
+### Fixes & Improvements
+- Reconnect document accessibility after application launches, retry providers that are still starting, and periodically check the connection.
+- Replace ambiguous OCR application icons with functional checkboxes and keep disabled entries available for re-enabling. Browser toolbar text no longer prevents OCR fallback.
+- Add per-request model fallback, bounded request deadlines, and independent report scheduling so longer reports do not delay recent summaries.
+- Add optional persistent local signing hooks for source builds. Downloaded release binaries remain ad hoc signed and are not notarized.
+
 ## 0.2.1 - 2026-10-17
 
 ### Fixes & Improvements

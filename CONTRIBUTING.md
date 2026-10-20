@@ -4,7 +4,7 @@
 
 ```bash
 swift test
-swift build -c release
+bash scripts/build.sh -c release
 python3 scripts/test-process-control.py .build/debug/computer-history
 python3 scripts/test-process-control.py .build/release/computer-history
 ```
@@ -17,6 +17,8 @@ python3 scripts/test-process-control.py .build/release/computer-history
 
 提交变更时附问题复现、最终行为与实际执行的验证。涉及公开 API 或配置行为变化时同步更新相关文档。
 
+`scripts/build.sh` 构建后会在本机存在 `local-codesign` 时使用持久签名身份签署 CLI 和菜单栏；没有本机签名工具的环境保留 Swift 的默认签名。运行签名工具前应完成其本机证书初始化。正式发布的签名身份与公证沿用发布环境配置。
+
 ## 文本证据与菜单性能验证
 
 模型取材、逐次用量、缓存计费、失败与空输出、预算拦截及分批续跑使用本地模拟服务验证：
@@ -24,6 +26,12 @@ python3 scripts/test-process-control.py .build/release/computer-history
 ```bash
 python3 scripts/test-text-summary.py .build/debug/computer-history
 python3 scripts/test-text-summary.py .build/release/computer-history
+python3 scripts/test-reports.py .build/debug/computer-history
+python3 scripts/test-reports.py .build/release/computer-history
+python3 scripts/test-model-fallback.py .build/debug/computer-history
+python3 scripts/test-model-fallback.py .build/release/computer-history
+python3 scripts/test-scheduling.py .build/debug/computer-history
+python3 scripts/test-scheduling.py .build/release/computer-history
 ```
 
 大数据基准为显式入口，创建并回收约 1.5 GiB 的合成事件；比较完整状态读取与托盘首次、重复加载的耗时，并断言事件读取字节和记忆解析次数。
@@ -49,10 +57,34 @@ bash scripts/test-menubar-panel.sh scripts/test-menubar-usage.swift
 bash scripts/test-menubar-panel.sh scripts/test-menubar-settings.swift
 ```
 
-用量与设置面板用例使用临时合成记录，验证分组及请求详情标题整行点击、详情返回后的展开与滚动位置、提示词保存和恢复默认，以及原生模型／采集表单的编辑、保存和校验；不启动真实采集器、写入密钥或访问模型服务。
+模型列表与服务端推理强度元数据使用本地模型列表接口验证，不调用生成接口或读取真实密钥：
+
+```bash
+python3 scripts/test-menubar-catalog.py
+```
+
+用量与设置面板用例使用临时合成记录，验证分组及请求详情标题整行点击、详情返回后的展开与滚动位置、提示词保存和恢复默认，以及原生模型／采集表单的编辑、保存和校验、总结删除与回收站恢复；不启动真实采集器、写入密钥或访问模型服务。
 
 ## CI 与版本发布
 
 公开仓库的 CI 在 `main` 推送、合并请求和手动触发时运行，使用 Apple Silicon macOS 执行 Debug／Release 单元测试、进程集成、模拟模型和菜单测试。私有样本与大数据基准保持显式启用，不属于常规 CI。
 
 发布前更新 `VERSION`，等待相应提交的 CI 任务通过。CI 附件包含 `scripts/package-release.sh` 从公开源码构建的 Apple Silicon 压缩包。将版本标签指向该提交，创建 Release 并上传同一次 CI 的压缩包；用户下载和启动说明由 `docs/distribution.md` 维护。
+
+报告面板交互使用独立合成材料，检查复制、TXT 导出、备份开关与返回，不访问模型或 GitHub；测试结束恢复剪贴板：
+
+```bash
+bash scripts/test-menubar-panel.sh scripts/test-menubar-reports.swift
+```
+
+`test-reports.py` 使用本地模拟模型和临时 Git 远端，验证日报／周报、分批续跑、失败保留、导出范围及私有备份的启停、失败和远端提交确认。
+
+`test-model-fallback.py` 使用本地模拟接口验证按次降级、独立鉴权、超时和失败提示状态；`test-scheduling.py` 验证新段不等待定时周期，且日报请求阻塞时实时总结仍能完成。合成测试通过 `COMPUTER_HISTORY_NOTIFICATIONS=0` 禁用真实系统通知。
+
+辅助功能连接与正文识别的单元回归包含应用重启、启动尚未完成、工具栏误判和 OCR 开关。可在图形会话中额外启动独立 Chrome 配置及合成网页，连续重启两次验证正文，不关闭现有浏览器实例：
+
+```bash
+bash scripts/test-menubar-panel.sh scripts/test-accessibility-relaunch.swift --chrome-executable "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+```
+
+该测试需要为测试程序提供辅助功能权限，不开启真实采集或调用模型。ActivityWatch 常规测试使用模拟接口，验证本机数据桶选择、过期数据、取消请求、屏蔽规则、区间去重和总结来源标注，不访问正在运行的 ActivityWatch 服务。

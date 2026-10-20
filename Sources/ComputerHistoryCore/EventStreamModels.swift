@@ -26,6 +26,7 @@ public struct EventStreamRecord: Codable, Sendable {
     public var selection: EventStreamSelection?
     public var ax: EventStreamAXTree?
     public var diagnostic: EventStreamDiagnostic?
+    public var activityWatch: ActivityWatchEvidence?
 
     public init(
         id: Int,
@@ -37,7 +38,8 @@ public struct EventStreamRecord: Codable, Sendable {
         keyboard: EventStreamKeyboardInteraction? = nil,
         selection: EventStreamSelection? = nil,
         ax: EventStreamAXTree? = nil,
-        diagnostic: EventStreamDiagnostic? = nil
+        diagnostic: EventStreamDiagnostic? = nil,
+        activityWatch: ActivityWatchEvidence? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -49,6 +51,7 @@ public struct EventStreamRecord: Codable, Sendable {
         self.selection = selection
         self.ax = ax
         self.diagnostic = diagnostic
+        self.activityWatch = activityWatch
     }
 }
 

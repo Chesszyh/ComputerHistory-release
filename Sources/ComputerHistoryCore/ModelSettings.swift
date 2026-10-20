@@ -21,23 +21,26 @@ public struct ModelPricing: Codable, Sendable, Equatable {
 }
 
 public struct ModelSettings: Codable, Sendable {
+    public var credentialGroupID: String?
     public var baseURL: URL
     public var model: String
     public var requiresAPIKey: Bool
-    public var reasoningEffort: String
+    public var reasoningEffort: String?
     public var pricing: ModelPricing?
     public var dailyBudget: Double?
     public var monthlyBudget: Double?
-    public var comparison: ComparisonModelSettings?
+    public var fallback: FallbackModelSettings?
+    public var requestStyle: ChatRequestStyle?
+    public var timeoutSeconds: Double?
 
     public init(baseURL: URL, model: String, requiresAPIKey: Bool = true,
-                reasoningEffort: String = "none", pricing: ModelPricing? = nil,
+                reasoningEffort: String? = nil, pricing: ModelPricing? = nil,
                 dailyBudget: Double? = nil, monthlyBudget: Double? = nil,
-                comparison: ComparisonModelSettings? = nil) {
+                fallback: FallbackModelSettings? = nil, requestStyle: ChatRequestStyle? = nil, timeoutSeconds: Double? = nil) {
         self.baseURL = baseURL; self.model = model; self.requiresAPIKey = requiresAPIKey
         self.reasoningEffort = reasoningEffort; self.pricing = pricing
         self.dailyBudget = dailyBudget; self.monthlyBudget = monthlyBudget
-        self.comparison = comparison
+        self.fallback = fallback; self.requestStyle = requestStyle; self.timeoutSeconds = timeoutSeconds
     }
 
     public static func load(root: URL) throws -> ModelSettings? {
@@ -45,11 +48,14 @@ public struct ModelSettings: Codable, Sendable {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         do {
             let data = try Data(contentsOf: url)
+            if let object = try JSONSerialization.jsonObject(with: data) as? [String: Any], object["groups"] != nil {
+                return try JSONDecoder().decode(ModelGroups.self, from: data).resolved()
+            }
             let value = try JSONDecoder().decode(Self.self, from: data)
             try value.validate()
             return value
         } catch {
-            throw SettingsError.invalid("model.json 无效：\(error.localizedDescription)。请检查模型地址、必填字段和非负单价。")
+            throw SettingsError.invalid("model.json 无效：\(error)。请检查模型地址、必填字段和非负单价。")
         }
     }
 
@@ -61,16 +67,19 @@ public struct ModelSettings: Codable, Sendable {
         try encoder.encode(self).write(to: root.appendingPathComponent("model.json"), options: .atomic)
     }
 
-    private func validate() throws {
+    func validate() throws {
         guard ["http", "https"].contains(baseURL.scheme), baseURL.host != nil,
-              !model.isEmpty, !reasoningEffort.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
+              !model.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
         for number in [pricing?.inputPerMillion, pricing?.cachedInputPerMillion,
                        pricing?.outputPerMillion, dailyBudget, monthlyBudget,
-                       comparison?.pricing.inputPerMillion, comparison?.pricing.cachedInputPerMillion,
-                       comparison?.pricing.outputPerMillion].compactMap({ $0 }) {
+                       fallback?.pricing?.inputPerMillion, fallback?.pricing?.cachedInputPerMillion,
+                       fallback?.pricing?.outputPerMillion].compactMap({ $0 }) {
             guard number.isFinite, number >= 0 else { throw CocoaError(.fileReadCorruptFile) }
         }
-        if let secondary = comparison {
+        for seconds in [timeoutSeconds, fallback?.timeoutSeconds].compactMap({ $0 }) {
+            guard seconds.isFinite, seconds >= 1, seconds <= 600 else { throw SettingsError.invalid("请求超时应为 1 至 600 秒。") }
+        }
+        if let secondary = fallback {
             guard ["http", "https"].contains(secondary.baseURL.scheme), secondary.baseURL.host != nil,
                   !secondary.model.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
         }
@@ -82,9 +91,23 @@ public struct ModelSettings: Codable, Sendable {
     }
 }
 
-public struct ComparisonModelSettings: Codable, Sendable {
+public enum ChatRequestStyle: String, Codable, CaseIterable, Sendable {
+    case standard, reasoning
+    public var label: String { self == .standard ? "常规参数" : "推理参数" }
+}
+
+public struct FallbackModelSettings: Codable, Sendable {
+    public var credentialGroupID: String?
     public var baseURL: URL
     public var model: String
-    public var reasoningEffort: String
-    public var pricing: ModelPricing
+    public var reasoningEffort: String?
+    public var pricing: ModelPricing?
+    public var requiresAPIKey: Bool?
+    public var requestStyle: ChatRequestStyle?
+    public var timeoutSeconds: Double?
+    public init(baseURL: URL, model: String, reasoningEffort: String? = nil, pricing: ModelPricing? = nil,
+                requiresAPIKey: Bool = true, requestStyle: ChatRequestStyle? = nil, timeoutSeconds: Double? = nil) {
+        self.baseURL = baseURL; self.model = model; self.reasoningEffort = reasoningEffort
+        self.pricing = pricing; self.requiresAPIKey = requiresAPIKey; self.requestStyle = requestStyle; self.timeoutSeconds = timeoutSeconds
+    }
 }

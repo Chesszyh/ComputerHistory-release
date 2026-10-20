@@ -40,14 +40,16 @@ public enum AXTreeReader {
     }
 
     static func hasReadableContent(_ roots: [UIElementRender]) -> Bool {
-        if roots.contains(where: { ($0.detailText ?? "").contains("Value:") }) { return true }
-        var pending = roots.flatMap(\.children)
-        while let node = pending.popLast() {
+        func readable(_ node: UIElementRender) -> Bool {
+            let role = node.accessibilityRole ?? node.text
+            // Toolbar titles and address-field values are browser controls, not document text.
+            if ["AXToolbar", "AXTabGroup", "AXMenuBar", "AXMenu", "工具栏", "标签组", "菜单栏", "菜单"].contains(role) { return false }
+            let textRole = ["AXStaticText", "AXTextArea", "AXTextField", "AXComboBox", "文本", "文本区域", "StaticText", "TextArea"].contains(role)
             let detail = node.detailText ?? ""
-            if detail.contains("Value:") || detail.contains("Title:") { return true }
-            pending.append(contentsOf: node.children)
+            if textRole && (detail.contains("Value:") || detail.contains("Title:")) { return true }
+            return node.children.contains(where: readable)
         }
-        return false
+        return roots.contains(where: readable)
     }
 
     // MARK: - 单个元素转换
@@ -105,7 +107,7 @@ public enum AXTreeReader {
             }
         }
         return UIElementRender(id: id, identityPath: "cfhash:\(h)#\(occurrence)",
-                               text: description, detailText: detail, children: children)
+                               text: description, detailText: detail, children: children, accessibilityRole: role)
     }
 
     /// 由 CFHash 与出现序号派生稳定的非负身份值。

@@ -18,6 +18,7 @@ public struct ModelRequest: Codable, Sendable, Equatable, Identifiable {
     public var pricing: ModelPricing?
     public var estimatedCost: Double?
     public var comparisonOf: String? = nil
+    public var fallbackOf: String? = nil
     public var worker: CollectorProcessIdentity? = nil
     public var durationSeconds: Double? = nil
 
@@ -37,8 +38,9 @@ public struct ModelRequest: Codable, Sendable, Equatable, Identifiable {
     public var taskLabel: String {
         let label: String
         switch task { case "10min": label = "十分钟记忆"; case "6h": label = "六小时汇总"
+        case "daily": label = "日报"; case "weekly": label = "周报"
         case "narrative": label = "活动整理"; default: label = task }
-        return comparisonOf == nil ? label : "对照 · " + label
+        return fallbackOf != nil ? "降级 · " + label : (comparisonOf == nil ? label : "历史对照 · " + label)
     }
     public var statusLabel: String {
         if status == "running" {
@@ -52,13 +54,6 @@ public struct ModelRequest: Codable, Sendable, Equatable, Identifiable {
         guard let cost = estimatedCost, let pricing else { return "费用未知" }
         return "\(pricing.currency) " + String(format: "%.4f", cost)
     }
-}
-
-/// 主结果写出后，CLI 在正常退出前等待对照请求，避免子进程提前结束丢失对照输出。
-public enum ModelComparison {
-    static let pending = DispatchGroup()
-    static let queue = DispatchQueue(label: "computer-history.model-comparison", qos: .utility)
-    public static func waitForPendingRequests() { pending.wait() }
 }
 
 /// 只缓存列表字段；请求正文按需读取，刷新不会常驻所有输入和输出。

@@ -63,41 +63,60 @@ public struct ModelSettingsDraft: Sendable {
     public var pricing: PricingDraft
     public var dailyBudget: String
     public var monthlyBudget: String
-    public var hasComparison: Bool
-    public var comparisonURL: String
-    public var comparisonModel: String
-    public var comparisonReasoning: String
-    public var comparisonPricing: PricingDraft
+    public var requestStyle: ChatRequestStyle
+    public var timeoutSeconds: String
+    public var fallbackRequiresAPIKey: Bool
+    public var fallbackRequestStyle: ChatRequestStyle
+    public var fallbackTimeoutSeconds: String
+    public var hasFallback: Bool
+    public var fallbackURL: String
+    public var fallbackModel: String
+    public var fallbackReasoning: String
+    public var fallbackPricing: PricingDraft
 
     public init(_ settings: ModelSettings? = nil, environment: [String: String] = ProcessInfo.processInfo.environment) {
         baseURL = settings?.baseURL.absoluteString ?? environment["DEEPSEEK_BASE_URL"] ?? DeepSeekClient.defaultBaseURL.absoluteString
         model = settings?.model ?? environment["DEEPSEEK_MODEL"] ?? DeepSeekClient.defaultModel
         requiresAPIKey = settings?.requiresAPIKey ?? true
-        reasoningEffort = settings?.reasoningEffort ?? "none"
+        reasoningEffort = settings?.reasoningEffort ?? ""
         hasPricing = settings?.pricing != nil
         pricing = PricingDraft(settings?.pricing)
         dailyBudget = settings?.dailyBudget.map(String.init(describing:)) ?? ""
         monthlyBudget = settings?.monthlyBudget.map(String.init(describing:)) ?? ""
-        hasComparison = settings?.comparison != nil
-        comparisonURL = settings?.comparison?.baseURL.absoluteString ?? "http://127.0.0.1:11434/v1"
-        comparisonModel = settings?.comparison?.model ?? ""
-        comparisonReasoning = settings?.comparison?.reasoningEffort ?? "none"
-        comparisonPricing = PricingDraft(settings?.comparison?.pricing)
+        requestStyle = settings?.requestStyle ?? .standard
+        timeoutSeconds = String(settings?.timeoutSeconds ?? 60)
+        fallbackRequiresAPIKey = settings?.fallback?.requiresAPIKey != false
+        fallbackRequestStyle = settings?.fallback?.requestStyle ?? .standard
+        fallbackTimeoutSeconds = String(settings?.fallback?.timeoutSeconds ?? 45)
+        hasFallback = settings?.fallback != nil
+        fallbackURL = settings?.fallback?.baseURL.absoluteString ?? DeepSeekClient.defaultBaseURL.absoluteString
+        fallbackModel = settings?.fallback?.model ?? ""
+        fallbackReasoning = settings?.fallback?.reasoningEffort ?? ""
+        fallbackPricing = PricingDraft(settings?.fallback?.pricing)
+    }
+
+    private func requestTimeout(_ text: String) throws -> Double {
+        guard let value = Double(text), value.isFinite, value >= 1, value <= 600 else {
+            throw ConfigurationInputError.invalid("请求超时应为 1 至 600 秒。")
+        }
+        return value
     }
 
     public func value() throws -> ModelSettings {
         let name = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, !reasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw ConfigurationInputError.invalid("请填写模型名称和思考强度。")
+        guard !name.isEmpty else {
+            throw ConfigurationInputError.invalid("请填写模型名称。")
         }
-        var comparison: ComparisonModelSettings?
-        if hasComparison {
-            let secondary = comparisonModel.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !secondary.isEmpty, !comparisonReasoning.isEmpty else {
-                throw ConfigurationInputError.invalid("请填写对照模型名称和思考强度。")
+        var fallback: FallbackModelSettings?
+        if hasFallback {
+            let secondary = fallbackModel.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !secondary.isEmpty else {
+                throw ConfigurationInputError.invalid("请填写备用模型名称。")
             }
-            comparison = try ComparisonModelSettings(baseURL: serviceURL(comparisonURL, label: "对照服务地址"),
-                model: secondary, reasoningEffort: comparisonReasoning, pricing: comparisonPricing.value())
+            fallback = try FallbackModelSettings(baseURL: serviceURL(fallbackURL, label: "降级服务地址"),
+                model: secondary, reasoningEffort: fallbackReasoning.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty, pricing: fallbackPricing.value(),
+                requiresAPIKey: fallbackRequiresAPIKey, requestStyle: fallbackRequestStyle,
+                timeoutSeconds: requestTimeout(fallbackTimeoutSeconds))
         }
         let daily = try number(dailyBudget, label: "每日预算", optional: true)
         let monthly = try number(monthlyBudget, label: "每月预算", optional: true)
@@ -105,9 +124,9 @@ public struct ModelSettingsDraft: Sendable {
             throw ConfigurationInputError.invalid("设置预算前，请先开启费用估算并填写单价。")
         }
         return try ModelSettings(baseURL: serviceURL(baseURL, label: "服务地址"), model: name,
-            requiresAPIKey: requiresAPIKey, reasoningEffort: reasoningEffort,
+            requiresAPIKey: requiresAPIKey, reasoningEffort: reasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             pricing: hasPricing ? pricing.value() : nil, dailyBudget: daily, monthlyBudget: monthly,
-            comparison: comparison)
+            fallback: fallback, requestStyle: requestStyle, timeoutSeconds: requestTimeout(timeoutSeconds))
     }
 }
 
@@ -120,6 +139,8 @@ public struct CollectorSettingsDraft: Sendable {
     public var blockedDomains: String
     public var forcedBlockedDomains: String
     public var windowTextApplications: [String]
+    public var windowTextDisabledApplications: [String]
+    public var activityWatchEnabled: Bool
     public var maxTotalMB: String
     public var maxAgeDays: String
     public var unsummarizedDays: String
@@ -135,6 +156,8 @@ public struct CollectorSettingsDraft: Sendable {
         blockedDomains = config.policy.blocklist.filter { $0.scope == .url }.compactMap(\.urlDomain).joined(separator: "\n")
         forcedBlockedDomains = config.policy.forcedBlockedDomains.joined(separator: "\n")
         windowTextApplications = config.windowTextApplications
+        windowTextDisabledApplications = config.windowTextDisabledApplications
+        activityWatchEnabled = config.activityWatchEnabled
         maxTotalMB = String(Double(config.retention.maxTotalBytes) / 1_048_576)
         maxAgeDays = String(config.retention.maxAgeDays)
         unsummarizedDays = String(config.retention.unsummarizedMaxAgeDays)
@@ -162,8 +185,13 @@ public struct CollectorSettingsDraft: Sendable {
             retention: .init(maxTotalBytes: bytes(maxTotalMB, label: "记录容量", minimum: 0),
                 maxAgeDays: integer(maxAgeDays, label: "保留天数"),
                 unsummarizedMaxAgeDays: integer(unsummarizedDays, label: "未总结记录保留天数")),
-            maxLogBytes: bytes(maxLogMB, label: "日志容量", minimum: 1), windowTextApplications: windowTextApplications)
+            maxLogBytes: bytes(maxLogMB, label: "日志容量", minimum: 1), windowTextApplications: windowTextApplications,
+            windowTextDisabledApplications: windowTextDisabledApplications, activityWatchEnabled: activityWatchEnabled)
         do { return try CollectorConfig.decode(from: config.jsonData()) }
         catch { throw ConfigurationInputError.invalid("请检查应用名单和网站域名；网站只填写域名，例如 example.com。") }
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

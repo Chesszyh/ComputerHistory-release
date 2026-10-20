@@ -27,7 +27,9 @@ AX 节点身份使用 `CFHash` 加同哈希出现序号。哈希碰撞或碰撞�
 
 当前公开 AX 读取没有提供通用的输入法组合状态，保持未知。轮询之间出现又消失的文字可能遗漏；已经落盘的拼音不会被原地改写。后续编辑覆盖了已记录区域时，`keyboard.textReplaces` 保存被覆盖事件的 `段ID#事件ID` 来源，派生摘要会标明旧片段已被部分或全部替换。
 
-在 macOS 14 或更高版本上，`windowTextApplications` 中的前台应用没有可读的辅助功能正文时，可用 ScreenCaptureKit 捕获该应用的单个窗口，并由系统 Vision 执行 OCR（光学字符识别）。默认不启用；需屏幕录制权限，缺少权限时在 `collector.log` 报错，不自动弹出授权或退回整屏截图。采集前应用观测策略，仅处理当前获得焦点的应用；每次识别结束后至少间隔三十秒再读取，不处理后台缩略窗口。截图只在内存中使用，不保存图像；识别文本可能有错字，按界面内容保存，不当作用户输入或播放结果。该功能会增加本地计算开销。
+Chrome 在新进程开始采样时会重新建立辅助功能连接；读取应用的 `AXRole` 后，请求 `AXEnhancedUserInterface` 启用 Chromium 的完整正文树，并尝试 Electron 的 `AXManualAccessibility`。应用尚未准备好时继续重试，运行中定期检查连接；这些请求在观测策略允许后执行。应用仍可能不提供正文，不能保证所有应用或版本可读。
+
+在 macOS 14 或更高版本上，`windowTextApplications` 中的前台应用没有可读的辅助功能正文时，可用 ScreenCaptureKit 捕获该应用的单个窗口，并由系统 Vision 执行 OCR（光学字符识别）。默认不启用；在采集设置的应用列表中添加并勾选，取消勾选后保留条目，保存后自动生效。工具栏和地址栏不作为正文阻止识别。需屏幕录制权限，缺少权限时在 `collector.log` 报错，不自动弹出授权或退回整屏截图。采集前应用观测策略，仅处理当前获得焦点的应用；每次识别结束后至少间隔三十秒再读取，不处理后台缩略窗口。截图只在内存中使用，不保存图像；识别文本可能有错字，按界面内容保存，不当作用户输入或播放结果。该功能会增加本地计算开销。
 
 窗口文字事件仍使用 `window.changed`，`ax.source: "window_ocr"` 标明来源，原有辅助功能事件省略此字段。暂停、应用或窗口切换、锁屏和停止会作废尚未返回的识别结果；重复正文不反复写入。macOS 13 继续使用辅助功能采集，不提供这一窗口识别路径。
 
@@ -37,6 +39,14 @@ AX 节点身份使用 `CFHash` 加同哈希出现序号。哈希碰撞或碰撞�
 
 `FrontmostApplication.secureInputState()` 返回未知；本实现未检测安全输入模式。域名规则依赖窗口实际提供的 URL（统一资源定位符），读不到地址时不能据此识别敏感网站或隐私浏览。
 
+## ActivityWatch 补充来源
+
+在“设置 → 总结提示词与配置 → 采集 → ActivityWatch”启用后，采集器每十五秒只读访问本机 `http://127.0.0.1:5600/api/0/`，读取服务器对应主机的 `currentwindow` 与 `afkstatus` 最新各一条记录。不修改 ActivityWatch、不导入启用前的历史，不访问其他主机的数据桶；服务不可用时记录错误并继续原有采集。
+
+只接受与当前前台应用匹配的窗口记录，并沿用应用和网站屏蔽规则。暂停、锁屏及关闭接入会停止读取并丢弃未完成请求。过期记录不采用，观测时间裁剪到本次启用或恢复之后，重复轮询不重复累计区间。
+
+补充记录使用 `window.changed` 和独立的 `activityWatch` 字段，保留窗口／空闲来源桶、事件编号、观测区间及 `afk`／`not-afk` 状态，`ax` 为空。总结材料会注明 ActivityWatch 来源；它提供应用、窗口、网址和空闲信息，不提供网页正文，也不证明用户阅读、编辑或完成了操作。空闲状态与系统锁屏的“离开电脑”分别记录。
+
 ## 配置
 
 `<数据目录>/config.json` 缺失时自动创建模板。默认值以 [CollectorConfig.swift](../Sources/ComputerHistoryCore/CollectorConfig.swift) 的初始化器和 [ObservationPolicy.swift](../Sources/ComputerHistoryCore/ObservationPolicy.swift) 的 `conservative` 为准。
@@ -45,7 +55,9 @@ AX 节点身份使用 `CFHash` 加同哈希出现序号。哈希碰撞或碰撞�
 |---|---|
 | `maxNodesPerSnapshot` | 单帧最大节点数，正整数 |
 | `maxLogBytes` | 监督进程日志上限，正整数 |
-| `windowTextApplications` | 允许本地窗口文字识别的应用标识数组，默认空；例如 `["com.netease.163music"]` |
+| `windowTextApplications` | 窗口文字识别列表的应用标识数组，默认空；例如 `["com.netease.163music"]` |
+| `windowTextDisabledApplications` | 列表中取消勾选的应用标识，默认空；不识别这些应用，但保留界面条目 |
+| `activityWatchEnabled` | 是否读取本机 ActivityWatch 的当前窗口与空闲记录，默认 `false` |
 | `retention.maxTotalBytes` | 可识别段的总量目标；0 禁用容量清理 |
 | `retention.maxAgeDays` | 按目录时间戳判断的保留天数；0 禁用年龄清理 |
 | `retention.unsummarizedMaxAgeDays` | 未生成记忆或模型失败的段允许延长保留的天数；仍受容量目标约束 |
@@ -60,7 +72,7 @@ AX 节点身份使用 `CFHash` 加同哈希出现序号。哈希碰撞或碰撞�
 
 文件读取失败、JSON（JavaScript Object Notation）语法损坏、顶层不是对象或字段校验失败时，采集和监督启动失败，保留原文件供修复。运行中修改配置的生效方式见[模型与用量配置](#模型与用量配置)。
 
-`control.json` 保存 `recording`、`summarizing`、`flushRequested`。文件缺失时前两项默认开启；无法读取或解析时暂停两项。记录开关在采样周期读取，总结开关限制新任务排队，已经排队或执行的任务可继续完成。`--no-model` 对监督派生的全部生成任务有效。`--memorize-interval 0` 关闭定时生成，但仍允许手动请求。
+`control.json` 保存 `recording`、`summarizing`、`flushRequested`。文件缺失时前两项默认开启；无法读取或解析时暂停两项。记录开关在采样周期读取，总结开关限制新任务排队，已经排队或执行的任务可继续完成。新事件段封口后触发实时队列，定时周期用于补漏和重试；默认优先处理最近的积压段，每个批次仍按时间顺序建立引用。记忆与时间线串行生成，日报／周报和备份在独立的后台队列执行，不阻塞下一段实时总结。`--no-model` 对监督派生的全部生成任务有效。`--memorize-interval 0` 关闭定时生成，但仍允许手动请求。
 
 ## 文件与生命周期
 
@@ -68,8 +80,9 @@ AX 节点身份使用 `CFHash` 加同哈希出现序号。哈希碰撞或碰撞�
 <data-root>/
   config.json
   control.json
-  model.json             # 可选模型设置，不含密钥
-  summary.json           # 可选的三阶段系统提示词覆盖
+  model.json             # 可选模型组与主备选择，不含密钥
+  timeline-deletions.json # 从时间线删除的总结标识
+  summary.json           # 可选的总结提示词覆盖
   requests/*.json        # 逐次请求、用量和单价快照
   collector.lock
   collector.pid
@@ -80,6 +93,13 @@ AX 节点身份使用 `CFHash` 加同哈希出现序号。哈希碰撞或碰撞�
     metadata.json
   memories/*.md
   narrative.json
+  reports/daily/*.json    # 日报与对应材料
+  reports/weekly/*.json   # 周报与对应材料
+  reports/work/*.json     # 分批生成的续跑缓存
+  exports/               # 可读文本；预览位于 previews/
+  backup.json            # 可选的 GitHub 私有备份设置
+  backup-status.json     # 最近成功提交与错误
+  .github-backup/         # 独立数据仓库的本地副本
 ```
 
 JSONL（逐行 JSON）事件逐条追加。时间段按 UTC（协调世界时）边界对齐；时长由 `SegmentClock.durationSeconds` 定义。轮转在写入新事件时触发，静默期和暂停期间不会仅因时钟到点就封口。事件编号在同一采集会话内连续，重启重新开始。
@@ -110,9 +130,37 @@ JSONL（逐行 JSON）事件逐条追加。时间段按 UTC（协调世界时）
 
 总结优先概括交流、阅读和写作内容，省略光标移动、普通快捷键、输入提示和通用完成反馈。取材排除仅含节点编号、控件类型或内部菜单标识的结构，不把节点编号当成窗口数量；只有应用或空窗口时说明未读取到有效正文，不据此推断播放、阅读等行为。长文本保留有界的较完整片段，时序证据用于识别纠错、重命名和导出；相似文件名本身不证明它们是同一文件。
 
-六小时汇总使用十分钟记忆中的活动正文。叙述层每批最多整理四份记忆，每批落盘后再继续；一次请求失败不撤销已完成批次，增量续跑只处理尚未覆盖的来源。模型输出仍是派生内容。缺少模型时可生成事实版本；模型失败或输出截断会标记失败，后续周期重试。显式 `--overwrite` 可重做已有记忆。
+六小时汇总仅保留手动命令与已有记录读取，使用十分钟记忆中的活动正文。叙述层每批最多整理四份记忆，每批落盘后再继续；一次请求失败不撤销已完成批次，增量续跑只处理尚未覆盖的来源。模型输出仍是派生内容。缺少模型时可生成事实版本；模型失败或输出截断会标记失败，后续周期重试。显式 `--overwrite` 可重做已有记忆。
 
 `verify` 检查能由现存段映射到的十分钟记忆引用，不验证所有数据完整性、模型事实正确性或已经清理的原始段。段内首末事件跨度也不是精确活动时长。
+
+## 报告、导出与备份
+
+日报按本地自然日，周报按本地周一至周日划分。报告保存其生成时区。监督进程每轮在十分钟记忆、时间线整理之后补齐已结束时段的报告，每轮上限见 `ReportGenerator.generateMissing`。错过的日期在后续运行补齐；尚未封口、缺少记忆或生成失败的来源会等待后续周期重试。当天或本周的手动生成显示“截至当前”，时段结束后重新生成正式报告。来源变化会更新报告，旧原始记忆不被改写。
+
+日报取十分钟记忆的活动正文；缺少模型活动正文时使用已有记忆的事实摘录。周报使用完整日报，手动生成周报会先补齐所需日报。报告材料不混入此前记忆、用户特征小节、原始时序证据和本地引用路径。普通报告一次请求生成，超过 `ReportGenerator.materialBatchLimit` 的材料才分批并合并，已完成批次保存后可续跑；模型失败、空输出或截断不替换已有报告。全部模型请求沿用 `model.json`、钥匙串、预算及请求台账。`--no-model` 只生成活动材料版报告。
+
+菜单栏“日报、周报与导出”提供报告类型和日期选择、生成／重新生成、复制报告、复制给 AI 的材料及 Markdown／TXT 导出。复制材料和导出不调用模型，也不受时间线分页条数限制。TXT 导出移除标题标记、粗体和反引号，保留完整文字。
+
+```bash
+computer-history report --day 2026-10-18
+computer-history report --kind weekly --day 2026-10-18
+computer-history report                         # 补齐已结束的日报／周报
+computer-history export --day 2026-10-18 --copy
+computer-history export --day 2026-10-18 --material --format txt --file material.txt
+```
+
+GitHub 私有备份默认关闭。先使用 GitHub CLI（`gh`）登录并创建独立私有数据仓库，再在“设置 → 总结提示词与配置 → 备份”填写 `owner/repository`、开启并保存；设置区的“GitHub 私有备份”开关直接启停已保存的配置。`backup.json` 保存 `repository` 与 `enabled`，下一次任务读取；关闭后不会启动新的上传，已经开始的任务可能继续完成。不会创建仓库或改变仓库可见性。
+
+```bash
+gh auth login
+gh repo create <owner>/<data-repository> --private
+computer-history backup --repository <owner>/<data-repository>  # 配置并启用，不立即上传
+computer-history backup                                       # 手动上传
+computer-history backup --disable                             # 关闭自动和手动上传
+```
+
+启用后监督进程每天首次备份成功后跳过当天后续自动任务；失败后下一周期重试。手动“立即备份”读取已保存的设置。上传前检查仓库为私有，使用独立本地副本，只提交 `archive/activities`、`archive/daily`、`archive/weekly` 下的 Markdown。预览、原始事件、完整记忆文件、配置、请求台账、日志和分批缓存不上传。备份更新不传播本地清理造成的删除，不强制推送；远端分叉会报错。成功状态需在推送后核对远端提交。`backup-status.json` 和备份设置页显示最近成功时间或错误。导出目录和备份不受事件段清理策略管理。
 
 ## 菜单栏读取
 
@@ -121,15 +169,24 @@ JSONL（逐行 JSON）事件逐条追加。时间段按 UTC（协调世界时）
 记忆索引按文件大小、修改时间和文件身份复用解析结果；列表快照只持有展示字段，详情按需后台读取。刷新请求会合并，文件读取与跨进程窗口查询不在主线程执行。菜单栏也支持 `--out <目录>`，独立目录使用独立实例锁；默认目录与 CLI 相同。
 
 
+### 删除时间线总结
+
+右键总结行选择“删除总结”，或在展开概要后点击“删除总结”。删除后在面板底部的“回收站”查看标题、全文、活动时段、删除时间、应用与来源，并逐条恢复或彻底删除。回收站和恢复后的消息快照保存在 `timeline-deletions.json`，刷新、重启或重新生成后仍保留。旧版只有删除标识的记录会尽可能从现有缓存补齐详情；来源已不存在时标为不可用。
+
+恢复可使用保存的消息快照，不要求生成缓存仍然存在。彻底删除会移除回收站条目和该快照，并保留不含正文的标识防止同一条重新出现；原始活动、来源记忆和独立生成缓存保留，日报与周报的取材范围不变。离开电脑的时间段不提供此操作。
+
+
 ## 模型与用量配置
 
-菜单栏“设置 → 总结提示词与配置”可分别编辑十分钟记忆、六小时汇总和活动整理的完整系统提示词。“恢复默认”先载入内置提示词，点击“保存”后生效；默认提示词仍由对应生成器维护。自定义提示词需保留内置提示词中的输出格式，以便解析。
+菜单栏“设置 → 总结提示词与配置”可分别编辑十分钟记忆、活动整理、日报和周报的完整系统提示词。“恢复默认”先载入内置提示词，点击“保存”后生效；默认提示词仍由对应生成器维护。自定义提示词需保留内置提示词中的输出格式，以便解析。
 
-覆盖值保存在 `<数据目录>/summary.json` 的 `tenMinutePrompt`、`sixHourPrompt` 和 `narrativePrompt` 字段；省略字段使用内置提示词，保存默认文本时会移除该覆盖值。空白提示词、未知字段、错误类型或损坏的文件会报错，不继续发起对应模型请求。无模型生成不依赖该文件。
+覆盖值保存在 `<数据目录>/summary.json` 的 `tenMinutePrompt`、`narrativePrompt`、`dailyPrompt` 和 `weeklyPrompt` 字段；旧的 `sixHourPrompt` 仍供手动六小时汇总使用。省略字段使用内置提示词，保存默认文本时会移除该覆盖值。空白提示词、未知字段、错误类型或损坏的文件会报错，不继续发起对应模型请求。无模型生成不依赖该文件。
 
 生成任务启动后读取提示词设置，已经执行的任务继续使用其原提示词；修改不追溯重写历史。请求详情中的“系统提示词”显示该次实际发送的版本。
 
-设置页的“模型”表单可编辑服务地址、模型名称、密钥、思考强度、单价、预算与对照模型；下一次生成任务读取保存后的设置。密钥使用密码框输入，留空保留已有密钥，保存在按数据目录区分的 macOS 钥匙串项目中，不写入 JSON。已存密钥优先于 `DEEPSEEK_API_KEY`；移除已存密钥后仍可使用环境变量。无需密钥的服务不会读取或发送密钥。
+设置页的“模型”使用统一的模型组表单：每组保存名称、服务地址、模型名称、请求格式、推理强度、超时、单价和独立密钥。新增后可分别选择主模型组与备用模型组，也可关闭备用；编辑组与实际使用组分别选择，未启用的组仍保留配置。主备不能选择同一组，删除正在使用的组前需先更换选择。所有修改点击“保存”后供下一次生成任务读取。密钥使用密码框输入，留空保留已有密钥，按数据目录和组标识保存在 macOS 钥匙串中，不写入 JSON；交换主备时密钥跟随组。
+
+“从服务获取模型”只在点击时读取该组服务的 `GET /models`，携带该组需要的认证，不发送历史活动或提示词。服务返回模型后使用列表选择；不支持接口、读取失败或需要列表以外的模型时可手动填写。若所选模型返回 `effort.supported_levels` 和 `effort.default_level`，界面显示服务提供的强度与默认值；否则仅保留自由输入，不预设各厂商的等级。
 
 “采集”表单可选择记录或排除的应用、网站域名和文字识别应用，并修改保留策略。应用通过选择器添加，无需填写应用标识。运行中的采集器在采样前检查配置变化，应用有效配置时重建文本基线并丢弃旧缓冲；无效配置会报错并继续使用上次有效设置。新保留限制在下次清理时使用，日志容量上限在监督进程下次启动时读取。
 
@@ -137,14 +194,48 @@ JSONL（逐行 JSON）事件逐条追加。时间段按 UTC（协调世界时）
 
 生成任务每次启动时读取数据目录中的 `model.json`。文件存在时优先使用其中设置；不存在时使用 README 中的 DeepSeek 环境变量。错误配置不会切换到其他模型服务。
 
-Ollama 服务示例；跨机器使用时将地址改为模型机器的可达地址，模型名须与服务端创建的名称一致：
+模型组均使用 OpenAI 兼容的 `/chat/completions`，项目不管理订阅登录、账号池或 provider 转换。使用网关时填写其兼容接口地址与模型名即可。`requestStyle` 为 `standard` 时发送 `max_tokens` 和 `temperature`；为 `reasoning` 时发送 `max_completion_tokens` 并省略采样温度，为思考和正文一起预留输出预算。预算计算见 `DeepSeekClient.completeAttempt`。请求格式仅控制这些参数，不代表开启或关闭推理。`reasoningEffort` 可省略或留空，此时不发送 `reasoning_effort`，使用服务端默认值；填写时原样发送接口支持的强度，不转换厂商命名；`timeoutSeconds` 可设为 1 至 600 秒，限制单次模型尝试的总耗时；网关的保活数据不会延长此上限。
+
+`model.json` 的 `groups` 是同一格式的模型组列表，每组的 `id` 必须唯一且保持稳定，`name` 用于界面展示；其余字段由 `ModelGroup` 定义。`primaryGroupID` 指向主组，`fallbackGroupID` 指向另一个组，省略或设为 `null` 时关闭备用。预算 `dailyBudget`、`monthlyBudget` 位于顶层，以主组单价的币种计费。下例可直接作为配置格式参考：
+
+```json
+{
+  "groups": [
+    {
+      "id": "cloud",
+      "name": "云端模型",
+      "baseURL": "https://api.deepseek.com",
+      "model": "deepseek-flash",
+      "requiresAPIKey": true,
+      "requestStyle": "standard",
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "local",
+      "name": "本地模型",
+      "baseURL": "http://127.0.0.1:11434/v1",
+      "model": "computer-history-qwen3.5-4b",
+      "requiresAPIKey": false,
+      "requestStyle": "standard",
+      "timeoutSeconds": 60
+    }
+  ],
+  "primaryGroupID": "cloud",
+  "fallbackGroupID": "local"
+}
+```
+
+旧的单模型加 `fallback` 配置仍可读取；首次在界面保存时转为 `legacy-primary`、`legacy-fallback` 两个组，并沿用旧钥匙串项目，无需重新输入密钥。读取配置本身不会改写文件。主模型失败、超时、响应格式错误、空输出或截断时，才使用同一材料请求一次备用模型；不会持久切换主组。达到预算时停止请求，不通过备用绕过预算。`model-key [--fallback]` 从标准输入保存当前所选组的密钥，不回显内容。组内已存密钥优先，缺失时主组可读取 `DEEPSEEK_API_KEY`、备用组可读取 `COMPUTER_HISTORY_FALLBACK_API_KEY`；无需密钥的组不读取或发送密钥。
+
+请求台账的 `fallbackOf` 将降级尝试关联到失败的主请求，分别保留实际用量和费用。历史 `comparisonOf` 仍可读取；旧配置中的 `comparison` 不再发起并行请求，保存模型设置时移除。所有尝试均失败时，生成命令返回非零退出码并保留失败事实版，`model-health.json` 保存错误，主面板显示失败入口并发送系统通知；重复故障通知有间隔限制。主模型失败但降级成功时不发送故障通知。
+
+旧格式的 Ollama 单模型配置示例（也可在上面的统一模型组中填写相同字段）；跨机器使用时填写模型机器的可达地址：
 
 ```json
 {
   "baseURL": "http://127.0.0.1:11434/v1",
   "model": "computer-history-qwen3.5-4b",
   "requiresAPIKey": false,
-  "reasoningEffort": "none",
   "pricing": {
     "currency": "CNY",
     "inputPerMillion": 0,
@@ -162,9 +253,8 @@ PARAMETER num_ctx 16384
 PARAMETER num_predict 2400
 ```
 
-可选 `comparison` 将同一份输入并行发送到另一个无密钥模型服务，仅记录对照请求，不参与正式记忆和时间线。其字段为 `baseURL`、`model`、`reasoningEffort`、`pricing`，含义与主服务相同。对照请求的 `comparisonOf` 指向正式请求标识，在用量面板中标为“对照”；即使对照请求失败，正式结果仍正常写出。CLI 会在退出前等待对照请求结束，避免进程退出丢失结果。
 
-`requiresAPIKey: true` 优先读取该数据目录在钥匙串中保存的密钥，没有时读取 `DEEPSEEK_API_KEY`；密钥不写入配置和请求记录。`reasoningEffort` 默认为本项目约定的非思考请求值 `none`，配置中需显式提供。服务需支持 `/chat/completions`、文本消息和该模型的思考参数。
+`requiresAPIKey: true` 优先读取该数据目录在钥匙串中保存的密钥，没有时读取 `DEEPSEEK_API_KEY`；密钥不写入配置和请求记录。`reasoningEffort` 留空或省略时使用服务端默认值；已有的显式配置（包括 `none`）继续保留。服务需支持 `/chat/completions`、文本消息和该模型的思考参数。
 
 `pricing` 可省略，此时显示费用未知。单价单位为每百万 token，按输入未缓存、输入缓存命中和输出分别计算；思考 token 是输出的子集，不重复计费。零单价表示模型 API 费用为零，不包含设备运行成本。单价由使用者按服务账户配置；记录保存请求时的单价，调整后不会追溯改变旧请求。面板显示估算费用，服务商折扣、时段价格和账单以实际账户为准。
 

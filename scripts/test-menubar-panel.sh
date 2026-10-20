@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-swift build -c release
+bash scripts/build.sh -c release
 bin_dir="$(swift build -c release --show-bin-path)"
 test_dir="$(mktemp -d)"
 trap 'rm -rf "$test_dir"' EXIT
@@ -16,5 +16,9 @@ swiftc -parse-as-library -I "$modules" \
     Sources/computer-history-menubar/StatusModel.swift \
     Sources/computer-history-menubar/StatusPanel.swift \
     Sources/computer-history-menubar/SettingsPane.swift \
+    Sources/computer-history-menubar/ReportsPane.swift \
     "${1:-scripts/test-menubar-panel.swift}" "${objects[@]}" -o "$test_dir/panel-test"
-"$test_dir/panel-test"
+if command -v local-codesign >/dev/null 2>&1; then
+    local-codesign --identifier xyz.chesszyh.computer-history.panel-test "$test_dir/panel-test"
+fi
+"$test_dir/panel-test" "${@:2}"

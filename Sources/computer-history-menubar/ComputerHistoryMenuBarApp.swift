@@ -10,8 +10,7 @@ import ComputerHistoryCore
 ///      面向排查问题；
 ///   3. **历史活动**——按天分组的时间线，来自已生成的记忆文件。
 ///
-/// 不做任何网络请求，全部读取本地采集目录。因此托盘开着也不会产生额外流量，
-/// 记忆生成仍由采集器的监督进程按周期触发。
+/// 界面刷新只读取本地；用户明确生成报告或备份时由命令行入口执行网络任务。
 @main
 struct ComputerHistoryMenuBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate

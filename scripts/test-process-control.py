@@ -10,6 +10,8 @@ import sys
 import tempfile
 import time
 
+os.environ["COMPUTER_HISTORY_NOTIFICATIONS"] = "0"
+
 binary = Path(sys.argv[1] if len(sys.argv) > 1 else ".build/debug/computer-history").resolve()
 
 
@@ -247,12 +249,15 @@ with tempfile.TemporaryDirectory(prefix="collector-offline-") as directory:
             wait_for_record(root, supervisor, supervisor=True)
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
-                if "生成任务完成：叙述层" in (root / "supervisor-test.log").read_text():
+                if "生成任务完成：GitHub 私有备份" in (root / "supervisor-test.log").read_text():
                     break
                 time.sleep(0.1)
             else:
                 raise AssertionError("offline generation cycle did not complete")
             assert list((root / "memories").glob("*-10min-memory-summary.md"))
+            assert not list((root / "memories").glob("*-6h-memory-summary.md")), "six-hour summaries must not be scheduled"
+            assert list((root / "reports" / "daily").glob("*.json")), "offline daily report was not generated"
+            assert list((root / "reports" / "weekly").glob("*.json")), "offline weekly report was not generated"
             assert ModelProbe.requests == 0, "--no-model allowed an HTTP request"
             rewritten = command(root, "memorize", "--segment", segment_id, "--overwrite", "--no-model")
             assert rewritten.returncode == 0, rewritten.stderr

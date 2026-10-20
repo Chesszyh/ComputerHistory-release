@@ -18,6 +18,57 @@ final class WindowTextTests: XCTestCase {
         XCTAssertTrue(AXTreeReader.hasReadableContent([.init(id: 1, text: "文本", detailText: "Value: Synthetic song")]))
     }
 
+    func testBrowserChromeDoesNotPreventOCRFallback() {
+        let toolbar = UIElementRender(id: 2, text: "工具栏", children: [
+            .init(id: 3, text: "按钮", detailText: "Title: Reload"),
+            .init(id: 4, text: "文本栏", detailText: "Value: https://example.test")])
+        let shell = UIElementRender(id: 1, text: "窗口", children: [toolbar])
+        XCTAssertFalse(AXTreeReader.hasReadableContent([shell]), "Browser toolbar and address bar are not page body")
+        let document = UIElementRender(id: 5, text: "网页区域", children: [
+            .init(id: 6, text: "文本", detailText: "Value: Synthetic document body")])
+        XCTAssertTrue(AXTreeReader.hasReadableContent([shell, document]))
+    }
+
+    func testActivationReconnectsAfterRelaunchAndRetriesWithoutPerFrameRequests() {
+        var activation = AccessibilityActivation()
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        var requests = 0
+        for tick in 0..<30 {
+            activation.prepare(pid: 42, launchedAt: start, now: start.addingTimeInterval(Double(tick))) { requests += 1; return true }
+        }
+        XCTAssertEqual(requests, 1)
+        activation.prepare(pid: 42, launchedAt: start.addingTimeInterval(1), now: start.addingTimeInterval(29)) { requests += 1; return true }
+        XCTAssertEqual(requests, 2, "PID reuse must not retain another process's connection")
+        activation.prepare(pid: 43, launchedAt: start, now: start.addingTimeInterval(29)) { requests += 1; return true }
+        XCTAssertEqual(requests, 3, "A relaunched application gets its own connection")
+        activation.prepare(pid: 43, launchedAt: start, now: start.addingTimeInterval(60)) { requests += 1; return true }
+        XCTAssertEqual(requests, 4, "Retry connection if the provider resets while the process lives")
+    }
+
+    func testActivationRetriesWhileApplicationIsStillLaunching() {
+        var activation = AccessibilityActivation()
+        let start = Date()
+        var requests = 0
+        activation.prepare(pid: 42, launchedAt: start, now: start) { requests += 1; return false }
+        activation.prepare(pid: 42, launchedAt: start, now: start.addingTimeInterval(1)) { requests += 1; return true }
+        XCTAssertEqual(requests, 2)
+    }
+
+    func testDisabledOCRRetainsApplicationAndDoesNotReadIt() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var draft = CollectorSettingsDraft(.init(windowTextApplications: ["example.editor"]))
+        draft.windowTextDisabledApplications = ["example.editor"]
+        let config = try CollectorConfig.decode(from: draft.value().jsonData())
+        XCTAssertEqual(config.windowTextApplications, ["example.editor"])
+        XCTAssertEqual(config.windowTextDisabledApplications, ["example.editor"])
+        let session = CollectionSession(configuration: .init(rootDirectory: root, config: config))
+        try session.start()
+        session.updateWindowTextContext(roots: [], app: .init(bundleIdentifier: "example.editor"), window: nil)
+        XCTAssertNil(session.windowTextContext)
+        try session.stop()
+    }
+
     func testPauseWindowSwitchAndStopRejectOutstandingOCR() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
