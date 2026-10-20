@@ -17,6 +17,7 @@ swiftc -parse-as-library -I "$modules" \
     Sources/computer-history-menubar/StatusPanel.swift \
     Sources/computer-history-menubar/SettingsPane.swift \
     Sources/computer-history-menubar/ReportsPane.swift \
+    scripts/test-menubar-input.swift \
     "${1:-scripts/test-menubar-panel.swift}" "${objects[@]}" -o "$test_dir/panel-test"
 if command -v local-codesign >/dev/null 2>&1; then
     local-codesign --identifier xyz.chesszyh.computer-history.panel-test "$test_dir/panel-test"

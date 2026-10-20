@@ -45,6 +45,7 @@ jobs:
       - name: Model catalog and reasoning metadata
         run: python3 scripts/test-menubar-catalog.py
       - name: Report controls and export
+        timeout-minutes: 3
         run: bash scripts/test-menubar-panel.sh scripts/test-menubar-reports.swift
       - name: Debug tests
         run: swift test

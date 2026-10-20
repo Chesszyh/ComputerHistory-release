@@ -18,21 +18,7 @@ import ComputerHistoryCore
         window.contentView = host
         window.orderFront(nil)
         defer { window.orderOut(nil) }
-        func click(_ point: NSPoint) {
-            let down = NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
-            let up = NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                context: nil, eventNumber: 2, clickCount: 1, pressure: 0)!
-            // AppKit controls can run a nested tracking loop inside mouseDown.
-            NSApplication.shared.postEvent(up, atStart: true)
-            window.sendEvent(down)
-            if let pending = NSApplication.shared.nextEvent(matching: .leftMouseUp, until: .distantPast,
-                    inMode: .default, dequeue: true) {
-                window.sendEvent(pending)
-            }
-        }
+        func click(_ point: NSPoint) { nativeTestClick(window: window, point: point) }
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         let before = host.fittingSize.height
         click(NSPoint(x: 330, y: window.contentLayoutRect.height / 2))

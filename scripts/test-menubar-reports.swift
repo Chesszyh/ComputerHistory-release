@@ -4,6 +4,12 @@ import ComputerHistoryCore
 
 @main struct ReportsRegression {
     @MainActor static func main() throws {
+        DispatchQueue.global().asyncAfter(deadline: .now() + 90) {
+            FileHandle.standardError.write(Data("FAIL: report panel regression exceeded 90 seconds\n".utf8))
+            exit(1)
+        }
+        func stage(_ name: String) { print("REPORTS: " + name); fflush(stdout) }
+        stage("synthetic report and panel")
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -53,15 +59,11 @@ import ComputerHistoryCore
             pasteboard.writeObjects(restored)
         }
         func click(_ x: CGFloat, _ y: CGFloat) {
-            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-                let event = NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: y), modifierFlags: [],
-                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                    context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)!
-                window.sendEvent(event)
-            }
+            nativeTestClick(window: window, point: NSPoint(x: x, y: y))
             RunLoop.main.run(until: Date().addingTimeInterval(0.2))
         }
         // The report action row follows the header and date selectors at the top of the fixed-size panel.
+        stage("native copy button")
         click(125, 640 - 104)
         precondition(pasteboard.string(forType: .string) == model.reportText, "Copy report button must copy the entire report")
         model.copyReport(material: true)
@@ -70,6 +72,7 @@ import ComputerHistoryCore
         model.saveReport(to: output, material: true)
         let text = try String(contentsOf: output, encoding: .utf8)
         precondition(text.contains("Synthetic activity") && !text.contains("## ") && !text.contains("/synthetic/private"))
+        stage("backup settings")
         model.openSummarySettings()
         model.showsReports = false
         model.settingsTab = .backup
@@ -85,6 +88,7 @@ import ComputerHistoryCore
         model.showsSummarySettings = false
         model.showsReports = true
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        stage("back navigation")
         click(30, 617)
         precondition(!model.showsReports, "Back button must return to the timeline")
         print("PASS: report panel, native copy button, complete AI material, TXT export, optional backup settings, and back navigation")
