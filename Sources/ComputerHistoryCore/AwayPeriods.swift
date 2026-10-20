@@ -13,10 +13,10 @@ public struct AwayPeriods: Codable, Equatable, Sendable {
     }
     public static func load(root: URL) -> Self {
         guard let data = try? Data(contentsOf: root.appendingPathComponent("away.json")),
-              let value = try? JSONDecoder().decode(Self.self, from: data) else { return Self() }
+              let value = try? EventStreamJSON.makeDecoder(acceptingLegacyNumericDates: true).decode(Self.self, from: data) else { return Self() }
         return value
     }
     public func save(root: URL) throws {
-        try JSONEncoder().encode(self).write(to: root.appendingPathComponent("away.json"), options: .atomic)
+        try EventStreamJSON.makeEncoder(preservingSubseconds: true).encode(self).write(to: root.appendingPathComponent("away.json"), options: .atomic)
     }
 }

@@ -6,7 +6,7 @@ public struct ModelHealth: Codable, Sendable {
     public var usedFallback: Bool
     public var lastNotification: Date?
     public static func load(root: URL) -> Self? {
-        try? JSONDecoder().decode(Self.self, from: Data(contentsOf: root.appendingPathComponent("model-health.json")))
+        try? EventStreamJSON.makeDecoder(acceptingLegacyNumericDates: true).decode(Self.self, from: Data(contentsOf: root.appendingPathComponent("model-health.json")))
     }
     static func record(root: URL, error: String?, usedFallback: Bool) throws {
         let previous = load(root: root)
@@ -14,7 +14,7 @@ public struct ModelHealth: Codable, Sendable {
         let notify = error != nil && now.timeIntervalSince(previous?.lastNotification ?? .distantPast) > 900
         let state = Self(updatedAt: now, error: error, usedFallback: usedFallback,
             lastNotification: notify ? now : previous?.lastNotification)
-        try JSONEncoder().encode(state).write(to: root.appendingPathComponent("model-health.json"), options: .atomic)
+        try EventStreamJSON.makeEncoder(preservingSubseconds: true).encode(state).write(to: root.appendingPathComponent("model-health.json"), options: .atomic)
         if notify, ProcessInfo.processInfo.environment["COMPUTER_HISTORY_NOTIFICATIONS"] != "0" {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")

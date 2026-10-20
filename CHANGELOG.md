@@ -10,6 +10,7 @@
 - Optionally read the local ActivityWatch service for current window, URL, and active/idle observations. Preserve source metadata and apply collection filters without importing earlier history.
 
 ### Fixes & Improvements
+- Write new event, log, request, and derived-record timestamps in the current system time zone with an explicit offset, while continuing to read legacy dates and retaining stable segment identifiers.
 - Reconnect document accessibility after application launches, retry providers that are still starting, and periodically check the connection.
 - Replace ambiguous OCR application icons with functional checkboxes and keep disabled entries available for re-enabling. Browser toolbar text no longer prevents OCR fallback.
 - Add per-request model fallback, bounded request deadlines, and independent report scheduling so longer reports do not delay recent summaries.

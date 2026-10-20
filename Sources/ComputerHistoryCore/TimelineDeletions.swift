@@ -26,11 +26,11 @@ public struct TimelineDeletions: Codable, Sendable, Equatable {
     public static func load(root: URL) throws -> Self {
         let url = root.appendingPathComponent(fileName)
         guard FileManager.default.fileExists(atPath: url.path) else { return Self() }
-        return try JSONDecoder().decode(Self.self, from: Data(contentsOf: url))
+        return try EventStreamJSON.makeDecoder(acceptingLegacyNumericDates: true).decode(Self.self, from: Data(contentsOf: url))
     }
 
     private func save(root: URL) throws {
-        let encoder = JSONEncoder()
+        let encoder = EventStreamJSON.makeEncoder(preservingSubseconds: true)
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try encoder.encode(self).write(to: root.appendingPathComponent(Self.fileName), options: .atomic)

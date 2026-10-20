@@ -18,14 +18,24 @@ import ComputerHistoryCore
         window.contentView = host
         window.orderFront(nil)
         defer { window.orderOut(nil) }
+        func click(_ point: NSPoint) {
+            let down = NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
+            let up = NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 2, clickCount: 1, pressure: 0)!
+            // AppKit controls can run a nested tracking loop inside mouseDown.
+            NSApplication.shared.postEvent(up, atStart: true)
+            window.sendEvent(down)
+            if let pending = NSApplication.shared.nextEvent(matching: .leftMouseUp, until: .distantPast,
+                    inMode: .default, dequeue: true) {
+                window.sendEvent(pending)
+            }
+        }
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         let before = host.fittingSize.height
-        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-            let event = NSEvent.mouseEvent(with: type, location: NSPoint(x: 330, y: window.contentLayoutRect.height / 2),
-                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)!
-            window.sendEvent(event)
-        }
+        click(NSPoint(x: 330, y: window.contentLayoutRect.height / 2))
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         precondition(host.fittingSize.height > before + 20, "Clicking empty space at the right of a request disclosure must expand it")
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -50,13 +60,7 @@ import ComputerHistoryCore
         window.setContentSize(NSSize(width: 340, height: ocrHost.fittingSize.height))
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         func clickOCRCheckbox() {
-            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-                let event = NSEvent.mouseEvent(with: type,
-                    location: NSPoint(x: 15, y: window.contentLayoutRect.height - 12), modifierFlags: [],
-                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                    context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)!
-                window.sendEvent(event)
-            }
+            click(NSPoint(x: 15, y: window.contentLayoutRect.height - 12))
             RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         }
         clickOCRCheckbox()
@@ -71,9 +75,10 @@ import ComputerHistoryCore
         model.openSummarySettings()
         model.settingsTab = .model
         let panel = NSHostingView(rootView: StatusPanel(model: model).environment(\.colorScheme, .dark))
+        window.contentView = panel
         window.setContentSize(NSSize(width: 380, height: 640))
         window.appearance = NSAppearance(named: .darkAqua)
-        window.contentView = panel
+        stage("model form hosted")
         func settle() {
             RunLoop.main.run(until: Date().addingTimeInterval(0.3))
             panel.layoutSubtreeIfNeeded()
@@ -91,18 +96,16 @@ import ComputerHistoryCore
             settle()
         }
         func saveByClick() {
-            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-                let event = NSEvent.mouseEvent(with: type, location: NSPoint(x: 342, y: 25), modifierFlags: [],
-                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                    context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)!
-                window.sendEvent(event)
-            }
+            click(NSPoint(x: 342, y: 25))
             settle()
         }
         settle()
+        stage("model form settled")
         edit("model-name", value: "edited-in-form")
         precondition(model.modelGroups[0].settings.model == "edited-in-form", "Native model field must update the draft")
+        stage("model name edited")
         saveByClick()
+        stage("model form saved")
         precondition(try! ModelSettings.load(root: root)?.model == "edited-in-form", "Save button must persist the model form")
         precondition(model.modelSettingsError == nil)
         edit("model-reasoning", value: "provider-custom-level")
@@ -137,12 +140,7 @@ import ComputerHistoryCore
         window.contentView = deletionHost
         window.setContentSize(NSSize(width: 380, height: deletionHost.fittingSize.height))
         settle()
-        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-            let event = NSEvent.mouseEvent(with: type, location: NSPoint(x: 40, y: window.contentLayoutRect.height - 18),
-                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)!
-            window.sendEvent(event)
-        }
+        click(NSPoint(x: 40, y: window.contentLayoutRect.height - 18))
         settle()
         precondition(try! TimelineDeletions.load(root: root).ids.contains(deletionItem.deletionID), "Rendered delete button must persist deletion")
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
@@ -153,12 +151,7 @@ import ComputerHistoryCore
         window.setContentSize(NSSize(width: 352, height: trashCard.fittingSize.height))
         settle()
         func clickTrashAction(x: CGFloat) {
-            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-                let event = NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: 20), modifierFlags: [],
-                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                    context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)!
-                window.sendEvent(event)
-            }
+            click(NSPoint(x: x, y: 20))
             settle()
         }
         clickTrashAction(x: 30)

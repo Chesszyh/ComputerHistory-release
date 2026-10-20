@@ -691,7 +691,7 @@ var collectorConfig = loadConfig(root: root)
 var configurationMonitor = CollectorConfigurationMonitor(root: root)
 var lastConfigurationError: String?
 redirectOutput(to: root.appendingPathComponent("collector.log"))
-print("--- \(ISO8601DateFormatter().string(from: Date())) 启动 ---")
+print("--- \(EventStreamJSON.timestampString(from: Date())) 启动 ---")
 
 // 未获权限时不静默继续——那样只会产出缺一大半的数据。
 let trusted = InputTap.hasAccessibilityPermission

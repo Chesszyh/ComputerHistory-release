@@ -26,13 +26,13 @@ public struct ModelRequest: Codable, Sendable, Equatable, Identifiable {
         let dir = root.appendingPathComponent("requests")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
                                                attributes: [.posixPermissions: 0o700])
-        let encoder = JSONEncoder()
+        let encoder = EventStreamJSON.makeEncoder(preservingSubseconds: true)
         encoder.outputFormatting = [.sortedKeys]
         try encoder.encode(self).write(to: dir.appendingPathComponent(id + ".json"), options: .atomic)
     }
 
     public static func load(url: URL) throws -> ModelRequest {
-        try JSONDecoder().decode(Self.self, from: Data(contentsOf: url))
+        try EventStreamJSON.makeDecoder(acceptingLegacyNumericDates: true).decode(Self.self, from: Data(contentsOf: url))
     }
 
     public var taskLabel: String {

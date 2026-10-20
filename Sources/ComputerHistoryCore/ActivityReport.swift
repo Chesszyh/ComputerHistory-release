@@ -75,7 +75,7 @@ public struct ActivityReport: Codable, Sendable {
     public static func load(root: URL, period: ReportPeriod) throws -> Self? {
         let file = url(root: root, period: period)
         guard FileManager.default.fileExists(atPath: file.path) else { return nil }
-        return try JSONDecoder().decode(Self.self, from: Data(contentsOf: file))
+        return try EventStreamJSON.makeDecoder(acceptingLegacyNumericDates: true).decode(Self.self, from: Data(contentsOf: file))
     }
 }
 
@@ -128,7 +128,7 @@ public enum ActivityExport {
             let directory = root.appendingPathComponent("reports/\(kind.rawValue)")
             if !FileManager.default.fileExists(atPath: directory.path) { continue }
             for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) where file.pathExtension == "json" {
-                let report = try JSONDecoder().decode(ActivityReport.self, from: Data(contentsOf: file))
+                let report = try EventStreamJSON.makeDecoder(acceptingLegacyNumericDates: true).decode(ActivityReport.self, from: Data(contentsOf: file))
                 // In-progress days remain available locally but aren't archived as final reports.
                 if !report.preview {
                     try write(report.markdown, to: root.appendingPathComponent("exports/\(kind.rawValue)/\(report.key).md"))
@@ -193,12 +193,12 @@ public struct ReportGenerator {
                 let cache = root.appendingPathComponent("reports/work/\(period.id)-\(offset).json")
                 let key = prompt + "\n" + input
                 if !overwrite, let data = try? Data(contentsOf: cache),
-                   let cached = try? JSONDecoder().decode(ReportPart.self, from: data), cached.input == key {
+                   let cached = try? EventStreamJSON.makeDecoder(acceptingLegacyNumericDates: true).decode(ReportPart.self, from: data), cached.input == key {
                     parts.append(cached.output); continue
                 }
                 let output = try complete(client, prompt: prompt, input: input, period: period)
                 try FileManager.default.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try JSONEncoder().encode(ReportPart(input: key, output: output)).write(to: cache, options: .atomic)
+                try EventStreamJSON.makeEncoder(preservingSubseconds: true).encode(ReportPart(input: key, output: output)).write(to: cache, options: .atomic)
                 parts.append(output)
             }
             // Recursively reduce oversized intermediate summaries without dropping any source batch.
@@ -216,7 +216,7 @@ public struct ReportGenerator {
             timeZone: period.calendar.timeZone.identifier, preview: preview, usedModel: client != nil, material: material, body: body)
         let file = ActivityReport.url(root: root, period: period)
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try JSONEncoder().encode(report).write(to: file, options: .atomic)
+        try EventStreamJSON.makeEncoder(preservingSubseconds: true).encode(report).write(to: file, options: .atomic)
         try ActivityExport.write(report.markdown, to: root.appendingPathComponent("exports/\(preview ? "previews/" + period.kind.rawValue : period.kind.rawValue)/\(period.key).md"))
         return report
     }

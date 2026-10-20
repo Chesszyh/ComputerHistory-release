@@ -30,10 +30,10 @@ public struct BackupStatus: Codable, Sendable {
     public var commit: String?
     public var error: String?
     public static func load(root: URL) -> Self {
-        (try? JSONDecoder().decode(Self.self, from: Data(contentsOf: root.appendingPathComponent("backup-status.json")))) ?? Self()
+        (try? EventStreamJSON.makeDecoder(acceptingLegacyNumericDates: true).decode(Self.self, from: Data(contentsOf: root.appendingPathComponent("backup-status.json")))) ?? Self()
     }
     func save(root: URL) throws {
-        try JSONEncoder().encode(self).write(to: root.appendingPathComponent("backup-status.json"), options: .atomic)
+        try EventStreamJSON.makeEncoder(preservingSubseconds: true).encode(self).write(to: root.appendingPathComponent("backup-status.json"), options: .atomic)
     }
 }
 

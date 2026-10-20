@@ -6,7 +6,7 @@ import Foundation
 ///
 /// **编码契约**（由 88 段真实样本全量实测确认）：
 ///   - 可选字段为 nil 时**整个键被省略**，绝不写 `null`——18 951 个事件中显式 null 为 0。
-///   - 时间戳为严格秒级 RFC3339（`YYYY-MM-DDTHH:MM:SSZ`，无小数秒）。
+///   - 事件时间戳为秒级 RFC3339，按写入时系统时区保留偏移（旧记录的 `Z` 继续可读）。
 ///   - 服务端类型上标记为非可选的 `Bool`/数组字段（`app.secureInput`、
 ///     `mouse.modifiers`、`keyboard.modifiers`、`selection.selectedItems`）
 ///     在取值等于默认值（`false` / 空数组）时**同样被省略**，
@@ -382,42 +382,45 @@ public struct EventStreamDiagnostic: Codable, Sendable, Equatable {
 // MARK: - 编解码
 
 public enum EventStreamJSON {
-    /// 严格秒级 RFC3339（无小数秒）。Foundation 的 `.iso8601` 策略会带毫秒，与实测不符。
-    ///
-    /// 用 `Date.ISO8601FormatStyle` 而非 `ISO8601DateFormatter`：后者不是 `Sendable`，
-    /// 在 Swift 6 严格并发下不能作为静态常量共享。
-    public static let timestampStyle = Date.ISO8601FormatStyle(
-        dateSeparator: .dash,
-        dateTimeSeparator: .standard,
-        timeSeparator: .colon,
-        timeZoneSeparator: .omitted,
-        includingFractionalSeconds: false,
-        timeZone: TimeZone(secondsFromGMT: 0)!
-    )
-
-    public static func timestampString(from date: Date) -> String {
-        timestampStyle.format(date)
+    public static var timestampStyle: Date.ISO8601FormatStyle {
+        Date.ISO8601FormatStyle(dateSeparator: .dash, dateTimeSeparator: .standard,
+            timeSeparator: .colon, timeZoneSeparator: .colon, includingFractionalSeconds: false,
+            timeZone: .current)
     }
 
-    public static func makeEncoder() -> JSONEncoder {
+    public static func timestampString(from date: Date, timeZone: TimeZone = .current,
+                                       preservingSubseconds: Bool = false) -> String {
+        Date.ISO8601FormatStyle(dateSeparator: .dash, dateTimeSeparator: .standard,
+            timeSeparator: .colon, timeZoneSeparator: .colon,
+            includingFractionalSeconds: preservingSubseconds, timeZone: timeZone).format(date)
+    }
+
+    public static func makeEncoder(preservingSubseconds: Bool = false) -> JSONEncoder {
         let e = JSONEncoder()
         e.dateEncodingStrategy = .custom { date, encoder in
             var c = encoder.singleValueContainer()
-            try c.encode(timestampString(from: date))
+            try c.encode(timestampString(from: date, preservingSubseconds: preservingSubseconds))
         }
         // 与服务端一致：字典序输出键，保证同内容产生同字节（便于回归比对）。
         e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return e
     }
 
-    public static func makeDecoder() -> JSONDecoder {
+    public static func makeDecoder(acceptingLegacyNumericDates: Bool = false) -> JSONDecoder {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .custom { decoder in
-            let s = try decoder.singleValueContainer().decode(String.self)
-            guard let date = try? timestampStyle.parse(s) else {
+            let container = try decoder.singleValueContainer()
+            if acceptingLegacyNumericDates, let seconds = try? container.decode(Double.self) {
+                return Date(timeIntervalSinceReferenceDate: seconds)
+            }
+            let s = try container.decode(String.self)
+            let fractional = Date.ISO8601FormatStyle(dateSeparator: .dash, dateTimeSeparator: .standard,
+                timeSeparator: .colon, timeZoneSeparator: .colon, includingFractionalSeconds: true,
+                timeZone: TimeZone(secondsFromGMT: 0)!)
+            let style = s.contains(".") ? fractional : timestampStyle
+            guard let date = try? style.parse(s) else {
                 throw DecodingError.dataCorrupted(
-                    .init(codingPath: decoder.codingPath,
-                          debugDescription: "非法时间戳：\(s)"))
+                    .init(codingPath: decoder.codingPath, debugDescription: "非法时间戳：\(s)"))
             }
             return date
         }

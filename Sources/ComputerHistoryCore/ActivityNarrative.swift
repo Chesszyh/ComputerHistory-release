@@ -55,8 +55,7 @@ public struct ActivityNarrative: Codable, Sendable, Equatable {
         guard let data = try? Data(contentsOf: Self.fileURL(root: root)) else {
             return ActivityNarrative()
         }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        let decoder = EventStreamJSON.makeDecoder()
         guard let decoded = try? decoder.decode(ActivityNarrative.self, from: data) else {
             return ActivityNarrative()
         }
@@ -64,8 +63,7 @@ public struct ActivityNarrative: Codable, Sendable, Equatable {
     }
 
     public func save(root: URL) throws {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        let encoder = EventStreamJSON.makeEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(self)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

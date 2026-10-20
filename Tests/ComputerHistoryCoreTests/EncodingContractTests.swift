@@ -30,7 +30,7 @@ final class EncodingContractTests: XCTestCase {
         let r = EventStreamRecord(id: 7, timestamp: Date(timeIntervalSince1970: 0),
                                   kind: .sessionEnded)
         let s = try encodeToString(r)
-        XCTAssertTrue(s.contains("\"timestamp\":\"1970-01-01T00:00:00Z\""), s)
+        XCTAssertTrue(s.contains("\"timestamp\":\"" + EventStreamJSON.timestampString(from: r.timestamp) + "\""), s)
     }
 
     /// 数组字段为空（默认值）时省略键——实测 keyboard.modifiers 出现时 100% 非空。
