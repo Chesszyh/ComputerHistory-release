@@ -23,6 +23,8 @@ public struct ActivityNarrative: Codable, Sendable, Equatable {
         public var apps: [String]
         /// 本条归纳自哪些记忆文件（文件名）。
         public var sourceMemories: [String]
+        public var sourceRevisions: [String: String]?
+        public var previousIDs: [String]?
 
         public init(id: String, timestamp: Date, title: String,
                     summary: String, apps: [String], sourceMemories: [String]) {

@@ -51,23 +51,18 @@ public struct NarrativeGenerator: Sendable {
         let index = MemoryIndex.load(from: memoriesDirectory)
         let sources = index.entries
             .filter { $0.granularity == "10min" && $0.dayLabel() == day }
-            .sorted { $0.startedAt < $1.startedAt }
+            .sorted { $0.startedAt == $1.startedAt ? $0.id < $1.id : $0.startedAt < $1.startedAt }
         guard !sources.isEmpty else { throw GenerateError.noSourceMemories }
 
         var narrative = ActivityNarrative.load(root: rootDirectory)
-        // 覆盖判断按**来源集合的并集**，不是按条数。合并后的条目数少于源数，
-        // 用「条数 == 源数」会让已完整的日期被反复重新生成、重复计费。
-        let sourceNames = Set(sources.map { $0.fileURL.lastPathComponent })
-        let covered = Set(narrative.items.flatMap(\.sourceMemories))
-        if !overwrite, sourceNames.isSubset(of: covered) {
-            return Outcome(day: day, newItems: 0,
-                           totalItems: Self.countItems(narrative, on: day),
-                           usedModel: false, usage: nil)
+        let revisions = Dictionary(uniqueKeysWithValues: sources.map { ($0.id, $0.revision) })
+        let currentItems = narrative.items.filter { item in
+            !item.sourceMemories.isEmpty && item.sourceMemories.allSatisfy {
+                guard let revision = revisions[$0] else { return false }
+                return item.sourceRevisions?[$0] == revision
+            }
         }
-
-        // **只归纳尚未覆盖的部分**。此前每轮重算全天：一轮两万余 tokens、
-        // 且随当天累积越来越慢，把生成周期撑长，记忆与叙述双双落后于采集。
-        // 增量后单轮开销与「新增活动量」成正比，而不是与「当天总量」成正比。
+        let covered = Set(currentItems.flatMap(\.sourceMemories))
         var pending = sources
         var priorItems: [ActivityNarrative.Item] = []
         if !overwrite {
@@ -84,10 +79,22 @@ public struct NarrativeGenerator: Sendable {
             }
         }
 
+        // Replacing one part of a merged item would discard its remaining sources.
+        var pendingNames = Set(pending.map(\.id))
+        var expanded = true
+        while expanded {
+            let before = pendingNames
+            for item in narrative.items where !pendingNames.isDisjoint(with: item.sourceMemories) {
+                pendingNames.formUnion(item.sourceMemories.filter { revisions[$0] != nil })
+            }
+            expanded = pendingNames != before
+        }
+        pending = sources.filter { pendingNames.contains($0.id) }
+
         guard let client else {
             // 无模型时用记忆的标题与描述原样充当条目：信息不如模型精炼，
             // 但保持可用，且不假装已经过归纳。
-            let fallback = sources.map { entry in
+            let fallback = pending.map { entry in
                 ActivityNarrative.Item(
                     id: Self.itemID(for: [entry.fileURL.lastPathComponent]),
                     timestamp: entry.startedAt,
@@ -96,10 +103,7 @@ public struct NarrativeGenerator: Sendable {
                     apps: entry.applications,
                     sourceMemories: [entry.fileURL.lastPathComponent])
             }
-            narrative.items.removeAll { item in
-                sources.contains { $0.fileURL.lastPathComponent == item.sourceMemories.first }
-            }
-            narrative.items.append(contentsOf: fallback)
+            Self.replace(fallback, revisions: revisions, in: &narrative)
             narrative.items.sort { $0.timestamp > $1.timestamp }
             narrative.generatedAt = Date()
             try narrative.save(root: rootDirectory)
@@ -112,8 +116,20 @@ public struct NarrativeGenerator: Sendable {
         var added = 0
         var totalUsage: DeepSeekClient.Usage?
         // 小批次逐次保存，长日历史不会超出远端小模型的上下文，失败也不重付已保存批次。
-        for offset in stride(from: 0, to: pending.count, by: 4) {
-            let batch = Array(pending[offset..<min(offset + 4, pending.count)])
+        var offset = 0
+        while offset < pending.count {
+            var end = min(offset + 4, pending.count)
+            var expandedEnd = true
+            while expandedEnd {
+                let names = Set(pending[offset..<end].map(\.id))
+                let related = narrative.items.filter { !names.isDisjoint(with: $0.sourceMemories) }
+                let relatedNames = Set(related.flatMap(\.sourceMemories))
+                let last = pending.indices.last { relatedNames.contains(pending[$0].id) }
+                let next = max(end, (last ?? (end - 1)) + 1)
+                expandedEnd = next != end
+                end = next
+            }
+            let batch = Array(pending[offset..<end])
             let completion = try client.complete(
                 system: prompt,
                 user: Self.userPrompt(day: day, sources: batch, priorItems: priorItems),
@@ -124,10 +140,8 @@ public struct NarrativeGenerator: Sendable {
                 throw GenerateError.modelFailed(completion.finishReason == "length" ? "输出达到长度上限" : "模型返回空内容")
             }
             let items = Self.parseItems(text, sources: batch, claimed: batch)
-            guard !items.isEmpty else { throw GenerateError.modelFailed("输出中没有可解析的条目") }
-            let toReplace = Set(items.flatMap(\.sourceMemories))
-            narrative.items.removeAll { !toReplace.isDisjoint(with: $0.sourceMemories) }
-            narrative.items.append(contentsOf: items)
+            guard !items.isEmpty else { throw GenerateError.modelFailed("来源编号缺失、重复或未覆盖本批全部来源；请检查叙述提示词的输出格式。") }
+            Self.replace(items, revisions: revisions, in: &narrative)
             narrative.items.sort { $0.timestamp > $1.timestamp }
             narrative.generatedAt = Date()
             try narrative.save(root: rootDirectory)
@@ -142,18 +156,41 @@ public struct NarrativeGenerator: Sendable {
                     totalUsage!.reasoningTokens += usage.reasoningTokens
                 }
             }
+            offset = end
         }
         return Outcome(day: day, newItems: added,
                        totalItems: Self.countItems(narrative, on: day),
                        usedModel: true, usage: totalUsage)
     }
 
+    private static func replace(_ items: [ActivityNarrative.Item], revisions: [String: String],
+                                in narrative: inout ActivityNarrative) {
+        let names = Set(items.flatMap(\.sourceMemories))
+        let previous = narrative.items.filter { !names.isDisjoint(with: $0.sourceMemories) }
+        let updated = items.map { item in
+            var item = item
+            let related = previous.filter { !Set(item.sourceMemories).isDisjoint(with: $0.sourceMemories) }
+            if let same = related.first(where: { Set($0.sourceMemories) == Set(item.sourceMemories) }) {
+                item.id = same.id
+            }
+            let aliases = related.flatMap { [$0.id] + ($0.previousIDs ?? []) }.filter { $0 != item.id }
+            item.previousIDs = aliases.isEmpty ? nil : Array(Set(aliases)).sorted()
+            item.sourceRevisions = Dictionary(uniqueKeysWithValues: item.sourceMemories.compactMap { name in
+                revisions[name].map { (name, $0) }
+            })
+            return item
+        }
+        narrative.items.removeAll { !names.isDisjoint(with: $0.sourceMemories) }
+        narrative.items.append(contentsOf: updated)
+    }
+
     /// 为所有有十分钟记忆、但尚无叙述条目的日期补写。
-    public func generateMissing(limit: Int? = nil, overwrite: Bool = false) -> [Outcome] {
+    public func generateMissing(limit: Int? = nil, overwrite: Bool = false) throws -> [Outcome] {
         let index = MemoryIndex.load(from: memoriesDirectory)
         let days = Set(index.entries.filter { $0.granularity == "10min" }
             .map { $0.dayLabel() }).sorted()
         var outcomes: [Outcome] = []
+        var failure: Error?
         for day in days {
             if let limit, outcomes.count >= limit { break }
             do {
@@ -163,10 +200,12 @@ public struct NarrativeGenerator: Sendable {
             } catch GenerateError.noSourceMemories {
                 continue
             } catch {
+                failure = error
                 FileHandle.standardError.write(
                     "\(day) 叙述生成失败：\(error)\n".data(using: .utf8)!)
             }
         }
+        if let failure { throw failure }
         return outcomes
     }
 
@@ -191,149 +230,57 @@ public struct NarrativeGenerator: Sendable {
 
     // MARK: - 输出解析
 
-    /// 解析模型输出。约定每条形如：
-    ///
-    ///     ## <时刻> <标题>
-    ///     <摘要>
-    ///
-    /// 时刻取该条覆盖的源记忆中最早的一个——模型不必复述精确时间，
-    /// 由本方法按顺序回填，避免它编造时刻。
-    /// 解析模型输出。
-    ///
-    /// - Parameters:
-    ///   - sources: **当天全部**来源。用于解析标题里的 `HH:MM`——增量模式下模型
-    ///     可能引用前文或跨界的时刻，只用新增来源建表会查不到，时刻就剥不掉，
-    ///     标题会变成「18:25 在 Gemini 讨论…」。
-    ///   - claimed: 本次实际可认领的来源。覆盖范围只在此范围内计算，避免增量
-    ///     生成时把早已归属他人的来源重复计入。
+    /// 每个来源编号只能认领一次；全部可认领来源齐全才接受该批结果。
     static func parseItems(_ text: String,
                            sources: [MemoryIndex.Entry],
                            claimed: [MemoryIndex.Entry]? = nil) -> [ActivityNarrative.Item] {
-        // 模型会合并同任务的段，因此**不能按下标**回填时刻——合并后条数少于段数，
-        // 对应关系即断裂（实测会得到与摘要内容矛盾的时间）。
-        // 改为要求模型照抄所覆盖**首段**的时刻，再据此在校验表里定位；
-        // 覆盖范围由相邻两条的起始时刻界定，从而记录**完整**的来源集合。
-        var byTime: [String: Int] = [:]      // 时刻 → 源下标
-        for (index, entry) in sources.enumerated() {
-            byTime[entry.timeLabel()] = index
-        }
-
-        let claimable = claimed ?? sources
-        let claimNames = Set(claimable.map { $0.fileURL.lastPathComponent })
-        // 认领只能落在本次可认领的来源上。
-        let claimIndices = sources.indices.filter {
-            claimNames.contains(sources[$0].fileURL.lastPathComponent)
-        }
-        let firstClaim = claimIndices.first ?? 0
-
-        var parsed: [(declaredIndex: Int, title: String, summary: String)] = []
-        var currentHeading: String?
-        var buffer: [String] = []
-
+        let claimNames = Set((claimed ?? sources).map(\.id))
+        guard !claimNames.isEmpty else { return [] }
+        var used = Set<String>()
+        var items: [ActivityNarrative.Item] = []
+        var heading: String?
+        var body: [String] = []
+        var valid = true
         func flush() {
-            guard let heading = currentHeading else { return }
-            defer { buffer = [] }
-            let summary = buffer.joined(separator: " ")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !summary.isEmpty else { return }
-
-            var title = heading
-            var sourceIndex: Int?
-            if let space = heading.firstIndex(of: " ") {
-                let head = String(heading[heading.startIndex..<space])
-                if let idx = Self.parseDeclaredTime(head, lookup: byTime) {
-                    sourceIndex = idx
-                    title = String(heading[heading.index(after: space)...])
-                        .trimmingCharacters(in: .whitespaces)
+            guard let heading else { return }
+            defer { body = [] }
+            guard heading.hasPrefix("["), let closing = heading.firstIndex(of: "]") else {
+                valid = false; return
+            }
+            let tokens = heading[heading.index(after: heading.startIndex)..<closing]
+                .split(separator: ",", omittingEmptySubsequences: false)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            var entries: [MemoryIndex.Entry] = []
+            for token in tokens {
+                guard token.hasPrefix("S"), let number = Int(token.dropFirst()),
+                      number > 0, number <= sources.count, token == "S\(number)" else {
+                    valid = false; return
                 }
+                let entry = sources[number - 1]
+                guard claimNames.contains(entry.id), used.insert(entry.id).inserted else {
+                    valid = false; return
+                }
+                entries.append(entry)
             }
-            guard !title.isEmpty else { return }
-            // 未声明或声明了不存在的时刻：退回到「上一个未使用的源」，
-            // 且不得早于第一个可认领的来源。
-            var resolved = sourceIndex ?? (parsed.last.map { $0.declaredIndex + 1 } ?? firstClaim)
-            if !claimIndices.contains(resolved) {
-                resolved = claimIndices.first { $0 >= resolved } ?? firstClaim
+            let title = heading[heading.index(after: closing)...].trimmingCharacters(in: .whitespaces)
+            let summary = body.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty, !summary.isEmpty, let timestamp = entries.map(\.startedAt).min() else {
+                valid = false; return
             }
-            parsed.append((min(resolved, sources.count - 1), title, summary))
+            let names = entries.map(\.id)
+            items.append(.init(id: itemID(for: names), timestamp: timestamp, title: title, summary: summary,
+                apps: entries.reduce(into: []) { result, entry in
+                    for app in entry.applications where !result.contains(app) { result.append(app) }
+                }, sourceMemories: names))
         }
-
-        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
+        for line in text.components(separatedBy: .newlines).map({ $0.trimmingCharacters(in: .whitespaces) }) {
             if line.hasPrefix("## ") {
                 flush()
-                currentHeading = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
-            } else if !line.isEmpty {
-                buffer.append(line)
-            }
+                heading = String(line.dropFirst(3))
+            } else if !line.isEmpty { body.append(line) }
         }
         flush()
-
-        // 覆盖范围按**声明时刻排序后**确定：每条覆盖到下一个更大的起点（不含），
-        // 最大的一条覆盖到末尾。不能按输出顺序取「下一条」——模型可能乱序输出，
-        // 那样最后一条会错误地覆盖到末尾并吞掉前面的来源。
-        //
-        // 且**同一来源只能被一条认领**。增量模式下可认领的来源可能只有一份，而模型
-        // 仍会输出多条；若允许共享，多条会得到同一个来源集合，进而算出同一个 id，
-        // 在 ForEach 里造成重复渲染——实测面板上出现过三条完全相同的内容。
-        let order = parsed.indices.sorted { parsed[$0].declaredIndex < parsed[$1].declaredIndex }
-        var endByItem: [Int: Int] = [:]
-        var cursor = firstClaim
-        for (position, itemIndex) in order.enumerated() {
-            // 起点不得早于已分配到的位置。
-            let start = max(parsed[itemIndex].declaredIndex, cursor)
-            var end = sources.count
-            if position + 1 < order.count {
-                end = max(parsed[order[position + 1]].declaredIndex, start + 1)
-            }
-            endByItem[itemIndex] = end
-            // 推进游标：下一条只能从本条之后开始。
-            cursor = max(cursor, end)
-        }
-
-        var claimedIndices = Set<Int>()
-        return parsed.indices.compactMap { position -> ActivityNarrative.Item? in
-            let item = parsed[position]
-            var start = item.declaredIndex
-            while start < sources.count, claimedIndices.contains(start) { start += 1 }
-            let end = endByItem[position] ?? sources.count
-            // 覆盖范围必须落在可认领的来源内——增量生成时，区间里可能混进
-            // 早已归属其他条目的来源。
-            let covered = Array(sources[start..<min(end, sources.count)])
-                .filter { claimNames.contains($0.fileURL.lastPathComponent) }
-            guard !covered.isEmpty else {
-                // 该条没有认领到任何新来源，丢弃而不是编造归属。
-                return nil
-            }
-            for entry in covered {
-                if let idx = sources.firstIndex(where: {
-                    $0.fileURL.lastPathComponent == entry.fileURL.lastPathComponent
-                }) { claimedIndices.insert(idx) }
-            }
-            let names = covered.map { $0.fileURL.lastPathComponent }
-            return ActivityNarrative.Item(
-                // id 并入标题：同一批来源可能产出多条（模型把一段拆成多个活动），
-                // 只用来源集合做 id 会撞车，ForEach 遇到重复 id 会渲染错乱。
-                id: itemID(for: names + [item.title]),
-                timestamp: sources[start].startedAt,
-                title: item.title,
-                summary: item.summary,
-                // 应用取覆盖范围的并集，保序去重。
-                apps: covered.reduce(into: [String]()) { acc, entry in
-                    for app in entry.applications where !acc.contains(app) { acc.append(app) }
-                },
-                sourceMemories: names)
-        }
-    }
-
-    /// 解析 `HH:MM` 并查表。非法（如 `99:99`）或不存在时返回 nil。
-    static func parseDeclaredTime(_ raw: String, lookup: [String: Int]) -> Int? {
-        let parts = raw.split(separator: ":")
-        guard parts.count == 2,
-              let hour = Int(parts[0]), let minute = Int(parts[1]),
-              (0...23).contains(hour), (0...59).contains(minute) else { return nil }
-        // 归一成两位，避免模型写成 `9:05` 时查不到。
-        let normalized = String(format: "%02d:%02d", hour, minute)
-        return lookup[normalized]
+        return valid && used == claimNames ? items : []
     }
 
     // MARK: - 提示词
@@ -348,9 +295,10 @@ public struct NarrativeGenerator: Sendable {
     你的任务是将一段时间内采集的计算机活动事件，整理成活动记录。
     目标不是生成工作报告，而是生成便于用户快速回忆、定位和恢复上下文的活动索引。
 
-    输出格式：每条记录写作 `## HH:MM 标题`，紧随其后另起一行写摘要。
-    `HH:MM` 必须是该条**覆盖的第一段**在输入中给出的时刻，照抄即可，不要自己换算
-    或推测。标题与摘要之间不要空行，条目之间空一行。不要输出其它标题或前言。
+    输出格式：每条记录写作 `## [S1,S2] 标题`，紧随其后另起一行写摘要。
+    方括号内列出该条覆盖的全部来源编号，以英文逗号分隔；单个来源写作 `[S1]`。
+    每个输入来源必须出现且只能出现一次，不能引用不存在的编号。时间仅用于展示和理解。
+    标题与摘要之间不要空行，条目之间空一行。不要输出其它标题或前言。
 
     标题规则：
     1. 使用「动词 + 对象」结构，通常控制在 8–20 个汉字。
@@ -403,9 +351,9 @@ public struct NarrativeGenerator: Sendable {
         if !earlierItems.isEmpty {
             out += "只输出**新增**的活动，不要重复上面已列出的内容。"
         }
-        out += "\n\n"
-        for entry in sources {
-            out += "### 时刻 \(entry.timeLabel())\n"
+        out += "\n输出格式：## [S1,S2] 标题，下一行写摘要；全部来源编号必须各出现一次。\n\n"
+        for (index, entry) in sources.enumerated() {
+            out += "### 来源 S\(index + 1) · 时刻 \(entry.timeLabel())\n"
             out += "标题：\(entry.title)\n"
             out += "摘要：\(entry.summary)\n"
             if !entry.applications.isEmpty {

@@ -87,28 +87,18 @@ public enum LoginItem {
 
     /// 写入 LaunchAgent 并加载。托盘应用不需要特殊授权，launchd 可以拉起。
     public static func enable(executablePath: String) throws {
-        let plist = """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" \
-        "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-            <key>Label</key><string>\(label)</string>
-            <key>ProgramArguments</key>
-            <array><string>\(executablePath)</string></array>
-            <key>RunAtLoad</key><true/>
-            <key>KeepAlive</key><false/>
-            <key>ProcessType</key><string>Interactive</string>
-        </dict>
-        </plist>
-        """
+        let plist = try PropertyListSerialization.data(fromPropertyList: [
+            "Label": label, "ProgramArguments": [executablePath],
+            "RunAtLoad": true, "KeepAlive": false, "ProcessType": "Interactive"
+        ], format: .xml, options: 0)
         try FileManager.default.createDirectory(
-            at: plistURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true)
-        try plist.write(to: plistURL, atomically: true, encoding: .utf8)
+            at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try plist.write(to: plistURL, options: .atomic)
         // 先卸再装，避免重复加载报错。
         _ = run("/bin/launchctl", ["bootout", "gui/\(getuid())/\(label)"])
-        _ = run("/bin/launchctl", ["bootstrap", "gui/\(getuid())", plistURL.path])
+        guard run("/bin/launchctl", ["bootstrap", "gui/\(getuid())", plistURL.path]) == 0 else {
+            throw CocoaError(.executableLoad, userInfo: [NSLocalizedDescriptionKey: "登录项加载失败，请检查 LaunchAgent 后重新启用。"])
+        }
     }
 
     public static func disable() {

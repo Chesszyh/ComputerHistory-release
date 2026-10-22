@@ -85,7 +85,14 @@ public struct DeepSeekClient: Sendable {
             throw ClientError.missingAPIKey
         }
         let model = environment["DEEPSEEK_MODEL"] ?? defaultModel
-        let base = environment["DEEPSEEK_BASE_URL"].flatMap(URL.init(string:)) ?? defaultBaseURL
+        let base: URL
+        if let address = environment["DEEPSEEK_BASE_URL"] {
+            guard let url = URL(string: address) else {
+                throw ModelSettings.SettingsError.invalid("DEEPSEEK_BASE_URL 无效，请填写完整的 HTTPS 或本机 HTTP 地址。")
+            }
+            base = url
+        } else { base = defaultBaseURL }
+        try ModelTransport.validate(base)
         return DeepSeekClient(apiKey: key, baseURL: base, model: model)
     }
 
@@ -131,7 +138,7 @@ public struct DeepSeekClient: Sendable {
             }
             let config = ModelSettings(baseURL: secondary.baseURL, model: secondary.model,
                 requiresAPIKey: secondary.requiresAPIKey != false, reasoningEffort: secondary.reasoningEffort,
-                pricing: secondary.pricing, requestStyle: secondary.requestStyle, timeoutSeconds: secondary.timeoutSeconds)
+                pricing: secondary.pricing, requestStyle: secondary.requestStyle, timeoutSeconds: secondary.timeoutSeconds, allowInsecureHTTP: secondary.allowInsecureHTTP == true)
             do {
                 let key: String
                 if secondary.requiresAPIKey == false { key = "" }
@@ -180,6 +187,7 @@ public struct DeepSeekClient: Sendable {
                 throw ClientError.budgetExceeded("已达到本月总结预算（\(pricing.currency) \(cap)）")
             }
         }
+        try ModelTransport.validate(baseURL, allowInsecureHTTP: settings?.allowInsecureHTTP == true)
         var request = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))
         request.httpMethod = "POST"
         request.timeoutInterval = timeout
@@ -217,7 +225,9 @@ public struct DeepSeekClient: Sendable {
         let semaphore = DispatchSemaphore(value: 0)
         let result = ResponseState()
 
-        let networkTask = URLSession.shared.dataTask(with: request) { data, response, error in
+        let networkSession = URLSession(configuration: .ephemeral, delegate: ModelTransport(), delegateQueue: nil)
+        defer { networkSession.finishTasksAndInvalidate() }
+        let networkTask = networkSession.dataTask(with: request) { data, response, error in
             defer { semaphore.signal() }
             if let error {
                 result.store(.failure(ClientError.transport(error.localizedDescription)))

@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// 记忆文件索引：把 `memories/` 下的 `.md` 读成可展示的时间线条目。
 ///
@@ -24,6 +25,7 @@ public struct MemoryIndex: Sendable {
         /// 正文里各小节标题，用于折叠展示。
         public var sections: [(heading: String, content: String)]
         public var generationStatus: String? = nil
+        public var revision: String = ""
 
         /// 用于展示的时刻，形如 `15:40`。
         public func timeLabel(timeZone: TimeZone = .current) -> String {
@@ -57,7 +59,7 @@ public struct MemoryIndex: Sendable {
         let entries = files
             .filter { $0.pathExtension == "md" }
             .compactMap { parse(fileURL: $0) }
-            .sorted { $0.startedAt > $1.startedAt }   // 新的在前
+            .sorted { $0.startedAt == $1.startedAt ? $0.id < $1.id : $0.startedAt > $1.startedAt }
         return MemoryIndex(entries: entries)
     }
 
@@ -87,7 +89,8 @@ public struct MemoryIndex: Sendable {
                      title: front.title, summary: front.description,
                      applications: apps, body: body,
                      sections: parseSections(body),
-                     generationStatus: text.split(separator: "\n").first(where: { $0.hasPrefix("generation: ") }).map { String($0.dropFirst(12)) })
+                     generationStatus: text.split(separator: "\n").first(where: { $0.hasPrefix("generation: ") }).map { String($0.dropFirst(12)) },
+                     revision: SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined())
     }
 
     static func parseApplications(_ text: String) -> [String] {

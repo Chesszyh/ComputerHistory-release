@@ -84,20 +84,18 @@ final class ConcurrencyTests: XCTestCase {
         let sources = makeSources(3, base: base)
         // 模型把同一份来源拆成三条
         let text = """
-        ## \(sources[0].timeLabel()) 第一件事
+        ## [S1] 第一件事
         一。
 
-        ## \(sources[0].timeLabel()) 第二件事
+        ## [S1] 第二件事
         二。
 
-        ## \(sources[0].timeLabel()) 第三件事
+        ## [S1] 第三件事
         三。
         """
         let items = NarrativeGenerator.parseItems(text, sources: sources,
                                                   claimed: [sources[0]])
-        // 只有第一条能认领到那份来源，其余无来源可认领应被丢弃
-        XCTAssertEqual(items.count, 1, "同一来源不应被多条认领：\(items.map(\.title))")
-        XCTAssertEqual(items[0].sourceMemories.count, 1)
+        XCTAssertTrue(items.isEmpty, "重复认领使整批结果无效")
     }
 
     /// 多条条目不得共享同一个 id。
@@ -105,13 +103,13 @@ final class ConcurrencyTests: XCTestCase {
         let base = Date(timeIntervalSince1970: 1_800_000_000)
         let sources = makeSources(3, base: base)
         let text = """
-        ## \(sources[0].timeLabel()) 活动甲
+        ## [S1] 活动甲
         内容甲。
 
-        ## \(sources[1].timeLabel()) 活动乙
+        ## [S2] 活动乙
         内容乙。
 
-        ## \(sources[2].timeLabel()) 活动丙
+        ## [S3] 活动丙
         内容丙。
         """
         let items = NarrativeGenerator.parseItems(text, sources: sources)
@@ -120,23 +118,12 @@ final class ConcurrencyTests: XCTestCase {
                        "id 必须唯一，否则 ForEach 会渲染错乱")
     }
 
-    /// 增量模式下，模型引用了不在新增集合里的时刻时，标题仍应剥离时刻前缀。
-    ///
-    /// 此前只用新增来源建时刻表，查不到就不剥离，标题会变成
-    /// 「18:25 在 Gemini 讨论…」。
-    func testTimePrefixStrippedUsingFullSourceTable() throws {
-        let base = Date(timeIntervalSince1970: 1_800_000_000)
-        let sources = makeSources(4, base: base)
-        // 只认领第 4 份，但标题写的是第 1 份的时刻（模型引用了前文）
-        let text = "## \(sources[0].timeLabel()) 在 Gemini 讨论前端\n内容。"
-        let items = NarrativeGenerator.parseItems(text, sources: sources,
-                                                  claimed: [sources[3]])
-        XCTAssertEqual(items.count, 1)
-        XCTAssertEqual(items[0].title, "在 Gemini 讨论前端",
-                       "标题不应残留时刻前缀")
-        XCTAssertEqual(items[0].sourceMemories,
-                       [sources[3].fileURL.lastPathComponent],
-                       "时刻虽取自前文，认领仍应落在可认领的来源上")
+    func testIncrementalCannotClaimEarlierSources() {
+        let sources = makeSources(4, base: Date(timeIntervalSince1970: 1_800_000_000))
+        let invalid = NarrativeGenerator.parseItems("## [S1] 前文\n内容。", sources: sources, claimed: [sources[3]])
+        XCTAssertTrue(invalid.isEmpty)
+        let valid = NarrativeGenerator.parseItems("## [S4] 新增\n内容。", sources: sources, claimed: [sources[3]])
+        XCTAssertEqual(valid.first?.sourceMemories, [sources[3].id])
     }
 
     /// 覆盖范围连续时，各条按序分到各自的来源。
@@ -144,10 +131,10 @@ final class ConcurrencyTests: XCTestCase {
         let base = Date(timeIntervalSince1970: 1_800_000_000)
         let sources = makeSources(4, base: base)
         let text = """
-        ## \(sources[0].timeLabel()) 甲
+        ## [S1,S2] 甲
         一。
 
-        ## \(sources[2].timeLabel()) 乙
+        ## [S3,S4] 乙
         二。
         """
         let items = NarrativeGenerator.parseItems(text, sources: sources)

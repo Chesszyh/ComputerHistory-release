@@ -26,6 +26,30 @@ private final class ActivityProtocol: URLProtocol, @unchecked Sendable {
 }
 
 final class ActivityWatchTests: XCTestCase {
+    func testAllowlistRejectsMissingApplicationAndBrowserAddress() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let now = Date().addingTimeInterval(60)
+        let session = CollectionSession(configuration: .init(rootDirectory: root,
+            policy: .init(defaultApplicationBehavior: .doNotObserve, defaultURLBehavior: .doNotObserve,
+                allowlist: [.application("com.apple.Safari"), .domain("allowed.test")]), activityWatchEnabled: true))
+        try session.start(now: now)
+        var snapshot = ActivityWatchSnapshot(application: "Synthetic Browser", title: "Synthetic",
+            evidence: .init(startedAt: now, endedAt: now.addingTimeInterval(5),
+                windowBucket: "synthetic", windowEventID: 1))
+        let browser = EventStreamApp(name: "Synthetic Browser", bundleIdentifier: "com.apple.Safari")
+        session.recordActivityWatch(snapshot, current: .init(name: "Synthetic Browser"), now: now.addingTimeInterval(10))
+        session.recordActivityWatch(snapshot, current: browser, now: now.addingTimeInterval(10))
+        snapshot.url = "https://allowed.test"
+        session.recordActivityWatch(snapshot, current: browser, now: now.addingTimeInterval(10))
+        let id = try XCTUnwrap(session.currentSegmentID)
+        try session.stop(now: now.addingTimeInterval(11))
+        let imported = try EventArchive.readEvents(at: root.appendingPathComponent("segments/\(id)/events.jsonl"))
+            .filter { $0.activityWatch != nil }
+        XCTAssertEqual(imported.count, 1)
+        XCTAssertEqual(imported.first?.window?.url, "https://allowed.test")
+    }
+
     func testReadOnlyBoundedLocalBucketsAndStaleData() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [ActivityProtocol.self]

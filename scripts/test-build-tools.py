@@ -62,7 +62,7 @@ class BuildToolsTests(unittest.TestCase):
             for extra in ['unexpected', '../escape', 'link']:
                 archive = root / 'bad.tar.gz'
                 with tarfile.open(archive, 'w:gz') as tar:
-                    for name in ['computer-history', 'computer-history-menubar', 'LICENSE', 'README.md']:
+                    for name in ['computer-history', 'computer-history-menubar', 'LICENSE', 'README.md', 'manage-install.py']:
                         tar.addfile(tarfile.TarInfo(f'ComputerHistory-v1.2.3-macos-arm64/{name}'))
                     item = tarfile.TarInfo(extra)
                     if extra == 'link':

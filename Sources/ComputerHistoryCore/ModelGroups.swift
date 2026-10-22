@@ -3,6 +3,7 @@ import Foundation
 public struct ModelGroup: Codable, Sendable, Identifiable {
     public var id: String
     public var name: String
+    public var allowInsecureHTTP: Bool?
     public var baseURL: URL
     public var model: String
     public var requiresAPIKey: Bool
@@ -13,6 +14,7 @@ public struct ModelGroup: Codable, Sendable, Identifiable {
 
     public init(id: String = UUID().uuidString, name: String, settings: ModelSettings) {
         self.id = id; self.name = name
+        allowInsecureHTTP = settings.allowInsecureHTTP
         baseURL = settings.baseURL; model = settings.model; requiresAPIKey = settings.requiresAPIKey
         reasoningEffort = settings.reasoningEffort; pricing = settings.pricing
         requestStyle = settings.requestStyle; timeoutSeconds = settings.timeoutSeconds
@@ -20,7 +22,7 @@ public struct ModelGroup: Codable, Sendable, Identifiable {
 
     public var settings: ModelSettings {
         var value = ModelSettings(baseURL: baseURL, model: model, requiresAPIKey: requiresAPIKey,
-            reasoningEffort: reasoningEffort, pricing: pricing, requestStyle: requestStyle, timeoutSeconds: timeoutSeconds)
+            reasoningEffort: reasoningEffort, pricing: pricing, requestStyle: requestStyle, timeoutSeconds: timeoutSeconds, allowInsecureHTTP: allowInsecureHTTP == true)
         value.credentialGroupID = id
         return value
     }
@@ -55,7 +57,7 @@ public struct ModelGroups: Codable, Sendable {
             groups.append(ModelGroup(id: "legacy-fallback", name: "原备用模型", settings: ModelSettings(
                 baseURL: fallback.baseURL, model: fallback.model, requiresAPIKey: fallback.requiresAPIKey != false,
                 reasoningEffort: fallback.reasoningEffort, pricing: fallback.pricing,
-                requestStyle: fallback.requestStyle, timeoutSeconds: fallback.timeoutSeconds ?? 45)))
+                requestStyle: fallback.requestStyle, timeoutSeconds: fallback.timeoutSeconds ?? 45, allowInsecureHTTP: fallback.allowInsecureHTTP == true)))
         }
         return Self(groups: groups, primaryGroupID: groups[0].id, fallbackGroupID: groups.count > 1 ? groups[1].id : nil,
                     dailyBudget: old.dailyBudget, monthlyBudget: old.monthlyBudget)
@@ -79,7 +81,7 @@ public struct ModelGroups: Codable, Sendable {
             }
             var fallback = FallbackModelSettings(baseURL: group.baseURL, model: group.model,
                 reasoningEffort: group.reasoningEffort, pricing: group.pricing, requiresAPIKey: group.requiresAPIKey,
-                requestStyle: group.requestStyle, timeoutSeconds: group.timeoutSeconds)
+                requestStyle: group.requestStyle, timeoutSeconds: group.timeoutSeconds, allowInsecureHTTP: group.allowInsecureHTTP == true)
             fallback.credentialGroupID = group.id
             value.fallback = fallback
         }

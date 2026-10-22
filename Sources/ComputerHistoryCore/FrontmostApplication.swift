@@ -45,12 +45,29 @@ public enum FrontmostApplication {
                                  windowID: windowID(of: win))
     }
 
-    /// 聚焦的 UI 元素，用于键盘/鼠标事件的 `target`。
+    /// 聚焦的 UI 元素，用于键盘事件的 `target`。
     public static func focusedElement() -> EventStreamAXElement? {
         guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
         guard let el = AXTreeReader.focusedElement(ofApplication: app.processIdentifier)
         else { return nil }
         return element(el)
+    }
+
+    static func clickedElement(at point: CGPoint, for app: EventStreamApp?, window: EventStreamWindow?) -> EventStreamAXElement? {
+        guard let pid = app?.processIdentifier, let window else { return nil }
+        var hit: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
+              let hit else { return nil }
+        var hitPID: pid_t = 0
+        guard AXUIElementGetPid(hit, &hitPID) == .success, hitPID == pid,
+              let hitWindow = AXTreeReader.copyElement(hit, kAXWindowAttribute as String),
+              let focusedWindow = AXTreeReader.copyElement(AXUIElementCreateApplication(pid), kAXFocusedWindowAttribute as String),
+              CFEqual(hitWindow, focusedWindow), windowID(of: hitWindow) == window.windowID else { return nil }
+        let url = AXTreeReader.copyString(hitWindow, kAXURLAttribute as String)
+            ?? AXTreeReader.copyString(hitWindow, kAXDocumentAttribute as String)
+        // The policy was checked against this window's address before reading the target value.
+        guard url == window.url else { return nil }
+        return element(hit)
     }
 
     /// 聚焦元素当前的可编辑文本。

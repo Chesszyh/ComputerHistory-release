@@ -27,6 +27,7 @@ for executable in computer-history computer-history-menubar; do
     fi
     codesign --verify "$stage/$name/$executable"
 done
+cp scripts/manage-install.py "$stage/$name/manage-install.py"
 cp LICENSE "$stage/$name/LICENSE"
 cp docs/distribution.md "$stage/$name/README.md"
 "$stage/$name/computer-history" --help >/dev/null

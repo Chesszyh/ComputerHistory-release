@@ -196,8 +196,12 @@ public actor TraySnapshotLoader {
         if deletions != previousDeletions || away != previousAway || sources != previousTimelineEntries || narrative.items != previousNarrative || previousTimeZone != timeZone {
             let allGroups = Self.timeline(index: index, narrative: narrative, away: away, restored: deletions.restoredItems, timeZone: timeZone)
             deletedSummaries = deletions.trashEntries(candidates: allGroups.flatMap(\.items))
+            let aliases = Dictionary(narrative.items.map { ($0.id, $0.previousIDs ?? []) }, uniquingKeysWith: { first, _ in first })
             groups = allGroups.compactMap { group in
-                let items = group.items.filter { !deletions.ids.contains($0.deletionID) }
+                let items = group.items.filter { item in
+                    !deletions.ids.contains(item.deletionID)
+                        && !(aliases[item.id] ?? []).contains { deletions.ids.contains("narrative:" + $0) }
+                }
                 return items.isEmpty ? nil : TrayTimelineGroup(day: group.day, items: items)
             }
             previousDeletions = deletions
@@ -244,6 +248,7 @@ public actor TraySnapshotLoader {
                 coveredCount: 1, eventCount: nil, endTimestamp: entry.startedAt))
         }
         let existingIDs = Set(byDay.values.flatMap { $0 }.map(\.deletionID))
+            .union(narrative.items.flatMap { ($0.previousIDs ?? []).map { "narrative:" + $0 } })
         for item in restored where !existingIDs.contains(item.deletionID) {
             byDay[date.string(from: item.timestamp), default: []].append(item)
         }

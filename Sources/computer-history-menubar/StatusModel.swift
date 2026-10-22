@@ -511,7 +511,13 @@ final class StatusModel: ObservableObject {
     func setLoginItem(_ enabled: Bool) {
         if enabled {
             guard let exe = CollectorSupervisor.currentExecutablePath() else { return }
-            try? LoginItem.enable(executablePath: exe)
+            do { try LoginItem.enable(executablePath: exe) }
+            catch {
+                let alert = NSAlert()
+                alert.messageText = "登录启动设置失败"
+                alert.informativeText = String(describing: error)
+                alert.runModal()
+            }
         } else {
             LoginItem.disable()
         }
@@ -637,7 +643,7 @@ final class StatusModel: ObservableObject {
                     return draft.id == primary ? env["DEEPSEEK_API_KEY"] ?? "" :
                         (draft.id == fallback ? env["COMPUTER_HISTORY_FALLBACK_API_KEY"] ?? "" : "")
                 }.value
-                let catalog = try await ModelCatalog.fetch(baseURL: url, apiKey: key)
+                let catalog = try await ModelCatalog.fetch(baseURL: url, apiKey: key, allowInsecureHTTP: draft.settings.allowInsecureHTTP)
                 guard let current = modelGroups.firstIndex(where: { $0.id == groupID }),
                       modelGroups[current].settings.baseURL == draft.settings.baseURL else {
                     if let current = modelGroups.firstIndex(where: { $0.id == groupID }) { modelGroups[current].catalogLoading = false }

@@ -59,6 +59,8 @@ python3 scripts/test-process-control.py .build/release/computer-history
 
 ## 记忆与时间线
 
+可安装 [跨 Agent 历史查询 Skill](docs/agent-skill.md)，在其他项目的 Coding Agent 中按需检索本机摘要与原始证据。
+
 历史活动滚动到底部时自动加载更早记录。系统登录界面期间停止内容采集，返回后将这段时间展示为一条“离开电脑”；具体判定和存储见[采集行为](docs/collector.md#采集行为与局限)。
 
 ```bash
@@ -89,6 +91,7 @@ python3 scripts/test-process-control.py .build/release/computer-history
 
 - [采集、配置和存储](docs/collector.md)
 - [隐私、外发和数据删除边界](docs/privacy.md)
+- [跨 Agent 历史查询 Skill](docs/agent-skill.md)
 - [开发与测试](CONTRIBUTING.md)
 - [安全问题反馈](SECURITY.md)
 - [来源与第三方内容](docs/provenance.md)

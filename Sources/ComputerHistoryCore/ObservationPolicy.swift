@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 /// 观测策略：决定哪些应用/域名被采集、哪些被抑制。
 ///
@@ -164,12 +165,20 @@ public struct ObservationPolicy: Sendable {
     ///
     /// 应用与域名**分别**按各自默认行为 + 名单判定，任一判为不采集即抑制。
     public func shouldSuppress(app: EventStreamApp?, window: EventStreamWindow?) -> Bool {
-        if let bundleID = app?.bundleIdentifier,
-           !decide(value: bundleID, scope: .app, ruleValue: { $0.bundleID },
-                   defaultBehavior: defaultApplicationBehavior) {
+        let bundleID = app?.bundleIdentifier
+        if let bundleID, !bundleID.isEmpty {
+            if !decide(value: bundleID, scope: .app, ruleValue: { $0.bundleID },
+                       defaultBehavior: defaultApplicationBehavior) { return true }
+        } else if defaultApplicationBehavior == .doNotObserve {
             return true
         }
-        if let host = window?.url.flatMap(Self.host(from:)),
+        let host = window?.url.flatMap(Self.host(from:))
+        if host == nil, defaultURLBehavior == .doNotObserve {
+            let isBrowser = bundleID.map(Self.browserBundleIDs.contains) == true
+            let isLocalDocument = window?.url.flatMap(URL.init(string:))?.isFileURL == true
+            if isBrowser || window?.url != nil && !isLocalDocument { return true }
+        }
+        if let host,
            !decide(value: host, scope: .url, ruleValue: { $0.urlDomain },
                    defaultBehavior: defaultURLBehavior) {
             return true
@@ -180,6 +189,14 @@ public struct ObservationPolicy: Sendable {
         }
         return false
     }
+
+    // A browser can temporarily expose no address; URL allowlists must still apply.
+    private static let browserBundleIDs: Set<String> = {
+        let applications = ["http://example.invalid", "https://example.invalid"].flatMap {
+            NSWorkspace.shared.urlsForApplications(toOpen: URL(string: $0)!)
+        }
+        return Set(applications.compactMap { Bundle(url: $0)?.bundleIdentifier })
+    }()
 
     /// 判定某条规则是否命中给定值。
     ///
@@ -215,7 +232,7 @@ public struct ObservationPolicy: Sendable {
 
     /// 从 URL 取主机名。裸域名匹配子域由 `domain(_:matches:)` 负责。
     public static func host(from urlString: String) -> String? {
-        guard let url = URL(string: urlString), let host = url.host() else { return nil }
+        guard let url = URL(string: urlString), let host = url.host(), !host.isEmpty else { return nil }
         return host
     }
 }

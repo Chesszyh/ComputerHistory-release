@@ -44,13 +44,15 @@ def release_notes(version):
 
 def verify_package(archive, output, version):
     name = f'ComputerHistory-v{version}-macos-arm64'
-    expected = {f'{name}/{item}' for item in ['computer-history', 'computer-history-menubar', 'LICENSE', 'README.md']}
+    expected = {f'{name}/{item}' for item in ['computer-history', 'computer-history-menubar', 'LICENSE', 'README.md', 'manage-install.py']}
     with tarfile.open(archive) as tar:
         members = tar.getmembers()
         if {m.name for m in members if m.isfile()} != expected or any(
                 m.name not in expected | {name} or not (m.isfile() or m.isdir()) for m in members):
-            raise ValueError('Release package must contain only the two programs, LICENSE, and README.md')
+            raise ValueError('Release package must contain only the two programs, installer, LICENSE, and README.md')
         tar.extractall(output, filter='data')
+    if (output / name / 'manage-install.py').read_bytes() != (ROOT / 'scripts/manage-install.py').read_bytes():
+        raise ValueError('Installer does not match the tested source')
     for executable in ['computer-history', 'computer-history-menubar']:
         path = str(output / name / executable)
         if command('lipo', '-archs', path) != 'arm64':

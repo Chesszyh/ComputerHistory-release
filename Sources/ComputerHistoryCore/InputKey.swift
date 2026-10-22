@@ -1,7 +1,18 @@
 import Foundation
+import CoreGraphics
 
 /// 只解释快捷操作的物理键位；普通文本继续从编辑控件取值。
 public enum InputKey {
+    public enum Action { case text, shortcut, submit }
+
+    public static func action(for keyCode: UInt16, flags: CGEventFlags) -> Action {
+        if !flags.intersection([.maskCommand, .maskControl]).isEmpty { return .shortcut }
+        let nonCharacterKeys: Set<UInt16> = [36, 48, 51, 53, 76, 117, 123, 124, 125, 126]
+        if nonCharacterKeys.contains(keyCode),
+           !flags.intersection([.maskShift, .maskAlternate, .maskSecondaryFn]).isEmpty { return .shortcut }
+        return keyCode == 36 || keyCode == 76 ? .submit : .text
+    }
+
     public static func name(for keyCode: UInt16) -> String {
         let keys: [UInt16: String] = [0:"A", 1:"S", 2:"D", 3:"F", 4:"H", 5:"G", 6:"Z", 7:"X", 8:"C", 9:"V",
             11:"B", 12:"Q", 13:"W", 14:"E", 15:"R", 16:"Y", 17:"T", 18:"1", 19:"2", 20:"3", 21:"4", 22:"6", 23:"5",

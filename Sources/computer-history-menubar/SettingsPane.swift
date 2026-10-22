@@ -194,6 +194,7 @@ struct SummarySettingsPane: View {
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
             reasoningEditor(index)
             SettingsField("超时（秒）", text: $model.modelGroups[index].settings.timeoutSeconds, placeholder: "60", id: "model-timeout")
+            Toggle("允许此服务使用明文 HTTP（活动内容和密钥可能被窃听）", isOn: $model.modelGroups[index].settings.allowInsecureHTTP)
             Toggle("服务需要密钥", isOn: $model.modelGroups[index].settings.requiresAPIKey)
             if model.modelGroups[index].settings.requiresAPIKey {
                 SecureField("填写新密钥；留空保留现有密钥", text: $model.modelGroups[index].apiKey)

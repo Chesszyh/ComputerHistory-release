@@ -202,10 +202,10 @@ final class AuditRegressionTests: XCTestCase {
 
         // 两条：第一条覆盖前 3 段，第二条覆盖最后 1 段
         let text = """
-        ## \(sources[0].timeLabel()) 合并前三段
+        ## [S1,S2,S3] 合并前三段
         摘要一。
 
-        ## \(sources[3].timeLabel()) 第四段
+        ## [S4] 第四段
         摘要二。
         """
         let items = NarrativeGenerator.parseItems(text, sources: sources)
@@ -215,19 +215,6 @@ final class AuditRegressionTests: XCTestCase {
         // 来源并集应覆盖全部段
         let all = Set(items.flatMap(\.sourceMemories))
         XCTAssertEqual(all.count, 4)
-    }
-
-    /// 非法时刻（如 `99:99`）不得被接受为来源定位。
-    func testInvalidDeclaredTimeRejected() {
-        let lookup = ["16:00": 0, "16:10": 1]
-        XCTAssertNil(NarrativeGenerator.parseDeclaredTime("99:99", lookup: lookup))
-        XCTAssertNil(NarrativeGenerator.parseDeclaredTime("24:00", lookup: lookup))
-        XCTAssertNil(NarrativeGenerator.parseDeclaredTime("16:60", lookup: lookup))
-        XCTAssertNil(NarrativeGenerator.parseDeclaredTime("abc", lookup: lookup))
-        XCTAssertEqual(NarrativeGenerator.parseDeclaredTime("16:10", lookup: lookup), 1)
-        // 单位数小时也要归一后命中
-        XCTAssertEqual(NarrativeGenerator.parseDeclaredTime("9:05",
-            lookup: ["09:05": 7]), 7)
     }
 
     /// 乱序输出时，覆盖范围不得让最后一条吞掉前面的来源。
@@ -251,13 +238,13 @@ final class AuditRegressionTests: XCTestCase {
 
         // 逆序输出：先最晚，再最早，最后中间
         let text = """
-        ## \(sources[2].timeLabel()) 第三段
+        ## [S3] 第三段
         三。
 
-        ## \(sources[0].timeLabel()) 第一段
+        ## [S1] 第一段
         一。
 
-        ## \(sources[1].timeLabel()) 第二段
+        ## [S2] 第二段
         二。
         """
         let items = NarrativeGenerator.parseItems(text, sources: sources)

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.3 - 2026-10-22
+
+### Features
+- Add a user-directory installer with a stable executable location, login-item updates, upgrade rollback, and data-preserving uninstall.
+- Add a portable, read-only activity recall Skill for querying local summaries and evidence from other coding agents.
+
+### Fixes & Improvements
+- Require HTTPS for remote model endpoints by default, retain loopback HTTP, and support explicit per-model consent for remote HTTP. Apply the same checks to model catalogs and reject automatic model-request redirects.
+- Check observation policy before reading interaction targets, validate clicked application and window identity, and retain text and interface baselines correctly after write failures.
+- Validate narrative source references and preserve source-backed evidence when rendering activity summaries.
+- Preserve complete release verification while testing both development and public branches; document first launch, permissions, upgrades, and uninstall for direct downloads.
+
 ## 0.2.2 - 2026-10-20
 
 ### Features

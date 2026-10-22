@@ -55,6 +55,8 @@ public struct PricingDraft: Sendable {
 }
 
 public struct ModelSettingsDraft: Sendable {
+    public var allowInsecureHTTP: Bool
+    public var fallbackAllowInsecureHTTP: Bool
     public var baseURL: String
     public var model: String
     public var requiresAPIKey: Bool
@@ -75,6 +77,8 @@ public struct ModelSettingsDraft: Sendable {
     public var fallbackPricing: PricingDraft
 
     public init(_ settings: ModelSettings? = nil, environment: [String: String] = ProcessInfo.processInfo.environment) {
+        allowInsecureHTTP = settings?.allowInsecureHTTP == true
+        fallbackAllowInsecureHTTP = settings?.fallback?.allowInsecureHTTP == true
         baseURL = settings?.baseURL.absoluteString ?? environment["DEEPSEEK_BASE_URL"] ?? DeepSeekClient.defaultBaseURL.absoluteString
         model = settings?.model ?? environment["DEEPSEEK_MODEL"] ?? DeepSeekClient.defaultModel
         requiresAPIKey = settings?.requiresAPIKey ?? true
@@ -116,17 +120,19 @@ public struct ModelSettingsDraft: Sendable {
             fallback = try FallbackModelSettings(baseURL: serviceURL(fallbackURL, label: "降级服务地址"),
                 model: secondary, reasoningEffort: fallbackReasoning.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty, pricing: fallbackPricing.value(),
                 requiresAPIKey: fallbackRequiresAPIKey, requestStyle: fallbackRequestStyle,
-                timeoutSeconds: requestTimeout(fallbackTimeoutSeconds))
+                timeoutSeconds: requestTimeout(fallbackTimeoutSeconds), allowInsecureHTTP: fallbackAllowInsecureHTTP)
         }
         let daily = try number(dailyBudget, label: "每日预算", optional: true)
         let monthly = try number(monthlyBudget, label: "每月预算", optional: true)
         if !hasPricing && (daily != nil || monthly != nil) {
             throw ConfigurationInputError.invalid("设置预算前，请先开启费用估算并填写单价。")
         }
-        return try ModelSettings(baseURL: serviceURL(baseURL, label: "服务地址"), model: name,
+        let result = try ModelSettings(baseURL: serviceURL(baseURL, label: "服务地址"), model: name,
             requiresAPIKey: requiresAPIKey, reasoningEffort: reasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             pricing: hasPricing ? pricing.value() : nil, dailyBudget: daily, monthlyBudget: monthly,
-            fallback: fallback, requestStyle: requestStyle, timeoutSeconds: requestTimeout(timeoutSeconds))
+            fallback: fallback, requestStyle: requestStyle, timeoutSeconds: requestTimeout(timeoutSeconds), allowInsecureHTTP: allowInsecureHTTP)
+        try result.validate()
+        return result
     }
 }
 

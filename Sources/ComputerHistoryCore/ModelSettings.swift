@@ -22,6 +22,7 @@ public struct ModelPricing: Codable, Sendable, Equatable {
 
 public struct ModelSettings: Codable, Sendable {
     public var credentialGroupID: String?
+    public var allowInsecureHTTP: Bool?
     public var baseURL: URL
     public var model: String
     public var requiresAPIKey: Bool
@@ -36,7 +37,8 @@ public struct ModelSettings: Codable, Sendable {
     public init(baseURL: URL, model: String, requiresAPIKey: Bool = true,
                 reasoningEffort: String? = nil, pricing: ModelPricing? = nil,
                 dailyBudget: Double? = nil, monthlyBudget: Double? = nil,
-                fallback: FallbackModelSettings? = nil, requestStyle: ChatRequestStyle? = nil, timeoutSeconds: Double? = nil) {
+                fallback: FallbackModelSettings? = nil, requestStyle: ChatRequestStyle? = nil, timeoutSeconds: Double? = nil, allowInsecureHTTP: Bool = false) {
+        self.allowInsecureHTTP = allowInsecureHTTP
         self.baseURL = baseURL; self.model = model; self.requiresAPIKey = requiresAPIKey
         self.reasoningEffort = reasoningEffort; self.pricing = pricing
         self.dailyBudget = dailyBudget; self.monthlyBudget = monthlyBudget
@@ -68,6 +70,7 @@ public struct ModelSettings: Codable, Sendable {
     }
 
     func validate() throws {
+        try ModelTransport.validate(baseURL, allowInsecureHTTP: allowInsecureHTTP == true)
         guard ["http", "https"].contains(baseURL.scheme), baseURL.host != nil,
               !model.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
         for number in [pricing?.inputPerMillion, pricing?.cachedInputPerMillion,
@@ -80,6 +83,7 @@ public struct ModelSettings: Codable, Sendable {
             guard seconds.isFinite, seconds >= 1, seconds <= 600 else { throw SettingsError.invalid("请求超时应为 1 至 600 秒。") }
         }
         if let secondary = fallback {
+            try ModelTransport.validate(secondary.baseURL, allowInsecureHTTP: secondary.allowInsecureHTTP == true)
             guard ["http", "https"].contains(secondary.baseURL.scheme), secondary.baseURL.host != nil,
                   !secondary.model.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
         }
@@ -98,6 +102,7 @@ public enum ChatRequestStyle: String, Codable, CaseIterable, Sendable {
 
 public struct FallbackModelSettings: Codable, Sendable {
     public var credentialGroupID: String?
+    public var allowInsecureHTTP: Bool?
     public var baseURL: URL
     public var model: String
     public var reasoningEffort: String?
@@ -106,7 +111,8 @@ public struct FallbackModelSettings: Codable, Sendable {
     public var requestStyle: ChatRequestStyle?
     public var timeoutSeconds: Double?
     public init(baseURL: URL, model: String, reasoningEffort: String? = nil, pricing: ModelPricing? = nil,
-                requiresAPIKey: Bool = true, requestStyle: ChatRequestStyle? = nil, timeoutSeconds: Double? = nil) {
+                requiresAPIKey: Bool = true, requestStyle: ChatRequestStyle? = nil, timeoutSeconds: Double? = nil, allowInsecureHTTP: Bool = false) {
+        self.allowInsecureHTTP = allowInsecureHTTP
         self.baseURL = baseURL; self.model = model; self.reasoningEffort = reasoningEffort
         self.pricing = pricing; self.requiresAPIKey = requiresAPIKey; self.requestStyle = requestStyle; self.timeoutSeconds = timeoutSeconds
     }

@@ -7,10 +7,9 @@ import AppKit
 /// 采集器需要的是"发生了什么"而非"按键的物理细节"，故这里把 CGEvents 归约成
 /// 少量语义事件，再交给上层组装成 `EventStreamRecord`。
 public enum InputEvent: Sendable {
-    case leftMouseDown(clickCount: Int)
-    case rightMouseDown(clickCount: Int)
-    case otherMouseDown(clickCount: Int)
-    case leftMouseDragged
+    case leftMouseDown(clickCount: Int, flags: CGEventFlags, location: CGPoint)
+    case rightMouseDown(clickCount: Int, flags: CGEventFlags, location: CGPoint)
+    case otherMouseDown(clickCount: Int, flags: CGEventFlags, location: CGPoint)
     case keyDown(keyCode: UInt16, flags: CGEventFlags, isRepeat: Bool)
     case flagsChanged(flags: CGEventFlags)
 }
@@ -45,15 +44,12 @@ public enum ModifierNames {
 /// 事件 tap 的回调封装。
 ///
 /// `CGEventTap` 的回调是 C 函数指针，没有捕获上下文，因此用全局实例转发。
-/// 这层不做任何落盘或耗时工作——tap 回调在系统输入路径上，阻塞会影响全机输入。
+/// handler 同步运行于 tap 所在 runloop，耗时会阻塞后续输入处理。
 public final class InputTap {
     public typealias Handler = (InputEvent) -> Void
     private let handler: Handler
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-
-    /// 单调递增的按键计数，用于把连续可见字符聚成一次 text_input。
-    private var lastFlags: CGEventFlags = []
 
     public init(handler: @escaping Handler) {
         self.handler = handler
@@ -82,7 +78,6 @@ public final class InputTap {
             (1 << CGEventType.leftMouseDown.rawValue) |
             (1 << CGEventType.rightMouseDown.rawValue) |
             (1 << CGEventType.otherMouseDown.rawValue) |
-            (1 << CGEventType.leftMouseDragged.rawValue) |
             (1 << CGEventType.keyDown.rawValue) |
             (1 << CGEventType.flagsChanged.rawValue)
 
@@ -119,17 +114,15 @@ public final class InputTap {
         tap = nil
     }
 
-    private func dispatch(type: CGEventType, event: CGEvent) {
+    func dispatch(type: CGEventType, event: CGEvent) {
         let flags = event.flags
         switch type {
         case .leftMouseDown:
-            handler(.leftMouseDown(clickCount: Int(event.getIntegerValueField(.mouseEventClickState))))
+            handler(.leftMouseDown(clickCount: Int(event.getIntegerValueField(.mouseEventClickState)), flags: flags, location: event.location))
         case .rightMouseDown:
-            handler(.rightMouseDown(clickCount: Int(event.getIntegerValueField(.mouseEventClickState))))
+            handler(.rightMouseDown(clickCount: Int(event.getIntegerValueField(.mouseEventClickState)), flags: flags, location: event.location))
         case .otherMouseDown:
-            handler(.otherMouseDown(clickCount: Int(event.getIntegerValueField(.mouseEventClickState))))
-        case .leftMouseDragged:
-            handler(.leftMouseDragged)
+            handler(.otherMouseDown(clickCount: Int(event.getIntegerValueField(.mouseEventClickState)), flags: flags, location: event.location))
         case .keyDown:
             let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
             let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0

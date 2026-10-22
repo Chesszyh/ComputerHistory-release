@@ -2,6 +2,7 @@
 """Sealed segments must bypass periodic waits and background report generation."""
 import datetime
 import http.server
+import re
 import json
 import os
 from pathlib import Path
@@ -18,7 +19,8 @@ class Model(http.server.BaseHTTPRequestHandler):
         data=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         if '撰写中文日报' in data['messages'][0]['content']:
             report_started.set();release.wait(12)
-        content='## 00:00 合成活动\n合成摘要。' if '待整理的新增活动' in data['messages'][1]['content'] else '### 本次活动\n合成任务取得进展。'
+        numbers = re.findall(r'### 来源 (S\d+)', data['messages'][1]['content'])
+        content=f'## [{",".join(numbers)}] 合成活动\n合成摘要。' if numbers else '### 本次活动\n合成任务取得进展。'
         body=json.dumps({'choices':[{'message':{'content':content},'finish_reason':'stop'}],'usage':{'prompt_tokens':10,'completion_tokens':10,'total_tokens':20}}).encode()
         try:self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
         except (BrokenPipeError,ConnectionResetError):pass

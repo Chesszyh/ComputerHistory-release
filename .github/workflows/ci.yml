@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   pull_request:
-    branches: [main]
+    branches: [main, master]
   workflow_dispatch:
     inputs:
       native_case:
@@ -42,6 +42,12 @@ jobs:
       - name: Build and release tool checks
         if: ${{ matrix.configuration == 'debug' }}
         run: python3 scripts/test-build-tools.py
+      - name: Install lifecycle checks
+        if: ${{ matrix.configuration == 'debug' }}
+        run: python3 scripts/test-install.py
+      - name: Agent skill queries (synthetic history)
+        if: ${{ matrix.configuration == 'debug' }}
+        run: python3 scripts/test-agent-skill.py
       - name: Parallel integration tests
         timeout-minutes: 6
         run: python3 scripts/test-integration.py ".build/$CONFIGURATION/computer-history" --logs ".build/integration-$CONFIGURATION"

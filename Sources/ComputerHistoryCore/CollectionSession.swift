@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 /// 采集会话：把输入事件与 AX 树组装成 `EventStreamRecord`，按 10 分钟切段落盘。
 ///
@@ -92,6 +93,7 @@ public final class CollectionSession {
         windowTextContext = nil
         lastWindowText = nil
         textTracker.resetBaseline()
+        pendingText = []
         textContext = nil
         inputActivity = nil
         previousTree = nil
@@ -117,6 +119,7 @@ public final class CollectionSession {
             windowTextContext = nil
             lastWindowText = nil
             textTracker.resetBaseline()
+            pendingText = []
             textContext = nil
             inputActivity = nil
             previousTree = nil
@@ -133,6 +136,7 @@ public final class CollectionSession {
         var target: EventStreamAXElement?
     }
     private var textContext: TextContext?
+    private var pendingText: [(fragment: TextInputTracker.Fragment, context: TextContext)] = []
     private var inputActivity: (pid: Int32?, windowID: UInt32?, url: String?, focus: Int?, at: Date)?
 
     /// 只记录交互时间与上下文，不保存原始键码或键入内容。
@@ -149,6 +153,8 @@ public final class CollectionSession {
     /// 供外部观察状态。
     public private(set) var currentSegmentID: String?
     public private(set) var totalEventsWritten = 0
+    public private(set) var writeFailureCount = 0
+    public private(set) var lastWriteError: String?
 
     public init(configuration: Configuration) {
         self.config = configuration
@@ -167,6 +173,7 @@ public final class CollectionSession {
         try EventArchive.recoverUnsealed(root: config.rootDirectory, excluding: currentSegmentID ?? "")
         isRunning = true
         textTracker.resetBaseline()
+        pendingText = []
         textContext = nil
         previousTree = nil
         lastSnapshotText = nil
@@ -181,11 +188,14 @@ public final class CollectionSession {
         windowTextContext = nil
         lastWindowText = nil
         // 收尾前把未满一个停顿周期的输入落盘，避免丢尾部。
-        flushTextInput(at: now)
+        guard flushTextInput(at: now) else { throw CocoaError(.fileWriteUnknown) }
         textTracker.resetBaseline()
+        pendingText = []
         textContext = nil
-        append(kind: .sessionEnded, at: now, app: nil, window: nil,
-               mouse: nil, keyboard: nil, selection: nil, ax: nil)
+        if !isPaused, !isAway, !append(kind: .sessionEnded, at: now, app: nil, window: nil,
+               mouse: nil, keyboard: nil, selection: nil, ax: nil) {
+            throw CocoaError(.fileWriteUnknown)
+        }
         defer {
             writer = nil
             currentSegmentID = nil
@@ -253,17 +263,19 @@ public final class CollectionSession {
         guard isRunning, !isPaused, !isAway, context == windowTextContext,
               !config.policy.shouldSuppress(app: context.app, window: context.window),
               !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        if let lastWindowText, lastWindowText.context == context, lastWindowText.text == result.text { return }
+        let expired = writer.map { SegmentClock.isExpired($0.startedAt, now: now) } ?? false
+        if !expired, let lastWindowText, lastWindowText.context == context, lastWindowText.text == result.text { return }
         var window = context.window ?? EventStreamWindow()
         if let expected = window.windowID, expected != result.windowID { return }
         window.windowID = result.windowID
         let lines = result.text.split(separator: "\n").enumerated().map { index, text in
             "\(index) 文本 Value: \(text)"
         }.joined(separator: "\n")
-        append(kind: .windowChanged, at: now, app: context.app, window: window,
-               mouse: nil, keyboard: nil, selection: nil,
-               ax: .init(mode: .fullTree, text: lines, source: "window_ocr"))
-        lastWindowText = (context, result.text)
+        if append(kind: .windowChanged, at: now, app: context.app, window: window,
+                  mouse: nil, keyboard: nil, selection: nil,
+                  ax: .init(mode: .fullTree, text: lines, source: "window_ocr")) {
+            lastWindowText = (context, result.text)
+        }
     }
 
     func recordSnapshot(roots: [UIElementRender], app: EventStreamApp,
@@ -284,10 +296,11 @@ public final class CollectionSession {
         if !force, !changed { return }
 
         let ax = makeAXTree(current: numbered, currentText: treeText)
-        append(kind: .windowChanged, at: now, app: app, window: window,
-               mouse: nil, keyboard: nil, selection: nil, ax: ax)
-        previousTree = numbered
-        lastSnapshotText = treeText
+        if append(kind: .windowChanged, at: now, app: app, window: window,
+                  mouse: nil, keyboard: nil, selection: nil, ax: ax) {
+            previousTree = numbered
+            lastSnapshotText = treeText
+        }
     }
 
     /// 记录一次鼠标点击。
@@ -295,14 +308,26 @@ public final class CollectionSession {
         button: String,
         clickCount: Int,
         modifiers: [String],
+        location: CGPoint? = nil,
         at now: Date = Date()
     ) {
         guard isRunning, !isPaused else { return }
         let app = FrontmostApplication.current()
         guard observeAvailability(app: app, now: now) else { return }
-        let target = FrontmostApplication.focusedElement()
+        let window = FrontmostApplication.frontWindow(for: app)
+        recordClick(button: button, clickCount: clickCount, modifiers: modifiers, app: app,
+                    window: window, readTarget: {
+                        location.flatMap { FrontmostApplication.clickedElement(at: $0, for: app, window: window) }
+                    }, at: now)
+    }
+
+    func recordClick(button: String, clickCount: Int, modifiers: [String], app: EventStreamApp?,
+                     window: EventStreamWindow?, readTarget: () -> EventStreamAXElement?, at now: Date) {
+        guard isRunning, !isPaused, observeAvailability(app: app, now: now),
+              allowsInteraction(app: app, window: window) else { return }
+        let target = readTarget()
         append(kind: button == "right" ? .mouseContextMenu : .mouseClick, at: now,
-               app: app, window: FrontmostApplication.frontWindow(for: app),
+               app: app, window: window,
                mouse: EventStreamMouseInteraction(
                    button: button, clickCount: clickCount,
                    modifiers: modifiers, target: target),
@@ -317,9 +342,11 @@ public final class CollectionSession {
     ) {
         guard isRunning, !isPaused else { return }
         let app = FrontmostApplication.current()
-        guard observeAvailability(app: app, now: now) else { return }
+        let window = FrontmostApplication.frontWindow(for: app)
+        guard observeAvailability(app: app, now: now),
+              allowsInteraction(app: app, window: window) else { return }
         append(kind: .keyboardShortcut, at: now,
-               app: app, window: FrontmostApplication.frontWindow(for: app), mouse: nil,
+               app: app, window: window, mouse: nil,
                keyboard: EventStreamKeyboardInteraction(
                    keyEquivalent: keyEquivalent, modifiers: modifiers,
                    target: FrontmostApplication.focusedElement()),
@@ -330,9 +357,11 @@ public final class CollectionSession {
     public func recordTextInput(_ text: String, at now: Date = Date()) {
         guard isRunning, !isPaused, !text.isEmpty else { return }
         let app = FrontmostApplication.current()
-        guard observeAvailability(app: app, now: now) else { return }
+        let window = FrontmostApplication.frontWindow(for: app)
+        guard observeAvailability(app: app, now: now),
+              allowsInteraction(app: app, window: window) else { return }
         append(kind: .keyboardTextInput, at: now,
-               app: app, window: FrontmostApplication.frontWindow(for: app), mouse: nil,
+               app: app, window: window, mouse: nil,
                keyboard: EventStreamKeyboardInteraction(
                    text: text, target: FrontmostApplication.focusedElement()),
                selection: nil, ax: nil)
@@ -342,9 +371,11 @@ public final class CollectionSession {
     public func recordSubmit(at now: Date = Date()) {
         guard isRunning, !isPaused else { return }
         let app = FrontmostApplication.current()
-        guard observeAvailability(app: app, now: now) else { return }
+        let window = FrontmostApplication.frontWindow(for: app)
+        guard observeAvailability(app: app, now: now),
+              allowsInteraction(app: app, window: window) else { return }
         append(kind: .keyboardSubmit, at: now,
-               app: app, window: FrontmostApplication.frontWindow(for: app), mouse: nil,
+               app: app, window: window, mouse: nil,
                keyboard: EventStreamKeyboardInteraction(
                    keyEquivalent: "\r", target: FrontmostApplication.focusedElement()),
                selection: nil, ax: nil)
@@ -367,10 +398,11 @@ public final class CollectionSession {
                          readFocused: () -> (TextInputTracker.Observation, EventStreamAXElement?),
                          now: Date) {
         guard isRunning, !isPaused else { return }
-        guard observeAvailability(app: app, now: now) else { return }
+        guard observeAvailability(app: app, now: now), retryPendingText(at: now) else { return }
         guard let app else {
-            flushTextInput(at: now)
+            guard flushTextInput(at: now) else { return }
             textTracker.resetBaseline()
+            pendingText = []
             textContext = nil
             return
         }
@@ -378,21 +410,24 @@ public final class CollectionSession {
             || textContext?.app.processIdentifier != app.processIdentifier
             || textContext?.window?.windowID != window?.windowID
             || textContext?.window?.url != window?.url {
-            flushTextInput(at: now)
+            guard flushTextInput(at: now) else { return }
             textTracker.resetBaseline()
+            pendingText = []
             textContext = nil
         }
         // 必须在读取控件值之前判断，屏蔽内容不能进入输入缓冲。
         if config.policy.shouldSuppress(app: app, window: window) {
             if config.tracksSuppression { writer?.noteSuppressed() }
             textTracker.resetBaseline()
+            pendingText = []
             textContext = nil
             return
         }
         var (obs, target) = readFocused()
         if textContext?.focusIdentity != obs.focusIdentity {
-            flushTextInput(at: now)
+            guard flushTextInput(at: now) else { return }
             textTracker.resetBaseline()
+            pendingText = []
             textContext = nil
         }
         if obs.hasInputActivity == nil, let inputActivity {
@@ -410,32 +445,41 @@ public final class CollectionSession {
                                   focusIdentity: obs.focusIdentity, target: target)
         textContext?.app = app
         textContext?.window = window
-        for fragment in textTracker.observe(obs, at: now) {
-            writeTextInput(fragment, context: textContext ?? context, at: now)
-        }
+        let fragments = textTracker.observe(obs, at: now)
+        pendingText = fragments.map { ($0, textContext ?? context) }
+        _ = retryPendingText(at: now)
         textContext = context
     }
 
-    private func flushTextInput(at now: Date) {
+    @discardableResult
+    private func flushTextInput(at now: Date) -> Bool {
+        guard retryPendingText(at: now) else { return false }
         let fragments = textTracker.flush()
-        if let context = textContext {
-            for fragment in fragments {
-                writeTextInput(fragment, context: context, at: now)
-            }
-        }
+        if let context = textContext { pendingText = fragments.map { ($0, context) } }
+        return retryPendingText(at: now)
     }
 
-    private func writeTextInput(_ fragment: TextInputTracker.Fragment, context: TextContext, at now: Date) {
-        guard !fragment.text.isEmpty else { return }
+    private func retryPendingText(at now: Date) -> Bool {
+        // Do not consume more observations while this one flush is awaiting persistence.
+        while let pending = pendingText.first {
+            guard writeTextInput(pending.fragment, context: pending.context, at: now) else { return false }
+            pendingText.removeFirst()
+        }
+        return true
+    }
+
+    private func writeTextInput(_ fragment: TextInputTracker.Fragment, context: TextContext, at now: Date) -> Bool {
+        guard !fragment.text.isEmpty else { return true }
         let eventID = nextID
-        append(kind: .keyboardTextInput, at: now,
+        let written = append(kind: .keyboardTextInput, at: now,
                app: context.app, window: context.window, mouse: nil,
                keyboard: EventStreamKeyboardInteraction(text: fragment.text, textEvidence: fragment.evidence,
                                                         focusIdentity: context.focusIdentity, textReplaces: fragment.replaces, target: context.target),
                selection: nil, ax: nil)
-        if nextID > eventID, let segment = currentSegmentID {
+        if written, let segment = currentSegmentID {
             textTracker.acknowledge(fragment, reference: "\(segment)#\(eventID)")
         }
+        return written
     }
 
     /// 记录一次文本选中变化。
@@ -471,6 +515,7 @@ public final class CollectionSession {
         }
         if changed {
             textTracker.resetBaseline()
+            pendingText = []
             textContext = nil
             inputActivity = nil
             previousTree = nil
@@ -482,6 +527,12 @@ public final class CollectionSession {
     }
 
     // MARK: - 内部
+
+    private func allowsInteraction(app: EventStreamApp?, window: EventStreamWindow?) -> Bool {
+        guard config.policy.shouldSuppress(app: app, window: window) else { return true }
+        if config.tracksSuppression { writer?.noteSuppressed() }
+        return false
+    }
 
     /// 生成差分 ax：有上一帧则为 `diffFromPrevious`，否则整树。
     /// 超预算时 `lines(...)` 返回 nil，回退为整树——与实测行为一致。
@@ -516,7 +567,8 @@ public final class CollectionSession {
         guard !isPaused, !isAway else { return false }
 
         // 抑制判定：命中则只计数，不落主文件。
-        if config.policy.shouldSuppress(app: app, window: window) {
+        if kind != .sessionStarted, kind != .sessionEnded,
+           config.policy.shouldSuppress(app: app, window: window) {
             if config.tracksSuppression { writer?.noteSuppressed() }
             return false
         }
@@ -530,8 +582,17 @@ public final class CollectionSession {
             try writer.append(record)
             nextID += 1
             totalEventsWritten += 1
+            if lastWriteError != nil {
+                FileHandle.standardError.write(Data("事件写入已恢复。\n".utf8))
+                lastWriteError = nil
+            }
             return true
         } catch {
+            writeFailureCount += 1
+            lastWriteError = String(describing: error)
+            previousTree = nil
+            lastSnapshotText = nil
+            lastWindowText = nil
             FileHandle.standardError.write(
                 "写入事件失败：\(error)\n".data(using: .utf8)!)
             return false

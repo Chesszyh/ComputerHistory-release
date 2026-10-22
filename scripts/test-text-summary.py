@@ -30,14 +30,16 @@ class Model(http.server.BaseHTTPRequestHandler):
             return
         user = next(m['content'] for m in payload['messages'] if m['role'] == 'user')
         if '待整理的新增活动' in user:
-            at = re.search(r'### 时刻 (\d{2}:\d{2})', user).group(1)
-            content = f'## {at} 合成活动\n查看了合成窗口并编辑合成文档。'
+            numbers = re.findall(r'### 来源 (S\d+)', user)
+            content = f'## [{",".join(numbers)}] 合成活动\n查看了合成窗口并编辑合成文档。'
         else:
             content = '### Memory summary\n合成摘要。\n### 本次活动\n查看了合成窗口。'
         if payload['model'] == 'synthetic-shadow':
             content = 'SHADOW OUTPUT'
         if mode == 'empty':
             content = ''
+        if mode == 'invalid_sources' and '待整理的新增活动' in user:
+            content = '## [S99] 不存在的来源\n合成内容。'
         body = json.dumps({'choices': [{'message': {'content': content}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 30, 'total_tokens': 130, 'prompt_cache_hit_tokens': 20, 'completion_tokens_details': {'reasoning_tokens': 0}}}).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
@@ -72,6 +74,35 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
     env = dict(os.environ, DEEPSEEK_API_KEY='synthetic-key',
                DEEPSEEK_BASE_URL=f'http://127.0.0.1:{server.server_port}')
     try:
+        (root / 'model.json').write_text('{broken')
+        for command in ['memorize', 'narrative', 'report']:
+            args = [binary, command, '--out', directory]
+            if command == 'report':
+                args += ['--day', '2020-01-01']
+            invalid = subprocess.run(args, env=env, capture_output=True, text=True, timeout=30)
+            assert invalid.returncode != 0 and 'model.json' in invalid.stderr, (command, invalid.stdout, invalid.stderr)
+        assert not list((root / 'memories').glob('*.md')), 'invalid configuration marked a segment complete'
+        assert not requests
+        (root / 'model.json').unlink()
+        repaired = subprocess.run([binary, 'memorize', '--out', directory], env=env,
+                                  capture_output=True, text=True, timeout=30)
+        assert repaired.returncode == 0 and len(requests) == 1, repaired.stderr
+        next((root / 'memories').glob('*.md')).unlink()
+        requests.clear()
+        authorizations.clear()
+        for ledger_file in (root / 'requests').glob('*.json'):
+            ledger_file.unlink()
+        (root / 'model.json').write_text('{broken')
+        local = subprocess.run([binary, 'memorize', '--out', directory, '--no-model', '--segment', segment_id],
+                               env=env, capture_output=True, text=True, timeout=30)
+        assert local.returncode == 0 and not requests
+        assert 'generation: factual' in next((root / 'memories').glob('*.md')).read_text()
+        # An explicit factual result remains complete when model configuration becomes available.
+        (root / 'model.json').unlink()
+        unchanged = subprocess.run([binary, 'memorize', '--out', directory], env=env,
+                                   capture_output=True, text=True, timeout=30)
+        assert unchanged.returncode == 0 and not requests
+        next((root / 'memories').glob('*.md')).unlink()
         result = subprocess.run([binary, 'memorize', '--out', directory, '--segment', segment_id],
                                 env=env, capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, result.stderr
@@ -164,7 +195,8 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
         # Eight sources require two requests; a failed second batch must preserve the first.
         template = next((root / 'memories').glob('*.md')).read_text()
         for minute in range(10, 80, 10):
-            sid = f'2020-01-01T{minute // 60:02d}-{minute % 60:02d}-00Z'
+            sid = (segment_id + f'_00000000-0000-0000-0000-{minute:012d}' if minute in [10, 20]
+                   else f'2020-01-01T{minute // 60:02d}-{minute % 60:02d}-00Z')
             (root / 'memories' / f'{sid}-ABCD-10min-memory-summary.md').write_text(template)
         (root / 'narrative.json').unlink()
         fail_at = len(requests) + 2
@@ -180,6 +212,32 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
         assert len(requests) == before + 1, 'saved batch was charged again on resume'
         saved = json.loads((root / 'narrative.json').read_text())
         assert len({name for item in saved['items'] for name in item['sourceMemories']}) == 8
+        before = len(requests)
+        no_change = subprocess.run([binary, 'narrative', '--out', directory], env=local_env,
+                                   capture_output=True, text=True, timeout=30)
+        assert no_change.returncode == 0 and len(requests) == before, 'unchanged sources were charged again'
+        source = root / 'memories' / saved['items'][0]['sourceMemories'][0]
+        source.write_text(source.read_text() + '\nSYNTHETIC REVISION CORRECTED\n')
+        unchanged_item = saved['items'][1]
+        original_cache = (root / 'narrative.json').read_bytes()
+        for failure_mode in ['http_error', 'invalid_sources']:
+            mode = failure_mode
+            failed_revision = subprocess.run([binary, 'narrative', '--out', directory], env=local_env,
+                                              capture_output=True, text=True, timeout=30)
+            assert failed_revision.returncode != 0, failed_revision.stdout
+            assert (root / 'narrative.json').read_bytes() == original_cache, 'failed revision destroyed the usable cache'
+        mode = 'ok'
+        before = len(requests)
+        revised = subprocess.run([binary, 'narrative', '--out', directory], env=local_env,
+                                 capture_output=True, text=True, timeout=30)
+        assert revised.returncode == 0 and len(requests) == before + 1, revised.stderr
+        refreshed = json.loads((root / 'narrative.json').read_text())
+        assert unchanged_item in refreshed['items'], 'unrelated item was recomputed'
+        assert len({name for item in refreshed['items'] for name in item['sourceMemories']}) == 8
+        before = len(requests)
+        subprocess.run([binary, 'narrative', '--out', directory], env=local_env,
+                       capture_output=True, text=True, timeout=30, check=True)
+        assert len(requests) == before
         config['fallback'] = {'baseURL': config['baseURL'], 'model': 'synthetic-shadow',
                               'requiresAPIKey': False, 'reasoningEffort': 'none'}
         (root / 'model.json').write_text(json.dumps(config))

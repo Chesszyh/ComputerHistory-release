@@ -259,7 +259,14 @@ if flags.contains("narrative") {
     var client: DeepSeekClient?
     if !flags.contains("--no-model") {
         do { client = try DeepSeekClient.fromEnvironment(rootDirectory: root) }
-        catch { warn("未启用模型归纳：\(error)") }
+        catch DeepSeekClient.ClientError.missingAPIKey {
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("model.json").path) {
+                warn("模型配置缺少密钥，请在模型设置中填写或使用 --no-model。")
+                exit(1)
+            }
+            warn("未配置模型，使用本地事实摘要。")
+        }
+        catch { warn("模型初始化失败：\(error)"); exit(1) }
     }
     let generator = NarrativeGenerator(rootDirectory: root, client: client)
     var outcomes: [NarrativeGenerator.Outcome] = []
@@ -268,9 +275,11 @@ if flags.contains("narrative") {
                                                overwrite: flags.contains("--overwrite"))] }
         catch { warn("生成失败：\(error)"); exit(1) }
     } else {
-        outcomes = generator.generateMissing(
-            limit: value(of: "--limit").flatMap(Int.init),
-            overwrite: flags.contains("--overwrite"))
+        do {
+            outcomes = try generator.generateMissing(
+                limit: value(of: "--limit").flatMap(Int.init),
+                overwrite: flags.contains("--overwrite"))
+        } catch { warn("生成失败：\(error)"); exit(1) }
     }
     if outcomes.isEmpty {
         print("没有需要归纳的日期。")
@@ -330,9 +339,15 @@ if flags.contains("memorize") {
     if !flags.contains("--no-model") {
         do {
             client = try DeepSeekClient.fromEnvironment(rootDirectory: root)
+        } catch DeepSeekClient.ClientError.missingAPIKey {
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("model.json").path) {
+                warn("模型配置缺少密钥，请在模型设置中填写或使用 --no-model。")
+                exit(1)
+            }
+            warn("未配置模型，使用本地事实摘要。")
         } catch {
-            warn("未启用模型补写：\(error)")
-            warn("  只生成事实摘要。模型配置见数据目录中的 model.json 或 DEEPSEEK_API_KEY。")
+            warn("模型初始化失败：\(error)")
+            exit(1)
         }
     }
 
@@ -853,26 +868,24 @@ do {
     let t = InputTap { event in
       MainActor.assumeIsolated {
         switch event {
-        case .leftMouseDown(let n):
+        case .leftMouseDown(let n, let flags, let location):
             session.noteInputActivity()
             session.recordClick(button: "left", clickCount: n,
-                                modifiers: ModifierNames.names(from: []))
-        case .rightMouseDown(let n):
+                                modifiers: ModifierNames.names(from: flags), location: location)
+        case .rightMouseDown(let n, let flags, let location):
             session.recordClick(button: "right", clickCount: n,
-                                modifiers: ModifierNames.names(from: []))
-        case .otherMouseDown(let n):
+                                modifiers: ModifierNames.names(from: flags), location: location)
+        case .otherMouseDown(let n, let flags, let location):
             session.recordClick(button: "middle", clickCount: n,
-                                modifiers: ModifierNames.names(from: []))
-        case .leftMouseDragged:
-            break   // 拖拽在抬起时归档，避免逐像素刷屏
+                                modifiers: ModifierNames.names(from: flags), location: location)
         case .keyDown(let keyCode, let flags, let isRepeat):
             session.noteInputActivity()
             guard !isRepeat else { break }
             let mods = ModifierNames.names(from: flags)
-            // 带修饰键的按键记为快捷键；纯文本输入由输入法侧聚合，此处不重复记。
-            if !mods.isEmpty {
+            // Shift/Option 可参与字符输入，只有操作组合键在此记录。
+            if InputKey.action(for: keyCode, flags: flags) == .shortcut {
                 session.recordShortcut(keyEquivalent: InputKey.name(for: keyCode), modifiers: mods)
-            } else if keyCode == 36 || keyCode == 76 {
+            } else if InputKey.action(for: keyCode, flags: flags) == .submit {
                 session.recordSubmit()
             }
         case .flagsChanged:

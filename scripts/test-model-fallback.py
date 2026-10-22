@@ -21,6 +21,7 @@ class Model(http.server.BaseHTTPRequestHandler):
         model=data['model'];mode=secondary if model=='synthetic-fallback' else primary
         calls.append((data,self.headers.get('Authorization')))
         if mode=='timeout':time.sleep(2)
+        if mode=='redirect':self.send_response(307);self.send_header('Location', '/redirect-target');self.end_headers();return
         if mode=='http':self.send_response(503);self.end_headers();return
         if mode=='malformed':body=b'{"broken":true}'
         else:
@@ -57,7 +58,7 @@ with tempfile.TemporaryDirectory(prefix='fallback-test-') as d:
         save();out=run();assert len(calls)==1 and 'Primary synthetic result' in out
         assert calls[0][1]=='Bearer synthetic-primary-key'
         assert 'max_completion_tokens' in calls[0][0] and 'max_tokens' not in calls[0][0] and 'temperature' not in calls[0][0]
-        for failure in ['http','empty','truncated','malformed','timeout','keepalive']:
+        for failure in ['http','empty','truncated','malformed','timeout','keepalive','redirect']:
             primary=failure;start=len(calls);started=time.monotonic();out=run()
             if failure=="keepalive":assert time.monotonic()-started<2.5,"keepalive extended the wall-clock deadline"
             assert len(calls)==start+2 and 'Fallback synthetic result' in out,(failure,out)

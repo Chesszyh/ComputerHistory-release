@@ -40,9 +40,80 @@ final class NarrativeTests: XCTestCase {
         MemoryIndex.load(from: dir).entries.sorted { $0.startedAt < $1.startedAt }
     }
 
+    func testSameWindowSourcesUseUniqueNumbersAndValidateCompleteClaims() throws {
+        let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("memories")
+        for suffix in ["", "_" + UUID().uuidString, "_" + UUID().uuidString] {
+            try writeMemory(dir, segmentID: "2026-10-14T08-00-00Z" + suffix, title: suffix, summary: "Synthetic")
+        }
+        let sources = entries(dir)
+        XCTAssertEqual(Set(sources.map { $0.timeLabel() }).count, 1)
+        let merged = NarrativeGenerator.parseItems("## [S1,S2,S3] 合并\n完整摘要。", sources: sources)
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged.first?.title, "合并")
+        XCTAssertEqual(Set(merged.flatMap(\.sourceMemories)), Set(sources.map(\.id)))
+        let split = NarrativeGenerator.parseItems("## [S3] 后段\n三。\n## [S1,S2] 前段\n一二。", sources: sources)
+        XCTAssertEqual(split.map { $0.sourceMemories.count }, [1, 2])
+        XCTAssertEqual(split.first?.sourceMemories, [sources[2].id])
+        XCTAssertEqual(split.last?.sourceMemories, [sources[0].id, sources[1].id])
+        for text in ["## [S1] 遗漏\n摘要", "## [S1,S2,S4] 不存在\n摘要",
+                     "## [S1,S1,S2,S3] 重复\n摘要", "## [S1,S2] 一\n摘要\n## [S2,S3] 二\n摘要"] {
+            XCTAssertTrue(NarrativeGenerator.parseItems(text, sources: sources).isEmpty, text)
+        }
+        let subset = NarrativeGenerator.parseItems("## [S2,S3] 本批\n摘要", sources: sources, claimed: Array(sources[1...]))
+        XCTAssertEqual(subset.flatMap(\.sourceMemories), Array(sources[1...]).map(\.id))
+    }
+
+    func testSourceRevisionRefreshesOnlyAffectedItemsAndKeepsIdentity() throws {
+        let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("memories")
+        let first = try writeMemory(dir, segmentID: "2026-10-14T08-00-00Z", title: "OLD", summary: "old")
+        try writeMemory(dir, segmentID: "2026-10-14T08-10-00Z", title: "UNCHANGED", summary: "same")
+        let day = try XCTUnwrap(MemoryIndex.parse(fileURL: first)).dayLabel()
+        let generator = NarrativeGenerator(rootDirectory: root, client: nil)
+        _ = try generator.generate(day: day)
+        let before = ActivityNarrative.load(root: root)
+        try writeMemory(dir, segmentID: "2026-10-14T08-00-00Z", title: "CORRECTED", summary: "new")
+        let outcome = try generator.generate(day: day)
+        XCTAssertEqual(outcome.newItems, 1)
+        let after = ActivityNarrative.load(root: root)
+        XCTAssertTrue(after.items.contains { $0.title == "CORRECTED" })
+        XCTAssertEqual(after.items.first { $0.title == "UNCHANGED" }, before.items.first { $0.title == "UNCHANGED" })
+        XCTAssertEqual(after.items.first { $0.title == "CORRECTED" }?.id, before.items.first { $0.title == "OLD" }?.id)
+        XCTAssertEqual(try generator.generate(day: day).newItems, 0)
+    }
+
+    func testRevisedMergedItemKeepsDeletionAndRestoreAcrossSplit() async throws {
+        let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("memories")
+        let first = try writeMemory(dir, segmentID: "2026-10-14T08-00-00Z", title: "OLD", summary: "old")
+        try writeMemory(dir, segmentID: "2026-10-14T08-10-00Z", title: "SECOND", summary: "same")
+        let sources = entries(dir)
+        let merged = ActivityNarrative.Item(id: "legacy-merged", timestamp: sources[0].startedAt,
+            title: "Merged", summary: "Old result", apps: [], sourceMemories: sources.map(\.id))
+        try ActivityNarrative(items: [merged]).save(root: root)
+        let loader = TraySnapshotLoader()
+        let before = await loader.load(root: root)
+        let row = try XCTUnwrap(before.groups.flatMap(\.items).first)
+        try TimelineDeletions.delete(row, root: root)
+        try writeMemory(dir, segmentID: "2026-10-14T08-00-00Z", title: "CORRECTED", summary: "new")
+        let day = try XCTUnwrap(MemoryIndex.parse(fileURL: first)).dayLabel()
+        _ = try NarrativeGenerator(rootDirectory: root, client: nil).generate(day: day)
+        let hidden = await loader.load(root: root)
+        XCTAssertTrue(hidden.groups.isEmpty)
+        try TimelineDeletions.restore(id: row.deletionID, root: root)
+        let restored = await loader.load(root: root)
+        XCTAssertEqual(restored.groups.flatMap(\.items).count, 2, "Restored snapshot must not duplicate its replacements")
+        XCTAssertTrue(restored.groups.flatMap(\.items).contains { $0.title == "CORRECTED" })
+        try TimelineDeletions.delete(row, root: root)
+        try TimelineDeletions.purge(id: row.deletionID, root: root)
+        let purged = await TraySnapshotLoader().load(root: root)
+        XCTAssertTrue(purged.groups.isEmpty)
+    }
+
     // MARK: - 解析
 
-    /// 标题前的 `HH:MM` 被切出，并按该时刻回填对应源记忆的时间与应用。
+    /// 编号决定来源，输出顺序不会改变时间与应用归属。
     ///
     /// 这是关键性质：模型会合并同任务的段，按下标回填会得到与内容矛盾的时间。
     func testDeclaredTimeMapsBackToSource() throws {
@@ -59,10 +130,10 @@ final class NarrativeTests: XCTestCase {
         let earlier = src[0].timeLabel()
         let later = src[1].timeLabel()
         let text = """
-        ## \(later) 后发生的事
+        ## [S2] 后发生的事
         第二段的摘要。
 
-        ## \(earlier) 先发生的事
+        ## [S1] 先发生的事
         第一段的摘要。
         """
         let items = NarrativeGenerator.parseItems(text, sources: src)
@@ -75,27 +146,24 @@ final class NarrativeTests: XCTestCase {
         XCTAssertEqual(items[1].apps, ["com.a"])
     }
 
-    /// 无时刻前缀时整体作为标题，并按顺序取尚未使用的源。
-    func testMissingTimeStillParses() throws {
+    /// 缺少编号时不能猜测来源。
+    func testMissingSourceNumberRejected() throws {
         let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
         let memDir = root.appendingPathComponent("memories")
         try writeMemory(memDir, segmentID: "2026-10-14T08-00-00Z", title: "A", summary: "a")
         let src = entries(memDir)
         let items = NarrativeGenerator.parseItems("## 没有时刻的标题\n摘要内容。", sources: src)
-        XCTAssertEqual(items.count, 1)
-        XCTAssertEqual(items[0].title, "没有时刻的标题")
-        XCTAssertEqual(items[0].timestamp, src[0].startedAt)
+        XCTAssertTrue(items.isEmpty)
     }
 
-    /// 模型给出不存在的时刻时回退到顺序取用，不编造时间。
-    func testUnknownDeclaredTimeFallsBack() throws {
+    /// 展示时间不能代替来源编号。
+    func testTimeWithoutSourceNumberRejected() throws {
         let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
         let memDir = root.appendingPathComponent("memories")
         try writeMemory(memDir, segmentID: "2026-10-14T08-00-00Z", title: "A", summary: "a")
         let src = entries(memDir)
         let items = NarrativeGenerator.parseItems("## 23:59 不存在这个时刻\n摘要。", sources: src)
-        XCTAssertEqual(items.count, 1)
-        XCTAssertEqual(items[0].timestamp, src[0].startedAt, "应回退到真实存在的段")
+        XCTAssertTrue(items.isEmpty)
     }
 
     /// 空摘要的条目被丢弃——只有标题没有内容对扫读没有价值。
@@ -104,9 +172,8 @@ final class NarrativeTests: XCTestCase {
         let memDir = root.appendingPathComponent("memories")
         try writeMemory(memDir, segmentID: "2026-10-14T08-00-00Z", title: "A", summary: "a")
         let src = entries(memDir)
-        let items = NarrativeGenerator.parseItems("## 只有标题\n\n## 有摘要\n内容。", sources: src)
-        XCTAssertEqual(items.count, 1)
-        XCTAssertEqual(items[0].title, "有摘要")
+        let items = NarrativeGenerator.parseItems("## [S1] 只有标题\n", sources: src)
+        XCTAssertTrue(items.isEmpty)
     }
 
     // MARK: - 缓存

@@ -55,6 +55,7 @@ python3 scripts/make-tray-fixture.py --out /tmp/computer-history-tray-fixture --
 bash scripts/test-menubar-panel.sh
 bash scripts/test-menubar-panel.sh scripts/test-menubar-usage.swift
 bash scripts/test-menubar-panel.sh scripts/test-menubar-settings.swift
+bash scripts/test-menubar-panel.sh scripts/test-collector-input.swift
 ```
 
 模型列表与服务端推理强度元数据使用本地模型列表接口验证，不调用生成接口或读取真实密钥：
@@ -65,20 +66,29 @@ python3 scripts/test-menubar-catalog.py
 
 用量与设置面板用例使用临时合成记录，验证分组及请求详情标题整行点击、详情返回后的展开与滚动位置、提示词保存和恢复默认，以及原生模型／采集表单的编辑、保存和校验、总结删除与回收站恢复；不启动真实采集器、写入密钥或访问模型服务。
 
+`test-collector-input.swift` 在独立合成窗口验证系统键鼠监听、鼠标目标与键盘焦点不同的点击、组合点击、Shift 字符和 Command 快捷键。需测试程序的辅助功能权限；缺少权限退出 77，计为跳过。测试结束恢复前台应用与鼠标位置。
+
 ## CI 与版本发布
 
-公开仓库的 CI 在 `main` 推送、合并请求和手动触发时运行。Debug、Release 和原生菜单检查在独立的 Apple Silicon macOS 任务中并行执行；每个配置中的五组集成测试并发运行，日志分别保留为 CI 附件。私有样本与大数据基准保持显式启用，不属于常规 CI。
+Agent Skill 查询测试只使用临时合成历史，覆盖摘要、时间线、报告、压缩事件、过滤与只读边界，不需要 Swift 构建或外部服务：
+
+```bash
+python3 scripts/test-agent-skill.py
+```
+
+CI 在 `main`、`master` 推送与合并请求及手动触发时运行：私有开发使用 `master`，公开产品使用 `main`。Debug、Release 和原生菜单检查在独立的 Apple Silicon macOS 任务中并行执行；每个配置中的五组集成测试并发运行，日志分别保留为 CI 附件。私有样本与大数据基准保持显式启用，不属于常规 CI。
 
 本机可使用相同的并发集成入口，`--jobs 1` 可用于逐项排障：
 
 ```bash
 python3 scripts/test-integration.py .build/release/computer-history --logs .build/integration-release
 python3 scripts/test-build-tools.py
+python3 scripts/test-install.py
 ```
 
 原生菜单测试共用 `scripts/build-menubar-tests.py` 构建的程序，按编译器、源码、核心模块及对象文件内容复用；输入变化时重新编译。各用例在独立进程中顺序运行，避免剪贴板和原生窗口状态互相影响。CI 手动触发的 `native_case` 可只检查一个面板；这种局部检查不能用于发布。
 
-发布前更新 `VERSION` 与双语 CHANGELOG，等待相应提交的完整 CI 通过。Release 任务直接打包已测试的程序，不再重新构建。随后手动运行 **Publish verified release** 工作流，填写该次完整 CI 的 `run_id`；工作流检出受测提交，验证同次 CI 的 Apple Silicon 压缩包，创建注释标签和 GitHub Release。此入口不重新运行构建或测试。普通推送只运行 CI，不创建 Release。用户下载和启动说明由 `docs/distribution.md` 维护。
+发布前更新 `VERSION` 与双语 CHANGELOG，等待相应提交的完整 CI 通过。Release 任务直接打包已测试的程序，不再重新构建。正式发布任务仅在公开仓库的 `main` 上执行；私有仓库或其他分支手动触发会跳过任务。随后在公开仓库手动运行 **Publish verified release** 工作流，填写该次完整 CI 的 `run_id`；工作流检出受测提交，验证同次 CI 的 Apple Silicon 压缩包，创建注释标签和 GitHub Release。此入口不重新运行构建或测试。普通推送只运行 CI，不创建 Release。用户下载和启动说明由 `docs/distribution.md` 维护。
 
 也可从公开仓库检出的受测提交执行本机检查；加上 `--publish` 才会创建标签和 Release：
 
