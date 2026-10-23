@@ -5,12 +5,16 @@ final class SummaryQualityTests: XCTestCase {
     private let app = EventStreamApp(name: "Chrome", bundleIdentifier: "com.google.Chrome")
 
     func testWindowMetadataDoesNotDisplaceCapturedBody() {
-        let events = (0..<120).map { n in
-            EventStreamRecord(id: n, timestamp: Date(timeIntervalSince1970: Double(n)),
-                kind: .windowChanged, app: .init(name: "Music", bundleIdentifier: "example.music"),
-                ax: n == 60 ? .init(mode: .fullTree, text: "0 文本 Value: Synthetic track and artist") : nil,
-                activityWatch: n == 60 ? nil : .init(startedAt: Date(timeIntervalSince1970: Double(n)),
-                    endedAt: Date(timeIntervalSince1970: Double(n + 1)), windowBucket: "fixture", windowEventID: n))
+        let music = EventStreamApp(name: "Music", bundleIdentifier: "example.music")
+        let events: [EventStreamRecord] = (0..<120).map { n in
+            let timestamp = Date(timeIntervalSince1970: Double(n))
+            let tree: EventStreamAXTree? = n == 60
+                ? EventStreamAXTree(mode: .fullTree, text: "0 文本 Value: Synthetic track and artist") : nil
+            let observation: ActivityWatchEvidence? = n == 60 ? nil : ActivityWatchEvidence(
+                startedAt: timestamp, endedAt: timestamp.addingTimeInterval(1),
+                windowBucket: "fixture", windowEventID: n)
+            return EventStreamRecord(id: n, timestamp: timestamp, kind: .windowChanged,
+                app: music, ax: tree, activityWatch: observation)
         }
         let material = ActivityEvidence.material(events: events, segmentID: "fixture", characterBudget: 8000)
         XCTAssertTrue(material.contains("Synthetic track and artist"))
