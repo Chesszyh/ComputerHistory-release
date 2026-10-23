@@ -32,7 +32,7 @@ python3 scripts/test-process-control.py .build/release/computer-history
 
 ## 开始记录
 
-先检查权限，再进行一次短时采集。检查命令仅报告辅助功能状态，不代表输入监控、所有应用读取或事件监听已验证成功。
+先检查权限，再进行一次短时采集。检查命令报告辅助功能和屏幕录制授权状态，不代表输入监控、所有应用读取或事件监听已验证成功。
 
 ```bash
 ./.build/release/computer-history --check
@@ -61,7 +61,7 @@ python3 scripts/test-process-control.py .build/release/computer-history
 
 可安装 [跨 Agent 历史查询 Skill](docs/agent-skill.md)，在其他项目的 Coding Agent 中按需检索本机摘要与原始证据。
 
-历史活动滚动到底部时自动加载更早记录。系统登录界面期间停止内容采集，返回后将这段时间展示为一条“离开电脑”；具体判定和存储见[采集行为](docs/collector.md#采集行为与局限)。
+历史活动支持[固定十分钟或连续任务两种模式](docs/collector.md#时间线模式编辑与复制)，保存后可选择重算范围；固定模式可编辑摘要，底栏可多选后复制。滚动到底部时自动加载更早记录。系统登录界面期间停止内容采集，返回后将这段时间展示为一条“离开电脑”；具体判定和存储见[采集行为](docs/collector.md#采集行为与局限)。
 
 ```bash
 # 不联网：为已封口的段生成事实摘要

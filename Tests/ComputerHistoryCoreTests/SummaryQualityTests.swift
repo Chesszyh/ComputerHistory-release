@@ -4,6 +4,44 @@ import XCTest
 final class SummaryQualityTests: XCTestCase {
     private let app = EventStreamApp(name: "Chrome", bundleIdentifier: "com.google.Chrome")
 
+    func testWindowMetadataDoesNotDisplaceCapturedBody() {
+        let events = (0..<120).map { n in
+            EventStreamRecord(id: n, timestamp: Date(timeIntervalSince1970: Double(n)),
+                kind: .windowChanged, app: .init(name: "Music", bundleIdentifier: "example.music"),
+                ax: n == 60 ? .init(mode: .fullTree, text: "0 文本 Value: Synthetic track and artist") : nil,
+                activityWatch: n == 60 ? nil : .init(startedAt: Date(timeIntervalSince1970: Double(n)),
+                    endedAt: Date(timeIntervalSince1970: Double(n + 1)), windowBucket: "fixture", windowEventID: n))
+        }
+        let material = ActivityEvidence.material(events: events, segmentID: "fixture", characterBudget: 8000)
+        XCTAssertTrue(material.contains("Synthetic track and artist"))
+        XCTAssertLessThanOrEqual(material.count, 8000)
+    }
+
+    func testRepeatedScreensRetainPreviouslyUnsampledNodes() {
+        let text = (0..<24).map { "\($0) 文本 Value: Synthetic track \($0) end" }.joined(separator: "\n")
+        let events = (0..<4).map { n in
+            EventStreamRecord(id: n, timestamp: Date(timeIntervalSince1970: Double(n)),
+                kind: .windowChanged, app: .init(name: "Music", bundleIdentifier: "example.music"),
+                ax: .init(mode: .fullTree, text: text, source: "window_ocr"))
+        }
+        let material = ActivityEvidence.material(events: events, segmentID: "fixture")
+        for n in 0..<24 { XCTAssertTrue(material.contains("Synthetic track \(n) end"), "node \(n) was discarded before selection") }
+    }
+
+    func testShortScreenTextFitsAcrossTheWholeWindow() {
+        let lines = (0..<92).map { "\($0) 文本 Value: \($0 == 41 ? "Synthetic track and artist" : "Label \($0)")" }
+        for source in [nil, "window_ocr"] as [String?] {
+            let event = EventStreamRecord(id: 1, timestamp: Date(), kind: .windowChanged,
+                app: .init(name: "Music", bundleIdentifier: "example.music"),
+                ax: .init(mode: .fullTree, text: lines.joined(separator: "\n"), source: source))
+            let material = ActivityEvidence.material(events: [event], segmentID: "fixture", characterBudget: 8000)
+            XCTAssertTrue(material.contains("Synthetic track and artist"))
+            XCTAssertTrue(material.contains("Label 0"))
+            XCTAssertTrue(material.contains("Label 91"))
+            XCTAssertLessThanOrEqual(material.count, 8000)
+        }
+    }
+
     func testSparseTreeDoesNotBecomeActivityContent() {
         let event = EventStreamRecord(id: 1, timestamp: Date(), kind: .windowChanged,
             app: .init(name: "Music", bundleIdentifier: "example.music"),

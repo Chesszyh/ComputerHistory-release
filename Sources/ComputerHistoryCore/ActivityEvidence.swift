@@ -4,8 +4,8 @@ import Foundation
 public enum ActivityEvidence {
     public static func material(events: [EventStreamRecord], segmentID: String,
                                 characterBudget: Int = 16000) -> String {
-        var observations: [String] = []
-        var seenScreen = Set<String>()
+        var observations: [(reference: String, context: String, facts: [String], nodes: [String], hasContent: Bool)] = []
+        var lastContext: String?
         let replaced = Set(events.flatMap { $0.keyboard?.textReplaces ?? [] })
         for event in events {
             guard let app = event.app else { continue }
@@ -13,6 +13,8 @@ public enum ActivityEvidence {
                            event.window?.title, event.window?.url].compactMap { $0 }.joined(separator: " | ")
             let reference = "[\(MemoryGenerator.hm(event.timestamp)); \(segmentID)#\(event.id)] \(context)"
             var facts: [String] = []
+            var selectedNodes: [String] = []
+            var hasContent = false
             if let activity = event.activityWatch {
                 let state = activity.status == "afk" ? "空闲" : activity.status == "not-afk" ? "活动" : "状态未知"
                 let seconds = Int(max(0, activity.endedAt.timeIntervalSince(activity.startedAt)))
@@ -25,34 +27,58 @@ public enum ActivityEvidence {
                    !replaced.contains("\(segmentID)#\(event.id)") {
                     let label = keyboard.textEvidence == .editedValue ? "编辑片段" : "控件变化"
                     facts.append("\(label)：\(MemoryWriter.truncate(text, 2400))")
+                    hasContent = true
                 }
             }
             if let target = event.mouse?.target {
                 if let label = [target.title, target.description].compactMap({ $0 }).first,
                    !isChatChrome(label, app: app) {
                     facts.append("点击：\(MemoryWriter.truncate(label, 100))")
+                    hasContent = true
                 }
             }
             if let ax = event.ax {
                 // 按渲染节点切分，续行仍属于该节点；不能把旧差分的 ~ 续行误作新增内容。
-                let nodes = screenNodes(ax).filter { !isChatChrome($0, app: app) }
-                let fresh = nodes.filter { seenScreen.insert(context + "\n" + $0).inserted }
-                let selected = evenlySpaced(fresh, limit: 6)
-                if !selected.isEmpty { facts.append("界面显示：" + selected.joined(separator: "；")) }
+                let nodes = screenNodes(ax).filter { !isChatChrome($0, app: app) }.map {
+                    ax.source == "window_ocr" && $0.hasPrefix("Value: ") ? String($0.dropFirst(7)) : $0
+                }
+                selectedNodes = nodes
+                if !selectedNodes.isEmpty { hasContent = true }
                 else if ax.mode == .fullTree, nodes.isEmpty {
                     facts.append("仅记录到应用或窗口，未读取到有效正文")
                 }
             }
-            if facts.isEmpty, event.kind == .windowChanged { facts.append("查看窗口") }
-            if !facts.isEmpty { observations.append(reference + "\n" + facts.joined(separator: "\n")) }
+            if facts.isEmpty, selectedNodes.isEmpty, event.kind == .windowChanged, context != lastContext {
+                facts.append("查看窗口")
+            }
+            lastContext = context
+            if !facts.isEmpty || !selectedNodes.isEmpty {
+                observations.append((reference, context, facts, selectedNodes, hasContent))
+            }
         }
-        // 先覆盖整个时间范围，再填预算，避免只保留长段开头。
-        let selected = evenlySpaced(observations, limit: max(1, characterBudget / 650))
+        // 有正文时先覆盖正文的时序，重复的窗口与空闲元数据不能挤掉已采集内容。
+        let content = observations.filter(\.hasContent)
+        let selected = evenlySpaced(content.isEmpty ? observations : content, limit: max(1, characterBudget / 650))
         let slotBudget = max(0, characterBudget / max(1, selected.count) - 2)
         guard slotBudget > 0 else { return "" }
         var out = ""
+        var seenScreen = Set<String>()
         for item in selected {
-            let text = item.count <= slotBudget ? item : String(item.prefix(slotBudget - 1)) + "…"
+            var text = item.reference + "\n" + item.facts.joined(separator: "\n")
+            if !item.nodes.isEmpty {
+                let available = max(0, slotBudget - text.count - 8)
+                // 只对最终选入材料的节点去重，未入选节点留给后续快照。
+                let fresh = item.nodes.filter { !seenScreen.contains(item.context + "\n" + $0) }
+                let full = fresh.joined(separator: "；")
+                let nodes = full.count <= available ? fresh : evenlySpaced(fresh, limit: max(1, available / 80))
+                if nodes.isEmpty, item.facts.isEmpty { continue }
+                let perNode = max(1, available / max(1, nodes.count) - 1)
+                let body = full.count <= available ? full
+                    : nodes.map { MemoryWriter.truncate($0, perNode) }.joined(separator: "；")
+                if !nodes.isEmpty { text += "\n界面显示：" + body }
+                for node in nodes { seenScreen.insert(item.context + "\n" + node) }
+            }
+            if text.count > slotBudget { text = String(text.prefix(slotBudget - 1)) + "…" }
             out += text + "\n\n"
         }
         return out

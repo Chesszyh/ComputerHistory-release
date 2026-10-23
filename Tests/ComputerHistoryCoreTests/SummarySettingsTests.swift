@@ -24,6 +24,23 @@ final class SummarySettingsTests: XCTestCase {
         XCTAssertEqual(try SummarySettings.load(root: root), restored)
     }
 
+    func testTimelineModeRoundTripAndLegacySettings() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var settings = SummarySettings()
+        XCTAssertEqual(settings.timelineMode, .continuous)
+        settings[.narrative] = "Keep custom prompt"
+        settings.timelineMode = .fixedTenMinutes
+        try settings.save(root: root)
+        let restored = try SummarySettings.load(root: root)
+        XCTAssertEqual(restored.timelineMode, .fixedTenMinutes)
+        XCTAssertEqual(restored[.narrative], "Keep custom prompt")
+        try Data(#"{"narrativePrompt":"Legacy prompt"}"#.utf8).write(to: root.appendingPathComponent("summary.json"))
+        XCTAssertEqual(try SummarySettings.load(root: root).timelineMode, .continuous)
+        try Data(#"{"timelineMode":"unknown"}"#.utf8).write(to: root.appendingPathComponent("summary.json"))
+        XCTAssertThrowsError(try SummarySettings.load(root: root))
+    }
+
     func testInvalidConfigurationIsReportedWithoutReplacingIt() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

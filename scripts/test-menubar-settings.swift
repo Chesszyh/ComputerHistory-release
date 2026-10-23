@@ -33,7 +33,10 @@ struct SettingsRegression {
         config.policy.blocklist = [.application("com.apple.Passwords")]
         try config.jsonData().write(to: CollectorConfig.fileURL(rootDirectory: root))
         stage("load synthetic settings")
-        let model = StatusModel(root: root)
+        let command = root.appendingPathComponent("synthetic-command")
+        try "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"\(root.appendingPathComponent("commands.txt").path)\"\n".write(to: command, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: command.path)
+        let model = StatusModel(root: root, commandExecutable: command)
         defer { model.shutdown() }
         model.loadConfigurationDrafts()
         stage("OCR application checkboxes")
@@ -68,6 +71,17 @@ struct SettingsRegression {
         func settle() {
             RunLoop.main.run(until: Date().addingTimeInterval(0.3))
             panel.layoutSubtreeIfNeeded()
+        }
+        func snapshot(_ name: String) throws {
+            guard let directory = ProcessInfo.processInfo.environment["COMPUTER_HISTORY_TEST_SCREENSHOTS"] else { return }
+            panel.layoutSubtreeIfNeeded()
+            let capture = Process()
+            capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            capture.arguments = ["-x", "-l", String(window.windowNumber), URL(fileURLWithPath: directory).appendingPathComponent(name + ".png").path]
+            capture.standardError = FileHandle.nullDevice
+            try capture.run()
+            capture.waitUntilExit()
+            precondition(capture.terminationStatus == 0, "Explicit synthetic-window screenshot failed")
         }
         func fields(_ parent: NSView) -> [NSTextField] {
             (parent as? NSTextField).map { [$0] } ?? parent.subviews.flatMap(fields)
@@ -151,6 +165,77 @@ struct SettingsRegression {
         precondition(try! TimelineDeletions.load(root: root).records.isEmpty, "Purged entries must leave the trash")
         window.contentView = panel
         window.setContentSize(NSSize(width: 380, height: 640))
+        stage("timeline mode and recalculation choices")
+        model.settingsTab = .timeline
+        model.loadTimelineSettings()
+        model.timelineMode = .fixedTenMinutes
+        settle()
+        saveByClick()
+        precondition(try! SummarySettings.load(root: root).timelineMode == .fixedTenMinutes)
+        precondition(model.showsTimelineRecalculation && !model.timelineRebuilding)
+        try snapshot("timeline-mode")
+        model.recalculateTimeline(.none)
+        precondition(!FileManager.default.fileExists(atPath: root.appendingPathComponent("commands.txt").path), "No recalculation must launch no process")
+        for scope in [StatusModel.TimelineRecalculation.today, .all] {
+            model.recalculateTimeline(scope)
+            let deadline = Date().addingTimeInterval(5)
+            while model.timelineRebuilding && Date() < deadline { settle() }
+            precondition(!model.timelineRebuilding && model.timelineSettingsError == nil)
+        }
+        let arguments = try String(contentsOf: root.appendingPathComponent("commands.txt"), encoding: .utf8)
+        precondition(arguments.components(separatedBy: "--overwrite").count == 3)
+        precondition(arguments.components(separatedBy: "--day").count == 2)
+        try "#!/bin/sh\necho $$ > \"\(root.appendingPathComponent("owned-command.pid").path)\"\nexec /bin/sleep 30\n".write(to: command, atomically: true, encoding: .utf8)
+        model.recalculateTimeline(.all)
+        settle()
+        let ownedPID = Int32(try String(contentsOf: root.appendingPathComponent("owned-command.pid"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines))!
+        model.cancelTimelineRecalculation()
+        let cancelDeadline = Date().addingTimeInterval(4)
+        while model.timelineRebuilding && Date() < cancelDeadline { settle() }
+        precondition(!model.timelineRebuilding && kill(ownedPID, 0) == -1, "Cancel must reap the owned command")
+        stage("manual summary editing and explicit selection")
+        let memories = root.appendingPathComponent("memories")
+        try FileManager.default.createDirectory(at: memories, withIntermediateDirectories: true)
+        for minute in [0, 10] {
+            let name = String(format: "2020-01-01T00-%02d-00Z-ABCD-10min-memory-summary.md", minute)
+            try "---\ntitle: Synthetic activity \(minute)\ndescription: 核对合成文档章节。\n---".write(to: memories.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        model.showsSummarySettings = false
+        model.refreshAll(); settle(); settle()
+        let items = model.timelineGroups.flatMap(\.items).filter { !$0.memoryFiles.isEmpty }
+        precondition(items.count == 2 && model.canEditSummary(items[0]))
+        model.editSummary(items[0]); settle()
+        precondition(model.editingSummary != nil)
+        model.editedTitle = ""; model.saveSummaryEdit()
+        precondition(model.editError != nil && model.editingSummary != nil)
+        model.editedTitle = "校对报告"; model.editedSummary = "补全合成报告的缺失章节。"
+        settle(); try snapshot("summary-editor")
+        // Exercise the actual editor's default save button.
+        click(NSPoint(x: 342, y: 26)); settle(); settle()
+        precondition(model.editingSummary == nil)
+        let edited = model.timelineGroups.flatMap(\.items).first { $0.id == items[0].id }!
+        precondition(edited.title == "校对报告" && edited.manualEdit == true)
+        let clipboard = NSPasteboard.general.string(forType: .string)
+        defer {
+            NSPasteboard.general.clearContents()
+            if let clipboard { NSPasteboard.general.setString(clipboard, forType: .string) }
+        }
+        model.toggleSummarySelection()
+        model.selectSummary(edited); model.selectSummary(items[1])
+        settle(); try snapshot("summary-selection")
+        model.copySelectedSummaries()
+        let copied = NSPasteboard.general.string(forType: .string)!
+        precondition(copied.contains("校对报告") && copied.contains(items[1].title) && copied.contains("2020-01-01"))
+        precondition(!copied.contains("Synthetic summary"), "Unselected summary must stay out of clipboard")
+        model.selectSummary(items[1]); model.copySelectedSummaries()
+        precondition(!NSPasteboard.general.string(forType: .string)!.contains(items[1].title))
+        model.toggleSummarySelection()
+        model.editSummary(edited); model.saveSummaryEdit(restore: true); settle(); settle()
+        precondition(try! TimelineEdits.load(root: root).entries.isEmpty)
+        var continuous = try SummarySettings.load(root: root); continuous.timelineMode = .continuous
+        try continuous.save(root: root); model.refreshAll(); settle(); settle()
+        precondition(!model.canEditSummary(items[0]), "Continuous mode must not expose editing")
+        model.showsSummarySettings = true
         stage("collector form")
         model.settingsTab = .collector
         settle()
@@ -178,6 +263,6 @@ struct SettingsRegression {
         model.setBackupEnabled(false)
         precondition(try! BackupSettings.load(root: root)?.enabled == false, "Quick toggle must persist disabled state")
         precondition(!model.effectiveBackupEnabled)
-        print("PASS: full-row request disclosure, native model/collector editing, model-group persistence and swap, rendered summary deletion and trash restoration, save buttons, validation, and malformed-file preservation")
+        print("PASS: full-row request disclosure, native model/collector editing, model-group persistence and swap, rendered summary deletion and trash restoration, timeline mode and scoped recalculation, cancellation, native summary editing, selected copy, save buttons, validation, and malformed-file preservation")
     }
 }

@@ -4,6 +4,12 @@ import Security
 public enum ModelAPIKey {
     private static let service = "ComputerHistory.ModelAPIKey"
 
+    public static func configureInteraction(allow: Bool) throws {
+        // 登录钥匙串使用文件式访问控制，不能靠 LAContext 的逐次查询选项禁止其弹窗。
+        let status = SecKeychainSetUserInteractionAllowed(allow)
+        guard status == errSecSuccess else { throw KeyError(status: status) }
+    }
+
     private static func query(root: URL, fallback: Bool = false, groupID: String? = nil) -> [String: Any] {
         let suffix: String
         switch groupID {
@@ -60,6 +66,11 @@ public enum ModelAPIKey {
 
     public struct KeyError: Error, CustomStringConvertible {
         let status: OSStatus
-        public var description: String { "无法访问模型密钥：\(SecCopyErrorMessageString(status, nil) as String? ?? String(status))" }
+        public var description: String {
+            if status == errSecInteractionNotAllowed || status == errSecAuthFailed {
+                return "钥匙串未允许当前程序读取模型密钥。请手动运行 computer-history model-key --authorize，并在系统验证中选择“始终允许”。备用模型使用 --fallback。后台任务不会弹出验证窗口。"
+            }
+            return "无法访问模型密钥：\(SecCopyErrorMessageString(status, nil) as String? ?? String(status))"
+        }
     }
 }

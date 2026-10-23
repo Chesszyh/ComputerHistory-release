@@ -26,6 +26,7 @@ struct SummarySettingsPane: View {
 
             Group {
                 switch model.settingsTab {
+                case .timeline: timelineEditor
                 case .prompts: promptEditor
                 case .model: modelEditor
                 case .collector: collectorEditor
@@ -35,6 +36,54 @@ struct SummarySettingsPane: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(width: 380, height: 640)
+    }
+
+    private var timelineEditor: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("总结模式").font(.system(size: 12, weight: .semibold))
+            Picker("总结模式", selection: $model.timelineMode) {
+                ForEach(SummarySettings.TimelineMode.allCases, id: \.self) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.radioGroup).labelsHidden()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("timeline-mode")
+            .disabled(!model.timelineSettingsLoaded || model.timelineRebuilding)
+            Text(model.timelineMode.explanation)
+                .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("时间线按先后顺序排列，活动时段互不重叠。")
+                .font(.system(size: 10)).foregroundStyle(.tertiary)
+            feedback(error: model.timelineSettingsError, message: model.timelineSettingsMessage)
+            if model.showsTimelineRecalculation {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("如何处理已有总结？").font(.system(size: 11, weight: .semibold))
+                    Text("重算使用当前模型，保留原始记录和十分钟记忆。")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                    HStack {
+                        Button("重算当天总结") { model.recalculateTimeline(.today) }.accessibilityIdentifier("timeline-recalculate-today")
+                        Button("重算所有总结") { model.recalculateTimeline(.all) }.accessibilityIdentifier("timeline-recalculate-all")
+                        Button("不重算") { model.recalculateTimeline(.none) }.accessibilityIdentifier("timeline-recalculate-none")
+                    }.controlSize(.small)
+                }
+            }
+            if model.timelineRebuilding {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Button("停止重算") { model.cancelTimelineRecalculation() }.accessibilityIdentifier("timeline-cancel")
+                }
+            }
+            SettingsDisclosure("高级选项") { advancedFile("summary.json") }
+            Spacer()
+            Divider().opacity(0.4)
+            HStack {
+                Spacer()
+                Button("保存模式…") { model.saveTimelineSettings() }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+                    .disabled(!model.timelineSettingsLoaded || model.timelineRebuilding)
+                    .keyboardShortcut("s", modifiers: .command)
+                    .accessibilityIdentifier("timeline-save")
+            }
+        }
+        .padding(14)
     }
 
     private var header: some View {

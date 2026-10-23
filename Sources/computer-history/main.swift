@@ -23,7 +23,7 @@ func usage() {
                                 [--granularity 10min|6h]
                                             把已封口的段写成记忆文件
       computer-history segments             列出可生成记忆的段
-      computer-history narrative [--limit N] [--day <yyyy-MM-dd>] [--print]
+      computer-history narrative [--limit N] [--day <yyyy-MM-dd>] [--print] [--overwrite] [--wait-lock]
                                             把记忆归纳成前端叙述条目
       computer-history report [--kind daily|weekly] [--day yyyy-MM-dd] [--no-model] [--overwrite] [--print]
                                             生成日报或周报；省略日期补齐已结束时段
@@ -32,7 +32,8 @@ func usage() {
                                             导出报告或给 AI 的活动材料（不调用模型）
       computer-history backup [--repository owner/repo] [--disable] [--automatic]
                                             设置或执行可选 GitHub 私有备份
-      computer-history model-key [--fallback] 从标准输入保存所选主模型组或备用模型组的密钥
+      computer-history model-key [--fallback] [--check|--authorize]
+                                            保存密钥、静默检查读取或手动请求钥匙串授权
       computer-history verify               校验记忆链完整性
       computer-history --check              检查权限与落盘目录
       computer-history --status             查看长期运行状态
@@ -96,6 +97,10 @@ func loadConfig(root: URL) -> CollectorConfig {
     }
 }
 
+do {
+    try ModelAPIKey.configureInteraction(allow: flags.contains("model-key") && !flags.contains("--check"))
+} catch { warn(String(describing: error)); exit(1) }
+
 if args.isEmpty || flags.contains("--help") || flags.contains("-h") {
     usage()
     exit(0)
@@ -106,9 +111,10 @@ if flags.contains("--schema-version") {
     exit(0)
 }
 
-if flags.contains("--check") {
+if flags.contains("--check") && !flags.contains("model-key") {
     let trusted = InputTap.hasAccessibilityPermission
     print("辅助功能权限：\(trusted ? "已授予" : "未授予")")
+    print("屏幕录制权限：\(CGPreflightScreenCaptureAccess() ? "已授予" : "未授予")（窗口文字识别需要）")
     if !trusted {
         print("  请在 系统设置 → 隐私与安全性 → 辅助功能 中勾选本程序。")
         print("  缺该权限时键盘/鼠标与 AX 树都采不到。")
@@ -168,15 +174,25 @@ if flags.contains("verify") {
 
 if flags.contains("model-key") {
     do {
-        let data = FileHandle.standardInput.readDataToEndOfFile()
-        guard let key = String(data: data, encoding: .utf8), !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw ReportError.invalid("请从标准输入提供模型密钥。")
-        }
         let settings = try ModelSettings.load(root: outputRoot())
         let fallback = flags.contains("--fallback")
         let groupID = fallback ? settings?.fallback?.credentialGroupID : settings?.credentialGroupID
         if fallback, settings?.credentialGroupID != nil, settings?.fallback == nil {
             throw ReportError.invalid("请先在 model.json 中选择备用模型组。")
+        }
+        if flags.contains("--check") || flags.contains("--authorize") {
+            guard !(flags.contains("--check") && flags.contains("--authorize")) else {
+                throw ReportError.invalid("--check 与 --authorize 不能同时使用。")
+            }
+            guard let key = try ModelAPIKey.load(root: outputRoot(), fallback: fallback, groupID: groupID), !key.isEmpty else {
+                throw ReportError.invalid("当前模型组没有保存密钥。")
+            }
+            print("模型密钥可读取。")
+            exit(0)
+        }
+        let data = FileHandle.standardInput.readDataToEndOfFile()
+        guard let key = String(data: data, encoding: .utf8), !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ReportError.invalid("请从标准输入提供模型密钥。")
         }
         try ModelAPIKey.save(key.trimmingCharacters(in: .whitespacesAndNewlines), root: outputRoot(), fallback: fallback, groupID: groupID)
         print("模型密钥已保存到系统钥匙串。")
@@ -251,11 +267,19 @@ if flags.contains("backup") {
 if flags.contains("narrative") {
     let root = outputRoot()
     // 与 memorize 同理：并发会让两个进程各写一份相同的条目。
-    guard let generationLock = GenerationLock.narrative(root: root) else {
-        warn("已有一个叙述生成任务在运行，本次跳过。")
-        exit(0)
+    var lock = GenerationLock.narrative(root: root)
+    if flags.contains("--wait-lock") {
+        let deadline = Date().addingTimeInterval(300)
+        while lock == nil, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.2)
+            lock = GenerationLock.narrative(root: root)
+        }
     }
-    _ = generationLock
+    guard let generationLock = lock else {
+        warn("已有一个叙述生成任务在运行，本次跳过。")
+        exit(flags.contains("--overwrite") ? 75 : 0)
+    }
+    defer { generationLock.release() }
     var client: DeepSeekClient?
     if !flags.contains("--no-model") {
         do { client = try DeepSeekClient.fromEnvironment(rootDirectory: root) }

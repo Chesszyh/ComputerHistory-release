@@ -46,7 +46,8 @@ public enum LocalCommand {
         }
         return URL(fileURLWithPath: path)
     }
-    @discardableResult public static func run(_ name: String, _ arguments: [String], directory: URL? = nil, timeout: TimeInterval = 120) throws -> String {
+    @discardableResult public static func run(_ name: String, _ arguments: [String], directory: URL? = nil, timeout: TimeInterval = 120,
+                                             cancelled: () -> Bool = { false }) throws -> String {
         let output = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         FileManager.default.createFile(atPath: output.path, contents: nil)
         let handle = try FileHandle(forWritingTo: output)
@@ -60,8 +61,16 @@ public enum LocalCommand {
         process.environment = environment
         try process.run()
         let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
-        if process.isRunning { process.terminate(); process.waitUntilExit(); throw ReportError.invalid("\(name)执行超时，请检查网络后重试。") }
+        while process.isRunning && Date() < deadline && !cancelled() { Thread.sleep(forTimeInterval: 0.05) }
+        if process.isRunning {
+            process.terminate()
+            let grace = Date().addingTimeInterval(2)
+            while process.isRunning && Date() < grace { Thread.sleep(forTimeInterval: 0.05) }
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            process.waitUntilExit()
+            if cancelled() { throw CancellationError() }
+            throw ReportError.invalid("\(name)执行超时，请检查网络后重试。")
+        }
         process.waitUntilExit()
         let text = try String(contentsOf: output, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
         guard process.terminationStatus == 0 else { throw ReportError.invalid("\(name)失败：\(text)") }

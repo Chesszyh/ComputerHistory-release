@@ -8,7 +8,9 @@ struct StatusPanel: View {
 
     var body: some View {
         Group {
-            if model.showsTrash {
+            if model.editingSummary != nil {
+                SummaryEditPane(model: model)
+            } else if model.showsTrash {
                 TrashPane(model: model)
             } else if model.showsReports {
                 ReportsPane(model: model)
@@ -107,22 +109,19 @@ struct StatusPanel: View {
             ToolbarIconButton(icon: "folder", tooltip: "打开数据目录") {
                 model.openDataDirectory()
             }
-            ToolbarIconButton(icon: "doc.text", tooltip: "查看日志") {
-                model.openLog()
-            }
             // 手动推一把积压的生成。监督进程按周期跑，但积压多时不必干等。
             ToolbarIconButton(
                 icon: model.flushRequested ? "checkmark" : "bolt",
                 tooltip: model.flushRequested ? "已请求生成" : "立即生成积压总结") {
                     model.requestFlush()
                 }
-            ToolbarIconButton(icon: "doc.on.doc", tooltip: "复制近期活动摘要") {
-                model.copyRecentSummary()
-            }
+            ToolbarIconButton(icon: "checklist", tooltip: "多选摘要并复制") {
+                model.toggleSummarySelection()
+            }.accessibilityIdentifier("select-summaries")
+            ToolbarIconButton(icon: "trash", tooltip: "回收站") {
+                model.showsTrash = true
+            }.accessibilityIdentifier("open-trash")
             Spacer()
-            Button { model.showsTrash = true } label: {
-                Label("回收站", systemImage: "trash").font(.system(size: 10))
-            }.buttonStyle(.plain).foregroundStyle(.secondary).accessibilityIdentifier("open-trash")
 
             ToolbarIconButton(icon: "power", tooltip: "退出计算机历史") {
                 NSApplication.shared.terminate(nil)
@@ -227,6 +226,10 @@ struct RuntimeSection: View {
 
             if model.showsRuntimeDetails {
                 RuntimeMetricsGrid(model: model)
+                Button { model.openLog() } label: {
+                    Label("查看日志", systemImage: "doc.text").font(.system(size: 10))
+                }.buttonStyle(.plain).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("open-log")
             }
         }
     }
@@ -395,6 +398,17 @@ struct TimelineSection: View {
                 Spacer()
             }
 
+            if model.isSelectingSummaries {
+                HStack(spacing: 8) {
+                    Text(model.selectionMessage ?? "已选 \(model.selectedSummaryIDs.count) 条")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("复制所选") { model.copySelectedSummaries() }
+                        .disabled(model.selectedSummaryIDs.isEmpty)
+                        .accessibilityIdentifier("copy-selected")
+                    Button("完成") { model.toggleSummarySelection() }
+                }.controlSize(.small)
+            }
             if model.timelineCount == 0 {
                 HStack(spacing: 8) {
                     Image(systemName: "clock")
@@ -480,6 +494,12 @@ struct TimelineRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 10) {
+                if model.isSelectingSummaries && !item.isAway {
+                    Button { model.selectSummary(item) } label: {
+                        Image(systemName: model.selectedSummaryIDs.contains(item.id) ? "checkmark.circle.fill" : "circle")
+                    }.buttonStyle(.plain).foregroundStyle(Color.accentColor)
+                        .help("选择摘要")
+                }
                 timeColumn
                     .frame(width: 36, alignment: .trailing)
                     .padding(.top, 2)
@@ -487,7 +507,8 @@ struct TimelineRow: View {
                 // 摘要本体：点击即复制。这是最高频的操作——把一段记录贴给别人
                 // 或别处——所以给它最大的落点。
                 Button {
-                    model.copySummary(of: item)
+                    if model.isSelectingSummaries { model.selectSummary(item) }
+                    else { model.copySummary(of: item) }
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(item.title)
@@ -587,11 +608,25 @@ struct TimelineRow: View {
             .onHover { isHovered = $0 }
             .contextMenu {
                 if !item.isAway {
+                    if model.canEditSummary(item) {
+                        Button("编辑摘要") { model.editSummary(item) }
+                    }
+                    Button("选择摘要") {
+                        if !model.isSelectingSummaries { model.toggleSummarySelection() }
+                        model.selectSummary(item)
+                    }
                     Button("删除总结", role: .destructive) { model.deleteTimelineItem(item) }
                 }
             }
 
             if model.isExpanded(item.id) {
+                if model.canEditSummary(item) {
+                    Button { model.editSummary(item) } label: {
+                        Label(item.manualEdit == true ? "编辑摘要 · 已手动修改" : "编辑摘要", systemImage: "pencil")
+                            .font(.system(size: 10))
+                    }.buttonStyle(.plain).padding(.leading, 46).padding(.vertical, 5)
+                        .accessibilityIdentifier("edit-summary")
+                }
                 SummaryDetails(item: item, model: model)
                     .padding(.leading, 46)
                     .padding(.trailing, 8)
@@ -1735,5 +1770,49 @@ struct TrashRecordCard: View {
 
     private func date(_ value: Date) -> String {
         value.formatted(.dateTime.month().day().hour().minute())
+    }
+}
+
+struct SummaryEditPane: View {
+    @ObservedObject var model: StatusModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Button { model.editingSummary = nil } label: {
+                    Label("返回", systemImage: "chevron.left")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(Color.accentColor.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }.buttonStyle(.plain).help("返回时间线")
+                Spacer()
+                Text("编辑摘要").font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Color.clear.frame(width: 48, height: 20)
+            }
+            Divider()
+            Text("标题").font(.system(size: 11)).foregroundStyle(.secondary)
+            TextField("摘要标题", text: $model.editedTitle).textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("summary-edit-title")
+            Text("内容").font(.system(size: 11)).foregroundStyle(.secondary)
+            TextEditor(text: $model.editedSummary).font(.system(size: 12))
+                .padding(4).background(Color.primary.opacity(0.035))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .accessibilityIdentifier("summary-edit-body")
+            Text("手动修改会保留，重算不会覆盖。")
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+            if let error = model.editError { Text(error).font(.system(size: 10)).foregroundStyle(.red) }
+            HStack {
+                if model.editingSummary?.manualEdit == true {
+                    Button("恢复自动摘要") { model.saveSummaryEdit(restore: true) }
+                        .accessibilityIdentifier("summary-edit-restore")
+                }
+                Spacer()
+                Button("取消") { model.editingSummary = nil }
+                Button("保存") { model.saveSummaryEdit() }.keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("summary-edit-save")
+            }.controlSize(.small)
+        }.padding(16)
     }
 }

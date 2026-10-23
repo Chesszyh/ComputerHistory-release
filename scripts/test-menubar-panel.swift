@@ -55,6 +55,19 @@ struct HistoryRegression {
         advance()
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
         precondition(model.timelineLimit == 120, "The end must not load beyond the available history")
-        print("PASS: bounded initial page, no loading near the top, incremental loading through 120 records, and stable end")
+        let clipboard = NSPasteboard.general.string(forType: .string)
+        defer {
+            NSPasteboard.general.clearContents()
+            if let clipboard { NSPasteboard.general.setString(clipboard, forType: .string) }
+        }
+        let allItems = model.timelineGroups.flatMap(\.items)
+        model.timelineLimit = 12
+        model.toggleSummarySelection()
+        model.selectSummary(allItems.first!); model.selectSummary(allItems.last!)
+        model.copySelectedSummaries()
+        let copied = NSPasteboard.general.string(forType: .string)!
+        precondition(copied.contains("整理项目文档 1\n") && copied.contains("整理项目文档 120\n"))
+        precondition(!copied.contains("整理项目文档 2\n"), "Copy must include selected entries across pages, without unselected entries")
+        print("PASS: bounded initial page, no loading near the top, incremental loading through 120 records, stable end, and selected copy across pages")
     }
 }

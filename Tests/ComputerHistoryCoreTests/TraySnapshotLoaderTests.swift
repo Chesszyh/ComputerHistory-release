@@ -88,6 +88,156 @@ final class TraySnapshotLoaderTests: XCTestCase {
         XCTAssertTrue(state.request())
     }
 
+    func testSplitCardsUseActivityContentAndPreserveCompletedNarratives() async throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("memories")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let name = "2020-01-01T10-30-00Z-1234-10min-memory-summary.md"
+        let statistics = "本段约 3 分钟，记录 77 条事件，涉及 2 个应用。"
+        let text = "---\ntitle: Synthetic terminal\ndescription: \(statistics)\ngeneration: model\n---\n## Memory summary\n### Relevant prior context\nOld task from before sleep.\n### Important non-obvious context about the user\nPrivate inference excluded.\n### 本次活动\n**核对合成文档**\n- 打开合成报告，核对任务 A 的运行结果，发现归档包不完整。\n## Recording summary\n### 时序证据\nRaw fixture excluded."
+        try text.write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        let start = SegmentClock.date(fromSegmentID: "2020-01-01T10-30-00Z")!
+        var split = ActivityNarrative.Item(id: "split", timestamp: start, title: "Synthetic terminal",
+            summary: statistics, apps: [], sourceMemories: [name])
+        split.previousIDs = ["old-all-day"]
+        var completed = ActivityNarrative.Item(id: "completed", timestamp: start,
+            title: "已有的优质活动标题", summary: "已有的具体动作、对象和结果。", apps: [], sourceMemories: [name])
+        completed.sourceRevisions = [name: try XCTUnwrap(MemoryIndex.parse(fileURL: dir.appendingPathComponent(name))).revision]
+        try ActivityNarrative(items: [split, completed]).save(root: root)
+        let original = try Data(contentsOf: ActivityNarrative.fileURL(root: root))
+        let snapshot = await TraySnapshotLoader().load(root: root)
+        let items = snapshot.groups.flatMap(\.items)
+        let repaired = try XCTUnwrap(items.first { $0.id == "split" })
+        XCTAssertEqual(repaired.title, "核对合成文档")
+        XCTAssertTrue(repaired.summary.contains("核对任务 A 的运行结果"))
+        XCTAssertTrue(repaired.summary.contains("归档包不完整"))
+        for forbidden in [statistics, "Old task", "Private inference", "Raw fixture", "**"] {
+            XCTAssertFalse(repaired.summary.contains(forbidden), forbidden)
+        }
+        XCTAssertEqual(items.first { $0.id == "completed" }?.summary, completed.summary)
+        XCTAssertEqual(items.first { $0.id == "completed" }?.title, completed.title)
+        XCTAssertEqual(try Data(contentsOf: ActivityNarrative.fileURL(root: root)), original)
+    }
+
+    func testOneTimelineSeparatesTaskReturnsAndSwitchesModesWithoutRewritingCache() async throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("memories")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var names: [String] = []
+        let start = SegmentClock.date(fromSegmentID: "2020-01-01T10-00-00Z")!
+        for i in 0..<3 {
+            let id = SegmentClock.segmentID(for: start.addingTimeInterval(Double(i * 600)))
+            let file = try segment(root, id: id, text: "")
+            let metadata = EventStreamMetadata(id: id, startedAt: start.addingTimeInterval(Double(i * 600)),
+                endedAt: start.addingTimeInterval(Double((i + 1) * 600 + 5)), eventCount: 1, suppressedEventCount: 0, eventsPath: file.path)
+            try EventStreamJSON.makeEncoder().encode(metadata).write(to: file.deletingLastPathComponent().appendingPathComponent("metadata.json"))
+            let name = id + "-1234-10min-memory-summary.md"
+            names.append(name)
+            try "---\ntitle: \(i == 1 ? "B" : "A")\ndescription: statistics\n---\n## Memory summary\n### 本次活动\n核对合成任务 \(i)，保留步骤及结果。".write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        try ActivityNarrative(items: [
+            .init(id: "A", timestamp: start, title: "A", summary: "Whole task A", apps: [], sourceMemories: [names[0], names[2]]),
+            .init(id: "B", timestamp: start.addingTimeInterval(600), title: "B", summary: "Independent B", apps: [], sourceMemories: [names[1]])
+        ]).save(root: root)
+        let loader = TraySnapshotLoader()
+        let separated = await loader.load(root: root)
+        let rows = separated.groups.flatMap(\.items).sorted { $0.timestamp < $1.timestamp }
+        XCTAssertEqual(rows.count, 3)
+        XCTAssertTrue(rows[0].summary.contains("合成任务 0"))
+        XCTAssertTrue(rows[2].summary.contains("合成任务 2"))
+        XCTAssertEqual(rows[1].summary, "Independent B")
+        XCTAssertTrue(zip(rows, rows.dropFirst()).allSatisfy { $0.endTimestamp <= $1.timestamp })
+        try ActivityNarrative(items: [.init(id: "merged", timestamp: start, title: "Continuous A",
+            summary: "A specific continuous activity", apps: [], sourceMemories: names)]).save(root: root)
+        let original = try Data(contentsOf: ActivityNarrative.fileURL(root: root))
+        let continuous = await loader.load(root: root)
+        XCTAssertEqual(continuous.groups.flatMap(\.items).count, 1)
+        var settings = SummarySettings(); settings.timelineMode = .fixedTenMinutes
+        try settings.save(root: root)
+        let fixed = await loader.load(root: root)
+        XCTAssertEqual(fixed.groups.flatMap(\.items).count, 3)
+        XCTAssertEqual(try Data(contentsOf: ActivityNarrative.fileURL(root: root)), original)
+        XCTAssertGreaterThan(fixed.contentVersion, continuous.contentVersion)
+        settings.timelineMode = .continuous; try settings.save(root: root)
+        let restored = await loader.load(root: root)
+        XCTAssertEqual(restored.groups.flatMap(\.items).first?.summary, "A specific continuous activity")
+    }
+
+    func testResumedActivityIsSeparatedAroundAwayPeriodsWithoutRewritingHistory() async throws {
+        let root = try root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let clock = ISO8601DateFormatter()
+        func date(_ time: String) -> Date { clock.date(from: "2020-01-01T\(time)Z")! }
+        let dir = root.appendingPathComponent("memories")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var names: [String] = []
+        for (bucket, first, end, title) in [
+            ("01:10:00", "01:10:05", "01:20:00", "Night"),
+            ("01:50:00", "01:50:02", "01:59:17", "Night"),
+            ("10:30:00", "10:36:04", "10:40:00", "Morning"),
+            ("11:00:00", "11:00:01", "11:03:28", "Morning"),
+            ("12:10:00", "12:18:57", "12:20:00", "Library"),
+            ("12:20:00", "12:20:01", "12:30:00", "Library")
+        ] {
+            let id = SegmentClock.segmentID(for: date(bucket))
+            let file = try segment(root, id: id, text: "")
+            let meta = EventStreamMetadata(id: id, startedAt: date(bucket), endedAt: date(end),
+                eventCount: 1, suppressedEventCount: 0, eventsPath: file.path, firstEventAt: date(first))
+            try EventStreamJSON.makeEncoder().encode(meta).write(to: file.deletingLastPathComponent().appendingPathComponent("metadata.json"))
+            let name = "\(id)-1234-10min-memory-summary.md"
+            names.append(name)
+            try "---\ntitle: \(title)\ndescription: \(title) evidence\napplications: [synthetic.editor]\n---".write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        var away = AwayPeriods()
+        let morningReturn = date("10:36:04").addingTimeInterval(0.395)
+        let libraryReturn = date("12:18:57").addingTimeInterval(0.196)
+        away.periods = [.init(start: date("01:59:17"), end: morningReturn),
+                        .init(start: date("11:03:28"), end: libraryReturn)]
+        try away.save(root: root)
+        try ActivityNarrative(items: [.init(id: "merged", timestamp: date("01:10:00"), title: "All day",
+            summary: "Night plus morning plus library", apps: ["synthetic.editor"], sourceMemories: names)]).save(root: root)
+        let original = try Data(contentsOf: ActivityNarrative.fileURL(root: root))
+        let loader = TraySnapshotLoader()
+        let snapshot = await loader.load(root: root, timeZone: TimeZone(secondsFromGMT: 0)!)
+        let items = snapshot.groups.flatMap(\.items)
+        let expected = [libraryReturn, date("11:03:28"), morningReturn, date("01:59:17"), date("01:10:05")]
+        XCTAssertEqual(items.count, expected.count)
+        for (item, time) in zip(items, expected) {
+            XCTAssertEqual(item.timestamp.timeIntervalSince1970, time.timeIntervalSince1970, accuracy: 0.001)
+        }
+        let active = items.filter { !$0.isAway }
+        XCTAssertEqual(active.map(\.coveredCount), [2, 2, 2])
+        XCTAssertEqual(active.map(\.endTimestamp), [date("12:30:00"), date("11:03:28"), date("01:59:17")])
+        XCTAssertEqual(active.map(\.summary), ["Library evidence", "Morning evidence", "Night evidence"])
+        XCTAssertTrue(items.filter(\.isAway).allSatisfy { $0.summary == "锁屏或休眠" })
+        XCTAssertEqual(try Data(contentsOf: ActivityNarrative.fileURL(root: root)), original)
+        let warm = await loader.load(root: root, timeZone: TimeZone(secondsFromGMT: 0)!)
+        XCTAssertEqual(warm.memoriesParsed, 0)
+        let metadataURL = root.appendingPathComponent("segments/2020-01-01T12-20-00Z/metadata.json")
+        var metadata = try EventStreamJSON.makeDecoder().decode(EventStreamMetadata.self, from: Data(contentsOf: metadataURL))
+        metadata.endedAt = date("12:31:00")
+        try EventStreamJSON.makeEncoder().encode(metadata).write(to: metadataURL, options: .atomic)
+        let changed = await loader.load(root: root, timeZone: TimeZone(secondsFromGMT: 0)!)
+        XCTAssertEqual(changed.memoriesParsed, 1)
+        XCTAssertEqual(changed.groups.first?.items.first?.endTimestamp, date("12:31:00"))
+        var parent = active[0]
+        parent.id = "merged"
+        parent.memoryFiles = names.map { dir.appendingPathComponent($0) }
+        try TimelineDeletions.delete(parent, root: root)
+        let hidden = await TraySnapshotLoader().load(root: root)
+        XCTAssertTrue(hidden.groups.flatMap(\.items).allSatisfy(\.isAway), "Splitting must preserve deletion of the original card")
+        try TimelineDeletions.restore(id: parent.deletionID, root: root)
+        try TimelineDeletions.delete(active[0], root: root)
+        let after = await TraySnapshotLoader().load(root: root)
+        XCTAssertEqual(after.groups.flatMap(\.items).filter { !$0.isAway }.count, 2)
+        try TimelineDeletions.restore(id: active[0].deletionID, root: root)
+        let restored = await TraySnapshotLoader().load(root: root)
+        XCTAssertEqual(restored.groups.flatMap(\.items).filter { !$0.isAway }.count, 3)
+        try ActivityNarrative().save(root: root)
+        let lostCache = await TraySnapshotLoader().load(root: root)
+        XCTAssertEqual(lostCache.groups.flatMap(\.items).filter { !$0.isAway }.count, 3, "Restored snapshots must obey the same away boundaries")
+    }
+
     func testLargeHistoryBenchmark() async throws {
         guard ProcessInfo.processInfo.environment["COMPUTER_HISTORY_TRAY_BENCHMARK"] == "1" else {
             throw XCTSkip("设置 COMPUTER_HISTORY_TRAY_BENCHMARK=1 运行约 1.5 GiB 合成基准")
@@ -139,4 +289,46 @@ final class TraySnapshotLoaderTests: XCTestCase {
         XCTAssertEqual(warm.memoriesParsed, 0)
         print("TRAY_BENCHMARK bytes=\(baseline.data.bytes) baseline_s=\(baselineTime) cold_s=\(coldTime) warm_s=\(warmTime) cold_bytes=\(cold.eventBytesRead) warm_bytes=\(warm.eventBytesRead) cold_parsed=\(cold.memoriesParsed) warm_parsed=\(warm.memoriesParsed)")
     }
+    func testManualEditsSurviveRegenerationAndApplyOnlyInFixedMode() async throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("memories")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let name = "2020-01-01T10-30-00Z-1234-10min-memory-summary.md"
+        let memory = dir.appendingPathComponent(name)
+        try "---\ntitle: Automatic title\ndescription: Automatic activity\n---\n### 本次活动\n检查合成报告，发现缺失章节。".write(to: memory, atomically: true, encoding: .utf8)
+        var settings = SummarySettings(); settings.timelineMode = .fixedTenMinutes
+        try settings.save(root: root)
+        let loader = TraySnapshotLoader()
+        let automatic = await loader.load(root: root)
+        var edits = try TimelineEdits.load(root: root)
+        try edits.set(.init(title: "手动标题", summary: "补充合成报告的缺失章节，并保存结果。"), for: name, root: root)
+        let edited = await loader.load(root: root)
+        XCTAssertEqual(edited.groups[0].items[0].title, "手动标题")
+        XCTAssertEqual(edited.groups[0].items[0].manualEdit, true)
+        XCTAssertGreaterThan(edited.contentVersion, automatic.contentVersion)
+        try "---\ntitle: Regenerated title\ndescription: New automatic content\n---".write(to: memory, atomically: true, encoding: .utf8)
+        let regenerated = await loader.load(root: root)
+        XCTAssertEqual(regenerated.groups[0].items[0].summary, "补充合成报告的缺失章节，并保存结果。")
+        settings.timelineMode = .continuous; try settings.save(root: root)
+        let merged = await loader.load(root: root)
+        XCTAssertEqual(merged.groups[0].items[0].title, "Regenerated title")
+        XCTAssertNil(merged.groups[0].items[0].manualEdit)
+        settings.timelineMode = .fixedTenMinutes; try settings.save(root: root)
+        let fixed = await loader.load(root: root)
+        XCTAssertEqual(fixed.groups[0].items[0].title, "手动标题")
+        try edits.set(nil, for: name, root: root)
+        let restored = await loader.load(root: root)
+        XCTAssertEqual(restored.groups[0].items[0].title, "Regenerated title")
+        XCTAssertNil(restored.groups[0].items[0].manualEdit)
+        try Data("malformed".utf8).write(to: root.appendingPathComponent("timeline-edits.json"))
+        XCTAssertThrowsError(try TimelineEdits.load(root: root))
+    }
+
+    func testCancelledCommandIsReaped() throws {
+        let began = Date()
+        XCTAssertThrowsError(try LocalCommand.run("/bin/sleep", ["30"], timeout: 10,
+            cancelled: { Date().timeIntervalSince(began) > 0.15 })) { XCTAssertTrue($0 is CancellationError) }
+        XCTAssertLessThan(Date().timeIntervalSince(began), 3)
+    }
+
 }

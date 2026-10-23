@@ -11,9 +11,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def build():
-    subprocess.run(['swift', 'build', '-c', 'release', '--target', 'ComputerHistoryCore'], cwd=ROOT, check=True)
+    subprocess.run(['swift', 'build', '--scratch-path', '.build/native-core', '-j', '2', '-c', 'release', '--target', 'ComputerHistoryCore'], cwd=ROOT, check=True)
     binary_dir = Path(subprocess.check_output(
-        ['swift', 'build', '-c', 'release', '--show-bin-path'], cwd=ROOT, text=True).strip())
+        ['swift', 'build', '--scratch-path', '.build/native-core', '-c', 'release', '--show-bin-path'], cwd=ROOT, text=True).strip())
     if (binary_dir / 'ComputerHistoryCore.o').exists():
         modules = binary_dir
         objects = [binary_dir / 'ComputerHistoryCore.o']

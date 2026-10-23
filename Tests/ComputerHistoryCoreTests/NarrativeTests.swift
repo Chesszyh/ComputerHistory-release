@@ -40,6 +40,62 @@ final class NarrativeTests: XCTestCase {
         MemoryIndex.load(from: dir).entries.sorted { $0.startedAt < $1.startedAt }
     }
 
+    func testAwayBoundarySeparatesSameBucketRestartsAndClipsLegacyBucketTimes() throws {
+        let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("memories")
+        try writeMemory(dir, segmentID: "2026-10-14T08-00-00Z", title: "Before", summary: "Before")
+        try writeMemory(dir, segmentID: "2026-10-14T08-00-00Z_" + UUID().uuidString, title: "After", summary: "After")
+        var sources = entries(dir).sorted { $0.title < $1.title }
+        let bucket = sources[0].startedAt
+        sources[0].firstEventAt = bucket.addingTimeInterval(360) // After
+        sources[1].firstEventAt = bucket.addingTimeInterval(60) // Before
+        var away = AwayPeriods()
+        away.periods = [.init(start: bucket.addingTimeInterval(180), end: bucket.addingTimeInterval(360))]
+        XCTAssertEqual(away.activityGroups(sources).map { $0.map(\.title) }, [["Before"], ["After"]])
+        sources[0].firstEventAt = nil
+        XCTAssertEqual(away.activityStart(for: sources[0]), bucket)
+        away.periods[0].start = bucket.addingTimeInterval(-120)
+        XCTAssertEqual(away.activityStart(for: sources[0]), bucket.addingTimeInterval(360))
+        away.periods = [.init(start: bucket.addingTimeInterval(-120), end: bucket.addingTimeInterval(60 * 60))]
+        XCTAssertEqual(away.activityStart(for: sources[0]), bucket, "A fully absent bucket cannot be relabeled as an event an hour later")
+    }
+
+    func testContinuationRetainsSourcesAndRejectsInvalidPriorClaims() throws {
+        let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("memories")
+        try writeMemory(dir, segmentID: "2026-10-14T08-20-00Z", title: "Task", summary: "New detail", apps: ["example.editor"])
+        let sources = entries(dir)
+        let prior = ActivityNarrative.Item(id: "prior", timestamp: sources[0].startedAt.addingTimeInterval(-1200),
+            title: "Task", summary: "Previous detail", apps: ["example.browser"], sourceMemories: ["first.md", "second.md"])
+        let merged = NarrativeGenerator.parseItems("## [P1,S1] Continued task\nPrevious detail and new detail.", sources: sources, priorItems: [prior])
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged.first?.sourceMemories, ["first.md", "second.md", sources[0].id])
+        XCTAssertEqual(merged.first?.timestamp, prior.timestamp)
+        XCTAssertEqual(merged.first?.apps, ["example.browser", "example.editor"])
+        for text in ["## [P1] Missing new source\nDetail", "## [P2,S1] Unknown prior\nDetail",
+                     "## [P1,P1,S1] Duplicate prior\nDetail", "## [P01,S1] Invalid number\nDetail"] {
+            XCTAssertTrue(NarrativeGenerator.parseItems(text, sources: sources, priorItems: [prior]).isEmpty, text)
+        }
+        XCTAssertEqual(NarrativeGenerator.parseItems("## [S1] Separate task\nDifferent theme.", sources: sources, priorItems: [prior]).count, 1)
+    }
+
+    func testTaskReturnCannotBridgeAnInterveningTask() throws {
+        let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("memories")
+        for minute in [0, 10, 20] {
+            try writeMemory(dir, segmentID: "2026-10-14T08-\(String(format: "%02d", minute))-00Z", title: "Task", summary: "Synthetic action")
+        }
+        let sources = entries(dir)
+        let interleaved = "## [S1,S3] Return to A\nTask A.\n## [S2] Switch to B\nTask B."
+        XCTAssertTrue(NarrativeGenerator.parseItems(interleaved, sources: sources).isEmpty)
+        let prior = ActivityNarrative.Item(id: "previous", timestamp: sources[0].startedAt.addingTimeInterval(-600),
+            title: "Task A", summary: "Earlier A", apps: [], sourceMemories: ["previous.md"])
+        XCTAssertTrue(NarrativeGenerator.parseItems("## [S1] Task B\nSwitch.\n## [P1,S2,S3] Return A\nResume.",
+            sources: sources, priorItems: [prior]).isEmpty)
+        let linear = NarrativeGenerator.parseItems("## [P1,S1] A\nFirst.\n## [S2] B\nSecond.\n## [S3] Return to A\nThird.", sources: sources, priorItems: [prior])
+        XCTAssertEqual(linear.count, 3)
+    }
+
     func testSameWindowSourcesUseUniqueNumbersAndValidateCompleteClaims() throws {
         let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
         let dir = root.appendingPathComponent("memories")
@@ -237,7 +293,7 @@ final class NarrativeTests: XCTestCase {
 
         let saved = ActivityNarrative.load(root: root)
         XCTAssertEqual(saved.items.first?.title, "记忆标题")
-        XCTAssertEqual(saved.items.first?.summary, "记忆描述")
+        XCTAssertEqual(saved.items.first?.summary, "细节内容。")
     }
 
     /// 增量：第二次生成只处理新增来源，无新增时零开销。

@@ -25,6 +25,7 @@ public struct ActivityNarrative: Codable, Sendable, Equatable {
         public var sourceMemories: [String]
         public var sourceRevisions: [String: String]?
         public var previousIDs: [String]?
+        public var generationMode: SummarySettings.TimelineMode?
 
         public init(id: String, timestamp: Date, title: String,
                     summary: String, apps: [String], sourceMemories: [String]) {
@@ -43,6 +44,54 @@ public struct ActivityNarrative: Codable, Sendable, Equatable {
     public init(generatedAt: Date = Date(), items: [Item] = []) {
         self.generatedAt = generatedAt
         self.items = items
+    }
+
+    static func sourceItem(_ entries: [MemoryIndex.Entry], away: AwayPeriods, previous: Item? = nil) -> Item {
+        let names = entries.map(\.id)
+        var item = Item(id: NarrativeGenerator.itemID(for: names), timestamp: away.activityStart(for: entries[0]),
+            title: entries[0].activityTitle,
+            summary: entries.map(\.activitySummary).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }.joined(separator: "\n\n"),
+            apps: entries.flatMap(\.applications).reduce(into: []) { if !$0.contains($1) { $0.append($1) } }, sourceMemories: names)
+        if let previous {
+            item.previousIDs = Array(Set([previous.id] + (previous.previousIDs ?? []))).filter { $0 != item.id }.sorted()
+        }
+        return item
+    }
+
+    func separatingAwayPeriods(index: MemoryIndex, away: AwayPeriods,
+                               mode: SummarySettings.TimelineMode = .continuous) -> Self {
+        let lookup = Dictionary(uniqueKeysWithValues: index.entries.map { ($0.id, $0) })
+        let ordered = index.entries.filter { $0.granularity == "10min" }.sorted {
+            let left = away.activityStart(for: $0), right = away.activityStart(for: $1)
+            return left == right ? $0.id < $1.id : left < right
+        }
+        let positions = Dictionary(uniqueKeysWithValues: ordered.enumerated().map { ($0.element.id, $0.offset) })
+        var result = self
+        result.items = items.flatMap { item -> [Item] in
+            let entries = item.sourceMemories.compactMap { lookup[$0] }
+            guard !entries.isEmpty, entries.count == item.sourceMemories.count else { return [item] }
+            let groups = away.activityGroups(entries).flatMap { group -> [[MemoryIndex.Entry]] in
+                var runs: [[MemoryIndex.Entry]] = []
+                for entry in group {
+                    if mode == .continuous, let last = runs.last?.last,
+                       let before = positions[last.id], positions[entry.id] == before + 1 {
+                        runs[runs.count - 1].append(entry)
+                    } else { runs.append([entry]) }
+                }
+                return runs
+            }
+            if groups.count == 1 {
+                var adjusted = item
+                adjusted.timestamp = away.activityStart(for: groups[0][0])
+                return [adjusted]
+            }
+            // A whole-day summary cannot be attributed to any one episode. Use each episode's sources
+            // until the user chooses to regenerate the automatic summaries.
+            return groups.map { entries in
+                Self.sourceItem(entries, away: away, previous: item)
+            }
+        }
+        return result
     }
 
     /// 缓存文件名，位于数据根目录下。

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.4 - 2026-10-23
+
+### Features
+- Choose fixed ten-minute summaries or adjacent-task continuity, then recalculate today's summaries, all summaries, or keep the existing cache.
+- Edit summary titles and content in fixed mode, retain manual changes across regeneration, and restore automatic text when needed.
+- Select multiple summaries across pages and copy only the selected activities with explicit dates and times.
+
+### Fixes & Improvements
+- Keep a single timeline without overlapping activity intervals; separate task returns and activities interrupted by time away from the computer.
+- Preserve activity content when splitting older merged summaries, validate contiguous source attribution, and retain existing summaries when a daily rebuild fails or is cancelled.
+- Move logs into the collapsed runtime section and make the trash a matching icon in the left footer.
+- Keep background Keychain access quiet and provide an explicit authorization command for saved model credentials.
+
 ## 0.2.3 - 2026-10-22
 
 ### Features

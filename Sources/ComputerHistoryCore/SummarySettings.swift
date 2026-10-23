@@ -1,6 +1,16 @@
 import Foundation
 
 public struct SummarySettings: Codable, Sendable, Equatable {
+    public enum TimelineMode: String, Codable, CaseIterable, Sendable {
+        case fixedTenMinutes = "fixed10min"
+        case continuous = "continuous"
+        public var label: String { self == .fixedTenMinutes ? "固定十分钟，不合并" : "按任务连续性合并" }
+        public var explanation: String {
+            self == .fixedTenMinutes ? "每段十分钟记忆单独总结，适合能力较弱的本地模型。"
+                : "只合并相邻的同一任务；切换任务后再返回时另开一段，保留任务转换与细节。"
+        }
+    }
+    public var timelineMode: TimelineMode = .continuous
     public var tenMinutePrompt: String?
     public var sixHourPrompt: String?
     public var narrativePrompt: String?
@@ -8,6 +18,19 @@ public struct SummarySettings: Codable, Sendable, Equatable {
     public var weeklyPrompt: String?
 
     public init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case timelineMode, tenMinutePrompt, sixHourPrompt, narrativePrompt, dailyPrompt, weeklyPrompt
+    }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        timelineMode = try values.decodeIfPresent(TimelineMode.self, forKey: .timelineMode) ?? .continuous
+        tenMinutePrompt = try values.decodeIfPresent(String.self, forKey: .tenMinutePrompt)
+        sixHourPrompt = try values.decodeIfPresent(String.self, forKey: .sixHourPrompt)
+        narrativePrompt = try values.decodeIfPresent(String.self, forKey: .narrativePrompt)
+        dailyPrompt = try values.decodeIfPresent(String.self, forKey: .dailyPrompt)
+        weeklyPrompt = try values.decodeIfPresent(String.self, forKey: .weeklyPrompt)
+    }
 
     public enum Stage: String, CaseIterable, Sendable {
         case tenMinute = "十分钟记忆"
@@ -55,14 +78,14 @@ public struct SummarySettings: Codable, Sendable, Equatable {
         do {
             let data = try Data(contentsOf: file)
             guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  Set(object.keys).isSubset(of: ["tenMinutePrompt", "sixHourPrompt", "narrativePrompt", "dailyPrompt", "weeklyPrompt"]) else {
-                throw SettingsError.invalid("只支持 tenMinutePrompt、sixHourPrompt、narrativePrompt、dailyPrompt、weeklyPrompt。")
+                  Set(object.keys).isSubset(of: ["timelineMode", "tenMinutePrompt", "sixHourPrompt", "narrativePrompt", "dailyPrompt", "weeklyPrompt"]) else {
+                throw SettingsError.invalid("只支持 timelineMode、tenMinutePrompt、sixHourPrompt、narrativePrompt、dailyPrompt、weeklyPrompt。")
             }
             let value = try JSONDecoder().decode(Self.self, from: data)
             try value.validate()
             return value
         } catch {
-            throw SettingsError.invalid("summary.json 无效：\(error)。请打开提示词文件修正配置。")
+            throw SettingsError.invalid("summary.json 无效：\(error)。请打开总结配置文件修正配置。")
         }
     }
 

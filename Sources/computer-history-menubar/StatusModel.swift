@@ -46,7 +46,25 @@ final class StatusModel: ObservableObject {
     @Published var summaryDraft = ""
     @Published var summaryMessage: String?
     @Published var summarySettingsError: String?
-    enum SettingsTab: String, CaseIterable { case prompts = "提示词", model = "模型", collector = "采集", backup = "备份" }
+    enum SettingsTab: String, CaseIterable { case timeline = "时间线", prompts = "提示词", model = "模型", collector = "采集", backup = "备份" }
+    enum TimelineRecalculation: CaseIterable {
+        case today, all, none
+        var label: String {
+            switch self { case .today: return "重算当天总结"; case .all: return "重算所有总结"; case .none: return "不重算" }
+        }
+        func arguments(now: Date = Date()) -> [String] {
+            guard self != .none else { return [] }
+            return ["narrative", "--overwrite", "--wait-lock"] + (self == .today ? ["--day", ReportPeriod.day(now)] : [])
+        }
+    }
+    @Published private var effectiveTimelineMode: SummarySettings.TimelineMode = .continuous
+    @Published var timelineMode: SummarySettings.TimelineMode = .continuous
+    @Published var showsTimelineRecalculation = false
+    @Published private(set) var timelineSettingsLoaded = false
+    @Published private(set) var timelineRebuilding = false
+    @Published var timelineSettingsMessage: String?
+    @Published var timelineSettingsError: String?
+    private var timelineTask: Task<Void, Never>?
     @Published var settingsTab: SettingsTab = .prompts
     @Published var modelGroups: [ModelGroupDraft] = []
     @Published var editingGroupID = ""
@@ -54,6 +72,13 @@ final class StatusModel: ObservableObject {
     @Published var fallbackGroupID = ""
     @Published var dailyBudget = ""
     @Published var monthlyBudget = ""
+    @Published var isSelectingSummaries = false
+    @Published var selectedSummaryIDs: Set<String> = []
+    @Published var editingSummary: TimelineItem?
+    @Published var editedTitle = ""
+    @Published var editedSummary = ""
+    @Published var editError: String?
+    @Published var selectionMessage: String?
     @Published var timelineError: String?
     @Published var showsTrash = false
     @Published private(set) var deletedSummaries: [TimelineDeletions.Record] = []
@@ -94,6 +119,7 @@ final class StatusModel: ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
     private let root: URL
+    private let commandExecutable: URL
     private let loader = TraySnapshotLoader()
     private var refreshTask: Task<Void, Never>?
     private var refreshState = TrayRefreshState()
@@ -102,8 +128,9 @@ final class StatusModel: ObservableObject {
     private var detailRequest = UUID()
     private var stopped = false
 
-    init(root: URL = CollectorStatus.defaultRoot) {
+    init(root: URL = CollectorStatus.defaultRoot, commandExecutable: URL? = nil) {
         self.root = root
+        self.commandExecutable = commandExecutable ?? URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("computer-history")
         self.status = .empty(root: root)
         self.control = CollectorControl()
         self.loginItemEnabled = LoginItem.isEnabled
@@ -166,6 +193,7 @@ final class StatusModel: ObservableObject {
             if self.status != snapshot.status { self.status = snapshot.status }
             if self.control != snapshot.control { self.control = snapshot.control }
             self.contentVersion = snapshot.contentVersion
+            if self.effectiveTimelineMode != snapshot.timelineMode { self.effectiveTimelineMode = snapshot.timelineMode }
             if self.deletedSummaries != snapshot.deletedSummaries { self.deletedSummaries = snapshot.deletedSummaries }
             let count = snapshot.groups.reduce(0) { $0 + $1.items.count }
             if self.timelineCount != count { self.timelineCount = count }
@@ -174,6 +202,7 @@ final class StatusModel: ObservableObject {
                 self.applyTimelineLimit()
                 let ids = Set(snapshot.groups.flatMap(\.items).map(\.id))
                 self.expandedRows.formIntersection(ids)
+                self.selectedSummaryIDs.formIntersection(ids)
                 if let detail = self.detail, !ids.contains(detail.id) { self.closeDetail() }
             }
             if self.lastEventAt != snapshot.status.data.lastWriteAt { self.lastEventAt = snapshot.status.data.lastWriteAt }
@@ -202,6 +231,7 @@ final class StatusModel: ObservableObject {
         liveTask?.cancel()
         detailTask?.cancel()
         reportTask?.cancel()
+        timelineTask?.cancel()
         cancellables.removeAll()
     }
 
@@ -249,7 +279,7 @@ final class StatusModel: ObservableObject {
     func runReportCommand(_ arguments: [String], message: String) {
         guard !reportBusy else { return }
         let root = root
-        let binary = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("computer-history")
+        let binary = commandExecutable
         reportBusy = true; reportError = nil; reportMessage = nil
         reportTask = Task { [weak self] in
             let error = await Task.detached { () -> String? in
@@ -589,6 +619,7 @@ final class StatusModel: ObservableObject {
 
     func openSummarySettings() {
         loadSummaryDraft()
+        loadTimelineSettings()
         loadConfigurationDrafts()
         showsSummarySettings = true
     }
@@ -766,6 +797,61 @@ final class StatusModel: ObservableObject {
         }
     }
 
+    func loadTimelineSettings() {
+        timelineSettingsLoaded = false
+        timelineSettingsError = nil
+        do {
+            timelineMode = try SummarySettings.load(root: root).timelineMode
+            timelineSettingsLoaded = true
+        } catch { timelineSettingsError = String(describing: error) }
+    }
+
+    func saveTimelineSettings() {
+        guard timelineSettingsLoaded, !timelineRebuilding else { return }
+        do {
+            var settings = try SummarySettings.load(root: root)
+            settings.timelineMode = timelineMode
+            try settings.save(root: root)
+            timelineSettingsError = nil
+            timelineSettingsMessage = "模式已保存"
+            showsTimelineRecalculation = true
+            refreshSlow()
+        } catch { timelineSettingsError = String(describing: error) }
+    }
+
+    func recalculateTimeline(_ scope: TimelineRecalculation) {
+        showsTimelineRecalculation = false
+        guard !timelineRebuilding else { return }
+        guard scope != .none else {
+            timelineSettingsMessage = "不重算已有总结；后续按新模式生成"
+            return
+        }
+        let root = root
+        let binary = commandExecutable
+        let arguments = scope.arguments() + ["--out", root.path]
+        timelineRebuilding = true
+        timelineSettingsError = nil
+        timelineSettingsMessage = scope == .today ? "正在重算当天总结…" : "正在依次重算所有总结…"
+        timelineTask = Task { [weak self] in
+            let worker = Task.detached { () -> String? in
+                do {
+                    try LocalCommand.run(binary.path, arguments, timeout: 7200, cancelled: { Task<Never, Never>.isCancelled })
+                    return nil
+                } catch is CancellationError { return "重算已停止，已完成的部分保留" }
+                catch { return String(describing: error) }
+            }
+            let error = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+            guard let self, !self.stopped else { return }
+            self.timelineRebuilding = false
+            self.timelineTask = nil
+            if let error { self.timelineSettingsError = error; self.timelineSettingsMessage = nil }
+            else { self.timelineSettingsMessage = "总结重算完成" }
+            self.refreshSlow()
+        }
+    }
+
+    func cancelTimelineRecalculation() { timelineTask?.cancel() }
+
     func saveSummaryDraft() {
         do {
             var settings = try SummarySettings.load(root: root)
@@ -780,6 +866,7 @@ final class StatusModel: ObservableObject {
         let file = root.appendingPathComponent(name)
         func showError(_ message: String) {
             switch settingsTab {
+            case .timeline: timelineSettingsError = message
             case .prompts: summarySettingsError = message
             case .model: modelSettingsError = message
             case .collector: collectorSettingsError = message
@@ -800,17 +887,53 @@ final class StatusModel: ObservableObject {
         detail = nil
     }
 
-    func copyRecentSummary() {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm"
-        f.locale = Locale(identifier: "en_US_POSIX")
-        let text = timelineGroups.flatMap(\.items).prefix(20)
-            .map { "[\(f.string(from: $0.timestamp))] \($0.title)\n\($0.summary)" }
-            .joined(separator: "\n\n")
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+    func toggleSummarySelection() {
+        isSelectingSummaries.toggle()
+        selectedSummaryIDs.removeAll()
+        selectionMessage = nil
     }
+
+    func selectSummary(_ item: TimelineItem) {
+        guard !item.isAway else { return }
+        if !selectedSummaryIDs.insert(item.id).inserted { selectedSummaryIDs.remove(item.id) }
+        selectionMessage = nil
+    }
+
+    func copySelectedSummaries() {
+        let items = allTimelineGroups.flatMap(\.items).filter { selectedSummaryIDs.contains($0.id) && !$0.isAway }
+            .sorted { $0.timestamp < $1.timestamp }
+        guard !items.isEmpty else { return }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        writeToPasteboard(items.map { "[\(formatter.string(from: $0.timestamp))] \($0.title)\n\($0.summary)" }.joined(separator: "\n\n"))
+        selectionMessage = "已复制 \(items.count) 条摘要"
+    }
+
+    func canEditSummary(_ item: TimelineItem) -> Bool {
+        effectiveTimelineMode == .fixedTenMinutes && !item.isAway && item.memoryFiles.count == 1
+    }
+
+    func editSummary(_ item: TimelineItem) {
+        guard canEditSummary(item) else { return }
+        editingSummary = item
+        editedTitle = item.title
+        editedSummary = item.summary
+        editError = nil
+    }
+
+    func saveSummaryEdit(restore: Bool = false) {
+        guard let item = editingSummary, canEditSummary(item) else { return }
+        let title = editedTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary = editedSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard restore || (!title.isEmpty && !summary.isEmpty) else { editError = "请填写标题和内容。"; return }
+        do {
+            var edits = try TimelineEdits.load(root: root)
+            try edits.set(restore ? nil : .init(title: title, summary: summary), for: item.memoryFiles[0].lastPathComponent, root: root)
+            editingSummary = nil
+            refreshSlow()
+        } catch { editError = "无法保存摘要：\(error.localizedDescription)" }
+    }
+
 }
 
 /// 默认 AX 超时在本托盘进程生效；AX 对象在此后台 actor 内创建和使用。
