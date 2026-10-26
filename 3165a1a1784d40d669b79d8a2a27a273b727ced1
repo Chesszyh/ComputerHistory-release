@@ -1,0 +1,19 @@
+Tests/ComputerHistoryCoreTests/SummaryQualityTests.swift
+  s_cfdf89bb180816::t_02d51817ba5f6d 8-17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3165a1a1784d40d669b79d8a2a27a273b727ced1",
+  "prompts": {},
+  "sessions": {
+    "s_cfdf89bb180816": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a16437-5dd0-76f3-9fc9-fc35521cd569",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
