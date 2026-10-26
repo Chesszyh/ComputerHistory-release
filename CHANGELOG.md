@@ -1,7 +1,7 @@
 # Changelog
 
 
-## 1.0.0 - 2026-10-26
+## 0.3.0 - 2026-10-26
 
 ### Timeline and summaries
 - Offer fixed ten-minute and continuous-task modes, summary editing, and copying selections across pages.
