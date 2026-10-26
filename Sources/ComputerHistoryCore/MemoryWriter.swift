@@ -55,22 +55,26 @@ public enum MemoryWriter {
         granularity: String = "10min",
         sources: [String] = [],
         titleOverride: String? = nil,
-        evidenceMaterial: String? = nil
+        evidenceMaterial: String? = nil,
+        noClearActivity: Bool = false
     ) -> String {
         var out = ""
 
         out += "---\n"
-        let heading = titleOverride ?? title(for: digest)
-        let summary = granularity == "6h"
+        let heading = noClearActivity ? ActivityEvidence.noActivityTitle : titleOverride ?? title(for: digest)
+        let summary = noClearActivity ? ActivityEvidence.noActivitySummary : granularity == "6h"
             ? sixHourDescription(for: digest) : description(for: digest)
         out += "title: \(heading)\n"
         out += "description: \(summary)\n"
         out += "generation: \(enrichment != nil ? "model" : (modelNote != nil ? "failed" : "factual"))\n"
+        if noClearActivity { out += "activity_status: no_clear_activity\n" }
         out += "applications: [" + digest.applications.joined(separator: ", ") + "]\n"
         out += "---\n\n"
 
         out += "## Memory summary\n\n"
-        if let enrichment, !enrichment.isEmpty {
+        if noClearActivity {
+            out += "### 本次活动\n\n- **\(ActivityEvidence.noActivityTitle)**：\(ActivityEvidence.noActivitySummary)\n\n"
+        } else if let enrichment, !enrichment.isEmpty {
             // 模型已按系统提示产出 Relevant prior context 等小节，此处不再补写，
             // 否则会出现两个同名小节。
             out += enrichment.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n"
@@ -199,7 +203,7 @@ public enum MemoryWriter {
     static func recordingSection(for activity: SegmentDigest.AppActivity) -> String {
         var out = "### \(activity.displayName)\n\n"
         let span = activity.duration
-        out += "- 活跃时段 \(format(activity.firstSeen))–\(format(activity.lastSeen))"
+        out += "- 界面记录时段 \(format(activity.firstSeen))–\(format(activity.lastSeen))"
         out += "（约 \(Int(span / 60)) 分钟），共 \(activity.eventCount) 条事件。\n"
 
         var counts: [String] = []

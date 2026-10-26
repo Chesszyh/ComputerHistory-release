@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check release eligibility, archive boundaries, and integration failure propagation."""
 import contextlib
+import hashlib
 import importlib.util
 import io
 from pathlib import Path
@@ -8,6 +9,7 @@ import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 
 def load(name):
@@ -40,6 +42,44 @@ class BuildToolsTests(unittest.TestCase):
                              ('repo', 'view', 'example/public', '--json', 'nameWithOwner,visibility'))
             self.assertEqual(api.call_count, 3)
             self.assertEqual(process.call_count, 1)
+
+    def test_candidate_release_is_prerelease_and_never_latest(self):
+        version = '1.0.0-rc.1'
+        commit = 'a' * 40
+        run = {'repository': {'full_name': 'example/public'}, 'head_sha': commit,
+               'path': '.github/workflows/ci.yml', 'conclusion': 'success', 'status': 'completed'}
+        jobs = [{'name': name, 'conclusion': 'success'} for name in release.REQUIRED_JOBS]
+        payload = b'synthetic archive'
+        name = f'ComputerHistory-v{version}-macos-arm64.tar.gz'
+        published = {'draft': False, 'prerelease': True, 'html_url': 'https://example.invalid/release',
+                     'assets': [{'name': name, 'size': len(payload),
+                                 'digest': 'sha256:' + hashlib.sha256(payload).hexdigest()}]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'VERSION').write_text(version)
+            for file in ['CHANGELOG.md', 'CHANGELOG.zh.md']:
+                (root / file).write_text(f'## {version} - 2026-01-01\nCandidate notes.\n')
+            calls = []
+            def process(args, **kwargs):
+                calls.append(args)
+                if args[1:3] == ['run', 'download']:
+                    (Path(args[args.index('--dir')+1]) / name).write_bytes(payload)
+                return SimpleNamespace(returncode=1, stderr='release not found')
+            with patch('sys.argv', ['publish-release.py', '--repo', 'example/public', '--run-id', '123',
+                                    '--output', str(root / 'output'), '--publish']), \
+                    patch.object(release, 'ROOT', root), \
+                    patch.object(release, 'gh_json', side_effect=[
+                        {'nameWithOwner': 'example/public', 'visibility': 'PUBLIC'}, run, {'jobs': jobs},
+                        {'sha': 'b' * 40}, {}, published]), \
+                    patch.object(release, 'command', side_effect=lambda *args, **kw: '' if args[1] == 'ls-remote' else commit), \
+                    patch.object(release, 'verify_package') as verify, \
+                    patch.object(release.subprocess, 'run', side_effect=process), contextlib.redirect_stdout(io.StringIO()):
+                release.main()
+            create = next(c for c in calls if c[1:3] == ['release', 'create'])
+            self.assertIn('--prerelease', create)
+            self.assertIn('--latest=false', create)
+            self.assertNotIn('--latest', create)
+            verify.assert_called_once()
 
     def test_only_full_success_for_same_repository_and_commit_can_publish(self):
         run = {'repository': {'full_name': 'example/public'}, 'head_sha': 'a' * 40,

@@ -1,12 +1,20 @@
 import Foundation
 
-/// 登录界面只留下起止时间，不进入界面采样或模型总结。
+/// 离开期间只保存起止时间和系统原因，不进入内容采样或模型总结。
 public struct AwayPeriods: Codable, Equatable, Sendable {
+    public enum Reason: String, Codable, Sendable {
+        case locked
+        case idle
+        public var summary: String { self == .idle ? "长时间无操作，未锁屏" : "锁屏或休眠" }
+    }
+    public static let idleThreshold: TimeInterval = 300
     public struct Period: Codable, Equatable, Sendable {
         public var start: Date
         public var end: Date
+        public var reason: Reason? = nil
     }
     public var startedAt: Date?
+    public var startedReason: Reason? = nil
     public var periods: [Period] = []
 
     func sessionStart(at time: Date) -> Date {

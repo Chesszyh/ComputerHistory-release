@@ -26,7 +26,7 @@ func usage() {
       computer-history narrative [--limit N] [--day <yyyy-MM-dd>] [--print] [--overwrite] [--wait-lock]
                                             把记忆归纳成前端叙述条目
       computer-history report [--kind daily|weekly] [--day yyyy-MM-dd] [--no-model] [--overwrite] [--print]
-                                            生成日报或周报；省略日期补齐已结束时段
+                                            先补齐所需记忆，再生成报告；省略日期补齐已结束时段
       computer-history export --day yyyy-MM-dd [--kind daily|weekly] [--material]
                               [--format md|txt] [--file <路径>] [--copy]
                                             导出报告或给 AI 的活动材料（不调用模型）

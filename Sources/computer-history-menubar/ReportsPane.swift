@@ -30,7 +30,7 @@ struct ReportsPane: View {
             .disabled(model.reportBusy)
             HStack {
                 Button(model.reportText.isEmpty ? "生成报告" : "重新生成") { model.generateReport() }
-                    .disabled(model.reportBusy || model.reportMaterial.isEmpty)
+                    .disabled(model.reportBusy)
                     .accessibilityIdentifier("report-generate")
                 Button("复制报告") { model.copyReport(material: false) }
                     .disabled(model.reportText.isEmpty || model.reportBusy)
@@ -40,7 +40,7 @@ struct ReportsPane: View {
             }.controlSize(.small)
             ScrollView {
                 if model.reportText.isEmpty {
-                    Text("尚无报告。可直接复制活动材料，或生成报告。")
+                    Text(model.reportBusy ? "正在补齐记忆并生成报告…" : "尚无报告。可直接复制活动材料，或生成报告。")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(10)
                 } else {

@@ -38,10 +38,11 @@ public struct TimelineDeletions: Codable, Sendable, Equatable {
 
     public static func delete(_ item: TrayTimelineItem, root: URL) throws {
         var value = try load(root: root)
-        guard !item.isAway, !value.ids.contains(item.deletionID) else { return }
-        value.restoredItems.removeAll { $0.deletionID == item.deletionID }
-        value.ids.insert(item.deletionID)
-        value.records.append(Record(item: item, deletedAt: Date()))
+        for child in item.leafItems where !child.isAway && !value.ids.contains(child.deletionID) {
+            value.restoredItems.removeAll { $0.deletionID == child.deletionID }
+            value.ids.insert(child.deletionID)
+            value.records.append(Record(item: child, deletedAt: Date()))
+        }
         try value.save(root: root)
     }
 

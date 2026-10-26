@@ -84,8 +84,9 @@ def main():
     jobs = gh_json('run', 'view', str(args.run_id), '--repo', repository, '--json', 'jobs')['jobs']
     validate_run(run, jobs, repository, commit)
     version = (ROOT / 'VERSION').read_text().strip()
-    if not re.fullmatch(r'\d+\.\d+\.\d+', version):
-        raise ValueError('VERSION must contain a three-part release version')
+    if not re.fullmatch(r'\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?', version):
+        raise ValueError('VERSION must contain a three-part version, optionally followed by -alpha.N, -beta.N, or -rc.N')
+    prerelease = '-' in version
     tag = f'v{version}'
     notes = release_notes(version)
     existing = subprocess.run(['gh', 'release', 'view', tag, '--repo', repository],
@@ -118,11 +119,12 @@ def main():
         gh_json('api', '--method', 'POST', f'repos/{repository}/git/refs', payload={
             'ref': f'refs/tags/{tag}', 'sha': annotation['sha']})
     subprocess.run(['gh', 'release', 'create', tag, '--repo', repository, '--verify-tag',
-                    '--title', tag, '--notes-file', str(notes_path), '--latest', str(archive)], check=True)
+                    '--title', tag, '--notes-file', str(notes_path),
+                    *(['--prerelease', '--latest=false'] if prerelease else ['--latest']), str(archive)], check=True)
     published = gh_json('api', f'repos/{repository}/releases/tags/{tag}')
     assets = published['assets']
     digest = 'sha256:' + hashlib.sha256(archive.read_bytes()).hexdigest()
-    if (published['draft'] or published['prerelease'] or len(assets) != 1
+    if (published['draft'] or published['prerelease'] != prerelease or len(assets) != 1
             or assets[0]['name'] != archive.name or assets[0]['size'] != archive.stat().st_size
             or assets[0]['digest'] != digest):
         raise RuntimeError('Release was created, but its uploaded asset did not match the verified package; inspect it before retrying')

@@ -39,11 +39,12 @@ public struct CollectorStatus: Sendable, Equatable {
     public var data: DataStats
     public var memories: MemoryStats
     public var rootDirectory: URL
+    public var awayReason: AwayPeriods.Reason? = nil
 
     /// 采集器是否仍在写入。超过一个段周期没有新事件即视为停滞——
     /// 进程活着但没有产出，与「没在用电脑」不同，值得提示。
     public var isStalled: Bool {
-        guard process.running, let last = data.lastWriteAt else { return false }
+        guard process.running, awayReason == nil, let last = data.lastWriteAt else { return false }
         return Date().timeIntervalSince(last) > SegmentClock.durationSeconds * 2
     }
 
@@ -60,8 +61,10 @@ public struct CollectorStatus: Sendable, Equatable {
         let process = readProcess(root: root, fileManager: fileManager)
         let data = readData(root: root, fileManager: fileManager)
         let memories = readMemories(root: root, data: data, fileManager: fileManager)
+        let away = AwayPeriods.load(root: root)
         return CollectorStatus(process: process, data: data,
-                               memories: memories, rootDirectory: root)
+                               memories: memories, rootDirectory: root,
+                               awayReason: away.startedAt.map { _ in away.startedReason ?? .locked })
     }
 
     public static func empty(root: URL) -> CollectorStatus {

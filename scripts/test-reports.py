@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise report/API/export and GitHub backup boundaries using synthetic local fixtures."""
 import datetime
+import fcntl
 import http.server
 import json
 import os
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 os.environ["COMPUTER_HISTORY_NOTIFICATIONS"] = "0"
 
@@ -82,6 +84,40 @@ with tempfile.TemporaryDirectory(prefix='report-test-') as directory:
         assert chunk_inputs.count(chunk_inputs[0])==1, 'completed batch must be reused after retry'
         ledger=[json.loads(p.read_text()) for p in (root/'requests').glob('*.json')]
         assert {'daily','weekly'} <= {r['task'] for r in ledger}
+        dependencies = base/'dependencies'; dependencies.mkdir()
+        (dependencies/'model.json').write_bytes((root/'model.json').read_bytes())
+        segment_id = '2020-01-05T10-00-00Z_AAAA1111-0000-0000-0000-000000000001'
+        segment = dependencies/'segments'/segment_id; segment.mkdir(parents=True)
+        (segment/'metadata.json').write_text(json.dumps({'eventCount': 1, 'firstEventAt': '2020-01-05T10:01:00Z'}))
+        (segment/'events.jsonl').write_text(json.dumps({'id': 1, 'timestamp': '2020-01-05T10:01:00Z',
+            'kind': 'window.changed', 'app': {'name': 'Synthetic Editor', 'bundleIdentifier': 'example.editor'}})+'\n')
+        command = [binary, 'report', '--day', '2020-01-05', '--out', str(dependencies)]
+        mode='fail'
+        p=subprocess.run(command,env=env,capture_output=True,text=True,timeout=60)
+        assert p.returncode != 0 and '补齐记忆失败' in p.stderr, (p.stdout,p.stderr)
+        assert not (dependencies/'reports/daily/2020-01-05.json').exists()
+        mode='ok';before=len(calls)
+        p=subprocess.run(command,env=env,capture_output=True,text=True,timeout=60)
+        assert p.returncode == 0, (p.stdout,p.stderr)
+        assert len(calls)==before+2, 'retry must fill failed memory, then generate the report'
+        before=len(calls)
+        p=subprocess.run(command,env=env,capture_output=True,text=True,timeout=60)
+        assert p.returncode == 0 and len(calls)==before, 'usable memory and report must be reused'
+        # Competing background memory generation must finish before report dependencies are written.
+        for file in (dependencies/'memories').glob('*.md'): file.unlink()
+        lock_path=dependencies/'.locks/memorize.lock'
+        with lock_path.open('a') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX)
+            process=subprocess.Popen(command+['--no-model'],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+            try:
+                time.sleep(0.4)
+                assert process.poll() is None, 'report must wait for the active memory writer'
+                fcntl.flock(lock,fcntl.LOCK_UN)
+                stdout,stderr=process.communicate(timeout=60)
+                assert process.returncode == 0, (stdout,stderr)
+            finally:
+                if process.poll() is None:
+                    process.kill();process.communicate()
         # Fake gh and redirect git transports to a local bare repository; all Git state transitions are real.
         bare=base/'remote.git'; realgit=shutil.which('git')
         subprocess.run([realgit,'init','--bare','--initial-branch=master',str(bare)],check=True,capture_output=True)

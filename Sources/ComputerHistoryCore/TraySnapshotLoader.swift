@@ -13,6 +13,18 @@ public struct TrayTimelineItem: Codable, Sendable, Equatable, Identifiable {
     public var endTimestamp: Date
     public var isAway: Bool = false
     public var manualEdit: Bool? = nil
+    public var sourceActivities: [String: [Int]]? = nil
+    public var sourceSteps: [String: [Int]]? = nil
+    public var sourceIncidental: [String: [Int]]? = nil
+    public var sharesSourcePeriod: Bool? = nil
+    public var children: [TrayTimelineItem]? = nil
+    public var noClearActivity: Bool? = nil
+    public var leafItems: [TrayTimelineItem] { children?.flatMap(\.leafItems) ?? [self] }
+    public var incidentalCount: Int { sourceIncidental?.values.reduce(0) { $0 + $1.count } ?? 0 }
+    public var isIncidentalOnly: Bool {
+        guard let activities = sourceActivities, !activities.isEmpty else { return false }
+        return activities.allSatisfy { name, numbers in Set(numbers).isSubset(of: sourceIncidental?[name] ?? []) }
+    }
     public var deletionID: String { (isNarrative ? "narrative:" : "memory:") + id }
     public var hasDetail: Bool { !memoryFiles.isEmpty }
 }
@@ -37,11 +49,7 @@ public struct TraySnapshot: Sendable {
 
 /// 独立 actor 提供串行磁盘执行边界；快照只携带展示字段，不携带历史正文。
 public actor TraySnapshotLoader {
-    private struct Stamp: Equatable {
-        var size: UInt64
-        var modified: Date
-        var inode: UInt64
-    }
+    private typealias Stamp = FileStamp
     private struct Counter {
         var stamp: Stamp
         var offset: UInt64
@@ -73,30 +81,34 @@ public actor TraySnapshotLoader {
         var title: String
         var summary: String
         var apps: [String]
+        var activityFragmentCount: Int?
     }
 
     public init() {}
 
     private static func activityPresentation(_ entry: MemoryIndex.Entry) -> MemoryIndex.Entry {
+        if entry.noClearActivity {
+            var result = entry
+            result.title = ActivityEvidence.noActivityTitle
+            result.summary = ActivityEvidence.noActivitySummary
+            result.activityFragmentCount = 1
+            return result
+        }
         let activity = entry.sections.filter { ["本次活动", "整体走向", "延续的工作线"].contains($0.heading) }
             .map(\.content).joined(separator: "\n\n")
         guard !activity.isEmpty else { return entry }
         var result = entry
+        result.activityFragmentCount = ActivityFragment.fragments(in: entry).count
         result.summary = String(ActivityExport.formatted(activity, format: "txt").prefix(1800))
         if let first = activity.split(separator: "\n").first,
            let heading = first.range(of: #"^(?:[-*] )?\*\*[^*]+\*\*"#, options: .regularExpression) {
-            result.title = String(first[heading]).replacingOccurrences(of: #"^[-*] "#, with: "", options: .regularExpression)
-                .replacingOccurrences(of: "**", with: "")
+            result.title = ActivityFragment.title(String(first[heading]).replacingOccurrences(of: #"^[-*] "#, with: "", options: .regularExpression)
+                .replacingOccurrences(of: "**", with: ""))
         }
         return result
     }
 
-    private func stamp(_ url: URL) -> Stamp? {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-              let modified = attrs[.modificationDate] as? Date else { return nil }
-        return Stamp(size: (attrs[.size] as? NSNumber)?.uint64Value ?? 0,
-                     modified: modified, inode: (attrs[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0)
-    }
+    private func stamp(_ url: URL) -> Stamp? { FileStamp(url) }
 
     public func load(root: URL, timeZone: TimeZone = .current) -> TraySnapshot {
         let fm = FileManager.default
@@ -214,7 +226,7 @@ public actor TraySnapshotLoader {
         }
         if parsed > 0 || removedMemories || narrativeChanged { contentVersion += 1 }
         let sources = index.entries.map { TimelineSource(url: $0.fileURL, date: $0.startedAt, firstEventAt: $0.firstEventAt, endedAt: $0.endedAt,
-                                           title: $0.title, summary: $0.summary, apps: $0.applications) }
+                                           title: $0.title, summary: $0.summary, apps: $0.applications, activityFragmentCount: $0.activityFragmentCount) }
         let deletions = (try? TimelineDeletions.load(root: root)) ?? previousDeletions
         let away = AwayPeriods.load(root: root)
         let mode = (try? SummarySettings.load(root: root))?.timelineMode ?? previousTimelineMode ?? .continuous
@@ -255,6 +267,13 @@ public actor TraySnapshotLoader {
                 }
                 return items.isEmpty ? nil : TrayTimelineGroup(day: group.day, items: items)
             }
+            let cards = TimelineLayout.cards(groups.flatMap(\.items))
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd"
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = timeZone
+            let days = Dictionary(grouping: cards, by: { formatter.string(from: $0.timestamp) })
+            groups = days.keys.sorted(by: >).map { TrayTimelineGroup(day: $0, items: days[$0]!) }
             previousEdits = edits
             previousDeletions = deletions
             previousTimelineEntries = sources
@@ -267,9 +286,30 @@ public actor TraySnapshotLoader {
                     eventCountIncomplete: incomplete, bytes: bytes, earliest: earliest, latest: latest,
                     lastWriteAt: lastWrite, sealedSegmentIDs: sealed)
         let status = CollectorStatus(process: CollectorStatus.readProcess(root: root, fileManager: fm), data: data,
-                     memories: CollectorStatus.memoryStats(index: index, data: data), rootDirectory: root)
-        return TraySnapshot(status: status, control: CollectorControl.load(root: root), groups: groups,
+                     memories: CollectorStatus.memoryStats(index: index, data: data), rootDirectory: root,
+                     awayReason: away.startedAt.map { _ in away.startedReason ?? .locked })
+        return TraySnapshot(status: status, control: CollectorControl.load(root: root),
+                            groups: Self.addingOpenAway(to: groups, away: away, timeZone: timeZone),
                             contentVersion: contentVersion, timelineMode: mode, deletedSummaries: deletedSummaries, eventBytesRead: bytesRead, memoriesParsed: parsed)
+    }
+
+    private static func addingOpenAway(to groups: [TrayTimelineGroup], away: AwayPeriods,
+                                       timeZone: TimeZone) -> [TrayTimelineGroup] {
+        let now = Date()
+        guard let start = away.startedAt, now.timeIntervalSince(start) >= 60 else { return groups }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = timeZone
+        // The visible endpoint changes by the minute; it must not invalidate historical sources.
+        let end = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970 / 60) * 60)
+        let item = TrayTimelineItem(id: "away-\(start.timeIntervalSince1970)", timestamp: start,
+            title: away.startedReason == .idle ? "用户离开电脑" : "离开电脑",
+            summary: (away.startedReason ?? .locked).summary, apps: [], isNarrative: false,
+            memoryFiles: [], coveredCount: 1, eventCount: nil, endTimestamp: max(start, end), isAway: true)
+        let cards = TimelineLayout.cards(groups.flatMap(\.items) + [item])
+        let days = Dictionary(grouping: cards, by: { formatter.string(from: $0.timestamp) })
+        return days.keys.sorted(by: >).map { .init(day: $0, items: days[$0]!) }
     }
 
     private static func timeline(index: MemoryIndex, narrative: ActivityNarrative, away: AwayPeriods, restored: [TrayTimelineItem],
@@ -288,13 +328,31 @@ public actor TraySnapshotLoader {
         var narrativeIDs: Set<String> = []
         func appendNarrative(_ item: ActivityNarrative.Item) {
             guard item.apps != ["com.apple.loginwindow"], narrativeIDs.insert(item.id).inserted else { return }
+            let noClearActivity = !item.sourceMemories.isEmpty && item.sourceMemories.allSatisfy { lookup[$0]?.noClearActivity == true }
+            var title = noClearActivity ? ActivityEvidence.noActivityTitle : ActivityFragment.title(item.title)
+            if title == "期间的其他活动" {
+                let fragment = item.sourceMemories.compactMap { name in
+                    lookup[name].flatMap { MemoryIndex.parse(fileURL: $0.fileURL) }.flatMap { entry in
+                        ActivityFragment.fragments(in: entry).first { item.sourceActivities?[name]?.contains($0.number) == true }
+                    }
+                }.first
+                if let fragment {
+                    let parts = fragment.text.components(separatedBy: "**")
+                    title = ActivityFragment.title(parts.count >= 3 ? parts[1] : fragment.text)
+                }
+            }
             byDay[date.string(from: item.timestamp), default: []].append(TrayTimelineItem(
-                id: item.id, timestamp: item.timestamp, title: item.title, summary: item.summary,
+                id: item.id, timestamp: item.timestamp, title: title,
+                summary: noClearActivity ? ActivityEvidence.noActivitySummary : item.summary,
                 apps: item.apps, isNarrative: true, memoryFiles: item.sourceMemories.compactMap { lookup[$0]?.fileURL },
                 coveredCount: max(1, item.sourceMemories.count), eventCount: nil,
                 endTimestamp: max(item.timestamp, item.sourceMemories.compactMap { name in
                     lookup[name].map { away.activityEnd(for: $0) } ?? stamp.date(from: String(name.prefix(20)))
-                }.max() ?? item.timestamp)))
+                }.max() ?? item.timestamp), sourceActivities: item.sourceActivities,
+                sourceSteps: item.sourceSteps, sourceIncidental: nil,
+                sharesSourcePeriod: item.sourceActivities?.contains { name, numbers in
+                    lookup[name].map { numbers.count < ActivityFragment.count(in: $0) } ?? false
+                }, noClearActivity: noClearActivity ? true : nil))
         }
         for item in narrative.items {
             covered.formUnion(item.sourceMemories)
@@ -305,15 +363,20 @@ public actor TraySnapshotLoader {
             byDay[date.string(from: start), default: []].append(TrayTimelineItem(
                 id: entry.id, timestamp: start, title: entry.title, summary: entry.summary,
                 apps: entry.applications, isNarrative: false, memoryFiles: [entry.fileURL],
-                coveredCount: 1, eventCount: nil, endTimestamp: away.activityEnd(for: entry)))
+                coveredCount: 1, eventCount: nil, endTimestamp: away.activityEnd(for: entry),
+                noClearActivity: entry.noClearActivity ? true : nil))
         }
         let existingIDs = Set(byDay.values.flatMap { $0 }.map(\.deletionID))
             .union(narrative.items.flatMap { ($0.previousIDs ?? []).map { "narrative:" + $0 } })
         for item in restored where !existingIDs.contains(item.deletionID) {
             if item.isNarrative {
-                let restoredNarrative = ActivityNarrative(items: [.init(id: item.id, timestamp: item.timestamp,
+                var restoredItem = ActivityNarrative.Item(id: item.id, timestamp: item.timestamp,
                     title: item.title, summary: item.summary, apps: item.apps,
-                    sourceMemories: item.memoryFiles.map(\.lastPathComponent))])
+                    sourceMemories: item.memoryFiles.map(\.lastPathComponent))
+                restoredItem.sourceActivities = item.sourceActivities
+                restoredItem.sourceSteps = item.sourceSteps
+                restoredItem.sourceIncidental = item.sourceIncidental
+                let restoredNarrative = ActivityNarrative(items: [restoredItem])
                     .separatingAwayPeriods(index: index, away: away, mode: mode)
                 restoredNarrative.items.forEach(appendNarrative)
             } else { byDay[date.string(from: item.timestamp), default: []].append(item) }
@@ -321,21 +384,14 @@ public actor TraySnapshotLoader {
         for period in away.periods where period.end.timeIntervalSince(period.start) >= 60 {
             byDay[date.string(from: period.start), default: []].append(TrayTimelineItem(
                 id: "away-\(period.start.timeIntervalSince1970)", timestamp: period.start,
-                title: "离开电脑", summary: "锁屏或休眠", apps: [],
+                title: period.reason == .idle ? "用户离开电脑" : "离开电脑", summary: (period.reason ?? .locked).summary, apps: [],
                 isNarrative: false, memoryFiles: [], coveredCount: 1, eventCount: nil,
                 endTimestamp: period.end, isAway: true))
         }
-        var chronological: [TrayTimelineItem] = byDay.values.flatMap { $0 }
-        chronological.sort {
-            $0.timestamp == $1.timestamp ? $0.id < $1.id : $0.timestamp < $1.timestamp
-        }
-        for i in chronological.indices.dropLast() {
-            chronological[i].endTimestamp = max(chronological[i].timestamp,
-                min(chronological[i].endTimestamp, chronological[i + 1].timestamp))
-        }
+        let chronological: [TrayTimelineItem] = byDay.values.flatMap { $0 }
         let days = Dictionary(grouping: chronological, by: { date.string(from: $0.timestamp) })
         return days.keys.sorted(by: >).map { day in
-            TrayTimelineGroup(day: day, items: days[day]!.reversed())
+            TrayTimelineGroup(day: day, items: days[day]!)
         }
     }
 }

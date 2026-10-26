@@ -55,6 +55,16 @@ public final class InputTap {
         self.handler = handler
     }
 
+    /// 系统会话的输入时钟覆盖移动、滚轮和普通按键，不依赖历史中的语义事件。
+    public static var secondsSinceLastInput: TimeInterval? {
+        let kinds: [CGEventType] = [.keyDown, .keyUp, .flagsChanged, .mouseMoved,
+            .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
+            .otherMouseDown, .otherMouseUp, .scrollWheel,
+            .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
+        let seconds = kinds.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min()
+        return seconds.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+    }
+
     /// 当前进程是否已获 Accessibility 权限（事件 tap 的前置条件）。
     public static var hasAccessibilityPermission: Bool {
         AXIsProcessTrusted()

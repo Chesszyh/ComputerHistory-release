@@ -24,21 +24,25 @@ public struct MemoryIndex: Sendable {
         public var body: String
         /// 正文里各小节标题，用于折叠展示。
         public var sections: [(heading: String, content: String)]
+        public var noClearActivity: Bool = false
         public var generationStatus: String? = nil
         public var revision: String = ""
         public var firstEventAt: Date? = nil
         public var endedAt: Date? = nil
+        public var activityFragmentCount: Int? = nil
 
         public var activitySummary: String {
-            String(ActivityExport.formatted(ActivityExport.text(for: self), format: "txt").prefix(1800))
+            if noClearActivity { return ActivityEvidence.noActivitySummary }
+            return String(ActivityExport.formatted(ActivityExport.text(for: self), format: "txt").prefix(1800))
         }
         public var activityTitle: String {
+            if noClearActivity { return ActivityEvidence.noActivityTitle }
             let content = sections.filter { ["本次活动", "整体走向", "延续的工作线"].contains($0.heading) }
                 .map(\.content).joined(separator: "\n")
             guard let first = content.split(separator: "\n").first,
                   let heading = first.range(of: #"^(?:[-*] )?\*\*[^*]+\*\*"#, options: .regularExpression) else { return title }
-            return String(first[heading]).replacingOccurrences(of: #"^[-*] "#, with: "", options: .regularExpression)
-                .replacingOccurrences(of: "**", with: "")
+            return ActivityFragment.title(String(first[heading]).replacingOccurrences(of: #"^[-*] "#, with: "", options: .regularExpression)
+                .replacingOccurrences(of: "**", with: ""))
         }
 
         /// 用于展示的时刻，形如 `15:40`。
@@ -90,13 +94,28 @@ public struct MemoryIndex: Sendable {
         let granularity = String(parts[parts.count - 1])
         let code = String(parts[parts.count - 2])
         guard code.count == 4 else { return nil }
-        let segmentID = parts[0..<(parts.count - 2)].joined(separator: "-")
+        var segmentID = parts[0..<(parts.count - 2)].joined(separator: "-")
         guard let startedAt = SegmentClock.date(fromSegmentID: segmentID) else { return nil }
 
         guard let text = try? String(contentsOf: fileURL, encoding: .utf8) else { return nil }
         let front = MemoryWriter.parseFrontmatter(text)
+        let noClearActivity = text.hasPrefix("---\n") && text.dropFirst(4).split(separator: "\n")
+            .prefix { $0 != "---" }.contains("activity_status: no_clear_activity")
         let apps = parseApplications(text)
         let body = stripFrontmatter(text)
+        // 文件名省略重启段的 UUID，来源引用保留完整 ID；短码校验避免认错同窗的段。
+        if granularity == "10min", let citations = body.components(separatedBy: "## Citations\n").last {
+            for line in citations.split(separator: "\n") where line.hasPrefix("- ") {
+                let path = String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                let url = URL(fileURLWithPath: path)
+                guard ["events.jsonl", "events.jsonl.gz"].contains(url.lastPathComponent) else { continue }
+                let candidate = url.deletingLastPathComponent().lastPathComponent
+                if MemoryWriter.fileName(segmentID: candidate) == name {
+                    segmentID = candidate
+                    break
+                }
+            }
+        }
         let metadataURL = fileURL.deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("segments/\(segmentID)/metadata.json")
         let metadata = granularity == "10min" ? (try? EventStreamJSON.makeDecoder()
@@ -107,6 +126,7 @@ public struct MemoryIndex: Sendable {
                      title: front.title, summary: front.description,
                      applications: apps, body: body,
                      sections: parseSections(body),
+                     noClearActivity: noClearActivity,
                      generationStatus: text.split(separator: "\n").first(where: { $0.hasPrefix("generation: ") }).map { String($0.dropFirst(12)) },
                      revision: SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined(),
                      firstEventAt: metadata?.firstEventAt, endedAt: metadata?.endedAt)

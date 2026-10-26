@@ -26,6 +26,8 @@ python3 scripts/test-process-control.py .build/release/computer-history
 ```bash
 python3 scripts/test-text-summary.py .build/debug/computer-history
 python3 scripts/test-text-summary.py .build/release/computer-history
+python3 scripts/test-narrative-activities.py .build/debug/computer-history
+python3 scripts/test-narrative-activities.py .build/release/computer-history
 python3 scripts/test-reports.py .build/debug/computer-history
 python3 scripts/test-reports.py .build/release/computer-history
 python3 scripts/test-model-fallback.py .build/debug/computer-history
@@ -49,7 +51,7 @@ python3 scripts/make-tray-fixture.py --out /tmp/computer-history-tray-fixture --
 
 不带 `--large` 生成小数据组。对同一数据重复打开/收起、滚动、展开概要与详情，跨越多个刷新周期；将响应耗时、堆对象数、物理内存峰值和稳态分别记录。一次 `leaks` 或 RSS 读数不能证明长期无泄漏。关闭测试实例后可删除其合成目录。
 
-历史列表的自动分页可在 macOS 图形会话中用真实 SwiftUI 和滚动控件验证。此测试创建临时合成时间线和不显示的窗口，断言首屏及连续触底加载，不启动采集或调用模型：
+历史列表的自动分页可在 macOS 图形会话中用真实 SwiftUI 和滚动控件验证。此测试创建临时合成时间线和独立的可见测试窗口，断言首屏及连续触底加载，不启动采集或调用模型：
 
 ```bash
 bash scripts/test-menubar-panel.sh
@@ -76,7 +78,7 @@ Agent Skill 查询测试只使用临时合成历史，覆盖摘要、时间线�
 python3 scripts/test-agent-skill.py
 ```
 
-CI 在 `main`、`master` 推送与合并请求及手动触发时运行：私有开发使用 `master`，公开产品使用 `main`。Debug、Release 和原生菜单检查在独立的 Apple Silicon macOS 任务中并行执行；每个配置中的五组集成测试并发运行，日志分别保留为 CI 附件。私有样本与大数据基准保持显式启用，不属于常规 CI。
+CI 在 `main`、`master` 推送与合并请求及手动触发时运行：私有开发使用 `master`，公开产品使用 `main`。Debug、Release 和原生菜单检查在独立的 Apple Silicon macOS 任务中并行执行；每个配置中的集成测试并发运行，日志分别保留为 CI 附件。私有样本与大数据基准保持显式启用，不属于常规 CI。
 
 本机可使用相同的并发集成入口，`--jobs 1` 可用于逐项排障：
 
@@ -115,3 +117,11 @@ bash scripts/test-menubar-panel.sh scripts/test-accessibility-relaunch.swift --c
 ```
 
 该测试需要为测试程序提供辅助功能权限，不开启真实采集或调用模型。ActivityWatch 常规测试使用模拟接口，验证本机数据桶选择、过期数据、取消请求、屏蔽规则、区间去重和总结来源标注，不访问正在运行的 ActivityWatch 服务。
+
+`test-narrative-activities.py` 使用合成多任务记忆和本地模拟模型，检查共享来源的活动拆分、主任务与步骤归组、穿插归属与续接、原文保留、失败不覆盖、来源修订及固定十分钟模式。
+
+`TimelineLayoutTests` 使用同刻、零长度、包含、相交链、相接区间及固定种子的随机区间验证时间点唯一、严格顺序、不重叠和活动完整归属；`InteractionEvidenceTests` 验证动态界面与不确定控件变化不被当作明确交互，不依赖个人项目名或私有历史。
+
+原生面板回归同时检查未变化的刷新不重复发布内容版本、模型健康和备份状态；对照逐次创建与复用日期格式化器的输出，并打印同一组合成时间的耗时。耗时只用于定位该操作的成本，不作为整机 CPU 或长期稳定性的保证。
+
+`VERSION` 可使用三段版本，或带 `-alpha.N`、`-beta.N`、`-rc.N` 的候选版本。发布入口根据版本自动设置预发布，候选版不会标为最新正式版。已有本机运行实例时，测试使用独立的 `--scratch-path .build/verification`，避免测试构建替换运行程序；对应程序位置可用同一 scratch 路径的 `swift build --show-bin-path` 查询。

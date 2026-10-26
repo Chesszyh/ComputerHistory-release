@@ -2,6 +2,34 @@ import Foundation
 
 /// 有界的时序材料同时保留应用上下文、编辑归属和界面结果，供各总结层复用。
 public enum ActivityEvidence {
+    public static let noActivityTitle = "无明显活动"
+    public static let noActivitySummary = "本时段仅记录到前台界面变化，未记录到明确操作。"
+
+    public static func hasNoClearActivity(events: [EventStreamRecord]) -> Bool {
+        guard let first = events.first?.timestamp, let last = events.last?.timestamp,
+              last.timeIntervalSince(first) >= AwayPeriods.idleThreshold else { return false }
+        return !events.contains { event in
+            if event.activityWatch?.status == "not-afk" { return true }
+            if [.mouseClick, .mouseContextMenu, .mouseDrag, .keyboardShortcut, .keyboardSubmit].contains(event.kind) { return true }
+            guard event.kind == .keyboardTextInput, let keyboard = event.keyboard,
+                  let text = keyboard.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+            return keyboard.textEvidence == .editedValue
+                || (["AXTextField", "AXTextArea"].contains(keyboard.target?.role ?? "")
+                    && keyboard.target?.placeholder != text
+                    && !isChatChrome(text, app: event.app ?? EventStreamApp()))
+        }
+    }
+
+    public static func interactionSummary(events: [EventStreamRecord]) -> String {
+        let clicks = events.filter { [.mouseClick, .mouseContextMenu, .mouseDrag].contains($0.kind) }.count
+        let keys = events.filter { [.keyboardShortcut, .keyboardSubmit].contains($0.kind) }.count
+        let edits = events.filter { $0.kind == .keyboardTextInput && $0.keyboard?.textEvidence == .editedValue }.count
+        var text = "明确交互记录：鼠标 \(clicks) 次，快捷键或提交 \(keys) 次，确证编辑片段 \(edits) 段。\n"
+        if clicks + keys + edits == 0 {
+            text += "本段未记录到上述明确交互。只描述界面处于前台、停留或内容变化，不将页面刷新、倒计时或后台回复写成用户持续查看、阅读或操作。\n"
+        }
+        return text + "记录首末时间是观测范围，不代表持续操作时长；不能由缺少交互推断用户离开、看手机或没有阅读。\n"
+    }
     public static func material(events: [EventStreamRecord], segmentID: String,
                                 characterBudget: Int = 16000) -> String {
         var observations: [(reference: String, context: String, facts: [String], nodes: [String], hasContent: Bool)] = []
@@ -49,7 +77,7 @@ public enum ActivityEvidence {
                 }
             }
             if facts.isEmpty, selectedNodes.isEmpty, event.kind == .windowChanged, context != lastContext {
-                facts.append("查看窗口")
+                facts.append("窗口状态变化")
             }
             lastContext = context
             if !facts.isEmpty || !selectedNodes.isEmpty {

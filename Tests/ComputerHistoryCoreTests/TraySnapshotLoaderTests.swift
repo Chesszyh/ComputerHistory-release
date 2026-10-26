@@ -77,6 +77,51 @@ final class TraySnapshotLoaderTests: XCTestCase {
         XCTAssertTrue(deleted.groups.isEmpty)
         XCTAssertEqual(deleted.status.memories.pendingSegments, 1)
     }
+    func testLegacyBriefActivitiesUseNormalPresentationAndOriginalTitle() async throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("memories")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("2020-01-01T10-00-00Z-ABCD-10min-memory-summary.md")
+        try "---\ntitle: Window\ndescription: Counts\n---\n### 本次活动\n- **核对预约名额**：你查看周末场次的剩余名额。".write(to: file, atomically: true, encoding: .utf8)
+        var item = ActivityNarrative.Item(id: "brief", timestamp: Date(timeIntervalSince1970: 0), title: "期间的其他活动", summary: "你查看周末场次的剩余名额。", apps: ["example.browser"], sourceMemories: [file.lastPathComponent])
+        item.sourceActivities = [file.lastPathComponent: [1]]
+        item.sourceIncidental = item.sourceActivities
+        try ActivityNarrative(items: [item]).save(root: root)
+        let snapshot = await TraySnapshotLoader().load(root: root)
+        let row = try XCTUnwrap(snapshot.groups.first?.items.first)
+        XCTAssertEqual(row.title, "核对预约名额")
+        XCTAssertEqual(row.summary, item.summary)
+        XCTAssertNil(row.sourceIncidental)
+        XCTAssertFalse(row.isIncidentalOnly)
+    }
+
+    func testOngoingAwayDoesNotInvalidateUnchangedHistory() async throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        var away = AwayPeriods(startedAt: Date().addingTimeInterval(-120))
+        away.startedReason = .idle
+        try away.save(root: root)
+        let loader = TraySnapshotLoader()
+        let first = await loader.load(root: root)
+        let second = await loader.load(root: root)
+        XCTAssertEqual(first.contentVersion, second.contentVersion,
+                       "Advancing an open period must not rebuild and publish unchanged historical content")
+        XCTAssertEqual(second.groups.first?.items.first?.title, "用户离开电脑")
+        XCTAssertTrue(second.groups.first?.items.first?.isAway == true)
+    }
+
+    func testOpenAwayUsesTheSameUniqueTimeLayoutAsHistoricalItems() async throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let start = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970) - 120)
+        try AwayPeriods(startedAt: start).save(root: root)
+        try ActivityNarrative(items: [.init(id: "same-time", timestamp: start, title: "Synthetic source",
+            summary: "Synthetic activity", apps: [], sourceMemories: [])]).save(root: root)
+        let snapshot = await TraySnapshotLoader().load(root: root)
+        let cards = snapshot.groups.flatMap(\.items)
+        XCTAssertEqual(Set(cards.map(\.timestamp)).count, cards.count)
+        XCTAssertEqual(cards.count, 1)
+        XCTAssertEqual(cards[0].leafItems.count, 2)
+    }
+
     func testRefreshRequestsCoalesceAndCanBeCancelled() {
         var state = TrayRefreshState()
         XCTAssertTrue(state.request())
@@ -86,6 +131,32 @@ final class TraySnapshotLoaderTests: XCTestCase {
         XCTAssertTrue(state.request())
         state.cancel()
         XCTAssertTrue(state.request())
+    }
+
+    func testSharedMemoryActivitiesKeepSourcePeriodsAndFixedModeKeepsWholeMemory() async throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("memories")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("2020-01-01T10-00-00Z-ABCD-10min-memory-summary.md")
+        let detail = String(repeating: "核对合成文档的独立条目。", count: 220) + "SYNTHETIC_FINAL_DETAIL"
+        try "---\ntitle: Window\ndescription: Counts\n---\n## Memory summary\n### 本次活动\n- **审阅文档。**：\(detail)\n- **迁移示例项目**：保留提交历史。".write(to: file, atomically: true, encoding: .utf8)
+        let entry = try XCTUnwrap(MemoryIndex.parse(fileURL: file))
+        let items = NarrativeGenerator.parseItems("## [S1.A1] 审阅文档。\n核查文档。\n## [S1.A2] 迁移示例项目\n核查目录。", sources: [entry])
+        try ActivityNarrative(items: items).save(root: root)
+        let loader = TraySnapshotLoader()
+        let continuous = await loader.load(root: root)
+        let rows = continuous.groups.flatMap(\.items).flatMap(\.leafItems)
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows.allSatisfy { $0.sharesSourcePeriod == true })
+        let source = ActivityFragment.details(files: [file], activities: rows.first { $0.title == "审阅文档" }?.sourceActivities)
+        XCTAssertTrue(source.first?.text.contains("SYNTHETIC_FINAL_DETAIL") == true)
+        XCTAssertFalse(source.first?.text.contains("提交历史") == true)
+        var settings = SummarySettings(); settings.timelineMode = .fixedTenMinutes; try settings.save(root: root)
+        let fixed = await loader.load(root: root)
+        XCTAssertEqual(fixed.groups.flatMap(\.items).flatMap(\.leafItems).count, 1)
+        let full = ActivityFragment.details(files: [file], activities: fixed.groups.first?.items.first?.sourceActivities)
+        XCTAssertTrue(full.first?.text.contains("SYNTHETIC_FINAL_DETAIL") == true)
+        XCTAssertTrue(full.first?.text.contains("提交历史") == true)
     }
 
     func testSplitCardsUseActivityContentAndPreserveCompletedNarratives() async throws {
@@ -106,7 +177,7 @@ final class TraySnapshotLoaderTests: XCTestCase {
         try ActivityNarrative(items: [split, completed]).save(root: root)
         let original = try Data(contentsOf: ActivityNarrative.fileURL(root: root))
         let snapshot = await TraySnapshotLoader().load(root: root)
-        let items = snapshot.groups.flatMap(\.items)
+        let items = snapshot.groups.flatMap(\.items).flatMap(\.leafItems)
         let repaired = try XCTUnwrap(items.first { $0.id == "split" })
         XCTAssertEqual(repaired.title, "核对合成文档")
         XCTAssertTrue(repaired.summary.contains("核对任务 A 的运行结果"))
@@ -141,26 +212,27 @@ final class TraySnapshotLoaderTests: XCTestCase {
         ]).save(root: root)
         let loader = TraySnapshotLoader()
         let separated = await loader.load(root: root)
-        let rows = separated.groups.flatMap(\.items).sorted { $0.timestamp < $1.timestamp }
+        let rows = separated.groups.flatMap(\.items).flatMap(\.leafItems).sorted { $0.timestamp < $1.timestamp }
         XCTAssertEqual(rows.count, 3)
         XCTAssertTrue(rows[0].summary.contains("合成任务 0"))
         XCTAssertTrue(rows[2].summary.contains("合成任务 2"))
         XCTAssertEqual(rows[1].summary, "Independent B")
-        XCTAssertTrue(zip(rows, rows.dropFirst()).allSatisfy { $0.endTimestamp <= $1.timestamp })
+        let containers = separated.groups.flatMap(\.items).sorted { $0.timestamp < $1.timestamp }
+        XCTAssertTrue(zip(containers, containers.dropFirst()).allSatisfy { $0.endTimestamp <= $1.timestamp })
         try ActivityNarrative(items: [.init(id: "merged", timestamp: start, title: "Continuous A",
             summary: "A specific continuous activity", apps: [], sourceMemories: names)]).save(root: root)
         let original = try Data(contentsOf: ActivityNarrative.fileURL(root: root))
         let continuous = await loader.load(root: root)
-        XCTAssertEqual(continuous.groups.flatMap(\.items).count, 1)
+        XCTAssertEqual(continuous.groups.flatMap(\.items).flatMap(\.leafItems).count, 1)
         var settings = SummarySettings(); settings.timelineMode = .fixedTenMinutes
         try settings.save(root: root)
         let fixed = await loader.load(root: root)
-        XCTAssertEqual(fixed.groups.flatMap(\.items).count, 3)
+        XCTAssertEqual(fixed.groups.flatMap(\.items).flatMap(\.leafItems).count, 3)
         XCTAssertEqual(try Data(contentsOf: ActivityNarrative.fileURL(root: root)), original)
         XCTAssertGreaterThan(fixed.contentVersion, continuous.contentVersion)
         settings.timelineMode = .continuous; try settings.save(root: root)
         let restored = await loader.load(root: root)
-        XCTAssertEqual(restored.groups.flatMap(\.items).first?.summary, "A specific continuous activity")
+        XCTAssertEqual(restored.groups.flatMap(\.items).flatMap(\.leafItems).first?.summary, "A specific continuous activity")
     }
 
     func testResumedActivityIsSeparatedAroundAwayPeriodsWithoutRewritingHistory() async throws {
@@ -199,7 +271,7 @@ final class TraySnapshotLoaderTests: XCTestCase {
         let original = try Data(contentsOf: ActivityNarrative.fileURL(root: root))
         let loader = TraySnapshotLoader()
         let snapshot = await loader.load(root: root, timeZone: TimeZone(secondsFromGMT: 0)!)
-        let items = snapshot.groups.flatMap(\.items)
+        let items = snapshot.groups.flatMap(\.items).flatMap(\.leafItems)
         let expected = [libraryReturn, date("11:03:28"), morningReturn, date("01:59:17"), date("01:10:05")]
         XCTAssertEqual(items.count, expected.count)
         for (item, time) in zip(items, expected) {
@@ -225,17 +297,17 @@ final class TraySnapshotLoaderTests: XCTestCase {
         parent.memoryFiles = names.map { dir.appendingPathComponent($0) }
         try TimelineDeletions.delete(parent, root: root)
         let hidden = await TraySnapshotLoader().load(root: root)
-        XCTAssertTrue(hidden.groups.flatMap(\.items).allSatisfy(\.isAway), "Splitting must preserve deletion of the original card")
+        XCTAssertTrue(hidden.groups.flatMap(\.items).flatMap(\.leafItems).allSatisfy(\.isAway), "Splitting must preserve deletion of the original card")
         try TimelineDeletions.restore(id: parent.deletionID, root: root)
         try TimelineDeletions.delete(active[0], root: root)
         let after = await TraySnapshotLoader().load(root: root)
-        XCTAssertEqual(after.groups.flatMap(\.items).filter { !$0.isAway }.count, 2)
+        XCTAssertEqual(after.groups.flatMap(\.items).flatMap(\.leafItems).filter { !$0.isAway }.count, 2)
         try TimelineDeletions.restore(id: active[0].deletionID, root: root)
         let restored = await TraySnapshotLoader().load(root: root)
-        XCTAssertEqual(restored.groups.flatMap(\.items).filter { !$0.isAway }.count, 3)
+        XCTAssertEqual(restored.groups.flatMap(\.items).flatMap(\.leafItems).filter { !$0.isAway }.count, 3)
         try ActivityNarrative().save(root: root)
         let lostCache = await TraySnapshotLoader().load(root: root)
-        XCTAssertEqual(lostCache.groups.flatMap(\.items).filter { !$0.isAway }.count, 3, "Restored snapshots must obey the same away boundaries")
+        XCTAssertEqual(lostCache.groups.flatMap(\.items).flatMap(\.leafItems).filter { !$0.isAway }.count, 3, "Restored snapshots must obey the same away boundaries")
     }
 
     func testLargeHistoryBenchmark() async throws {

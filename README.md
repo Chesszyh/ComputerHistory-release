@@ -26,7 +26,7 @@ swift test
 python3 scripts/test-process-control.py .build/release/computer-history
 ```
 
-常规测试使用合成数据，不需要模型密钥。三项私有兼容性样本测试默认跳过；集成测试使用临时目录、暂停真实桌面采集，并以本地模拟接口验证不联网的生成路径。
+常规测试使用合成数据，不需要模型密钥。三项私有兼容性样本测试默认跳过；集成测试使用临时目录和测试进程，以本地模拟接口验证生成路径，不操作真实运行服务。
 
 菜单栏可[删除时间线中的总结](docs/collector.md#删除时间线总结)，并在[模型设置](docs/collector.md#模型与用量配置)中管理模型组、切换主模型与备用模型。
 
@@ -61,7 +61,7 @@ python3 scripts/test-process-control.py .build/release/computer-history
 
 可安装 [跨 Agent 历史查询 Skill](docs/agent-skill.md)，在其他项目的 Coding Agent 中按需检索本机摘要与原始证据。
 
-历史活动支持[固定十分钟或连续任务两种模式](docs/collector.md#时间线模式编辑与复制)，保存后可选择重算范围；固定模式可编辑摘要，底栏可多选后复制。滚动到底部时自动加载更早记录。系统登录界面期间停止内容采集，返回后将这段时间展示为一条“离开电脑”；具体判定和存储见[采集行为](docs/collector.md#采集行为与局限)。
+历史活动支持[固定十分钟或连续任务两种模式](docs/collector.md#时间线模式编辑与复制)，保存后可选择重算范围；固定模式可编辑摘要，底栏可多选后复制。滚动到底部时自动加载更早记录。锁屏和长时间无操作分别记录离开原因；具体判定和存储见[采集行为](docs/collector.md#采集行为与局限)。
 
 ```bash
 # 不联网：为已封口的段生成事实摘要

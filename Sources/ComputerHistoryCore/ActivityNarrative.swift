@@ -24,8 +24,19 @@ public struct ActivityNarrative: Codable, Sendable, Equatable {
         /// 本条归纳自哪些记忆文件（文件名）。
         public var sourceMemories: [String]
         public var sourceRevisions: [String: String]?
+        /// 每个来源内的活动条目编号；旧记录缺省表示整份来源。
+        public var sourceActivities: [String: [Int]]?
+        public var sourceSteps: [String: [Int]]?
+        public var sourceIncidental: [String: [Int]]?
         public var previousIDs: [String]?
         public var generationMode: SummarySettings.TimelineMode?
+
+        public var isIncidentalOnly: Bool {
+            guard let activities = sourceActivities, !activities.isEmpty else { return false }
+            return activities.allSatisfy { name, numbers in
+                Set(numbers).isSubset(of: sourceIncidental?[name] ?? [])
+            }
+        }
 
         public init(id: String, timestamp: Date, title: String,
                     summary: String, apps: [String], sourceMemories: [String]) {
@@ -61,6 +72,29 @@ public struct ActivityNarrative: Codable, Sendable, Equatable {
     func separatingAwayPeriods(index: MemoryIndex, away: AwayPeriods,
                                mode: SummarySettings.TimelineMode = .continuous) -> Self {
         let lookup = Dictionary(uniqueKeysWithValues: index.entries.map { ($0.id, $0) })
+        if mode == .fixedTenMinutes {
+            var result = self
+            let unavailable = items.filter { $0.sourceMemories.isEmpty || !$0.sourceMemories.allSatisfy { lookup[$0] != nil } }
+            let unavailableIDs = Set(unavailable.map(\.id))
+            let ownersByMemory = items.filter { !unavailableIDs.contains($0.id) }.reduce(into: [String: [Item]]()) { groups, item in
+                for name in item.sourceMemories { groups[name, default: []].append(item) }
+            }
+            result.items = unavailable + ownersByMemory.keys.sorted().compactMap { name in
+                guard let entry = lookup[name] else { return nil }
+                let owners = ownersByMemory[name]!
+                if owners.count == 1, let owner = owners.first, owner.sourceMemories == [name],
+                   owner.sourceSteps == nil, owner.sourceIncidental == nil,
+                   owner.sourceActivities?[name] == nil || owner.sourceActivities?[name]?.count == ActivityFragment.count(in: entry) {
+                    var adjusted = owner
+                    adjusted.timestamp = away.activityStart(for: entry)
+                    return adjusted
+                }
+                var item = Self.sourceItem([entry], away: away)
+                item.previousIDs = Array(Set(owners.flatMap { [$0.id] + ($0.previousIDs ?? []) })).filter { $0 != item.id }.sorted()
+                return item
+            }
+            return result
+        }
         let ordered = index.entries.filter { $0.granularity == "10min" }.sorted {
             let left = away.activityStart(for: $0), right = away.activityStart(for: $1)
             return left == right ? $0.id < $1.id : left < right
@@ -74,6 +108,7 @@ public struct ActivityNarrative: Codable, Sendable, Equatable {
                 var runs: [[MemoryIndex.Entry]] = []
                 for entry in group {
                     if mode == .continuous, let last = runs.last?.last,
+                       last.noClearActivity == entry.noClearActivity,
                        let before = positions[last.id], positions[entry.id] == before + 1 {
                         runs[runs.count - 1].append(entry)
                     } else { runs.append([entry]) }
@@ -88,7 +123,20 @@ public struct ActivityNarrative: Codable, Sendable, Equatable {
             // A whole-day summary cannot be attributed to any one episode. Use each episode's sources
             // until the user chooses to regenerate the automatic summaries.
             return groups.map { entries in
-                Self.sourceItem(entries, away: away, previous: item)
+                var split = Self.sourceItem(entries, away: away, previous: item)
+                if let activities = item.sourceActivities {
+                    let selected = activities.filter { split.sourceMemories.contains($0.key) }
+                    split.sourceActivities = selected
+                    split.sourceSteps = item.sourceSteps?.filter { selected[$0.key] != nil }
+                    split.sourceIncidental = item.sourceIncidental?.filter { selected[$0.key] != nil }
+                    split.id = NarrativeGenerator.itemID(for: split.sourceMemories.map { name in
+                        name + ":" + (selected[name] ?? []).sorted().map(String.init).joined(separator: ",")
+                    })
+                    split.title = item.title
+                    split.summary = ActivityFragment.details(files: entries.map(\.fileURL), activities: selected)
+                        .map(\.text).joined(separator: "\n\n")
+                }
+                return split
             }
         }
         return result

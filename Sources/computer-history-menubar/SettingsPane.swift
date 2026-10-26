@@ -128,6 +128,9 @@ struct SummarySettingsPane: View {
             }
             .pickerStyle(.menu)
 
+            Text(model.summaryStage.explanation)
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+
             Text("系统提示词")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
@@ -144,7 +147,7 @@ struct SummarySettingsPane: View {
                 )
                 .accessibilityIdentifier("summary-prompt")
 
-            Text("保留提示词中的输出格式，供时间线解析。修改仅影响后续生成。")
+            Text("保留提示词中的输出格式。保存后影响新请求，已有总结需重算。自定义提示词不会随内置版本更新；可恢复默认后保存。")
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
 

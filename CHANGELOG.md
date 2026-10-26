@@ -1,5 +1,29 @@
 # Changelog
 
+
+## 1.0.0 - 2026-10-26
+
+### Timeline and summaries
+- Offer fixed ten-minute and continuous-task modes, summary editing, and copying selections across pages.
+- Keep top-level start times unique and intervals ordered without overlaps. Fold simultaneous or intersecting activities while preserving their summaries, sources, edits, and copying.
+- Group steps serving the same goal and retain distinct goals. Show brief checks, conversations, leisure, and work equally instead of demoting them to an “other activities” category.
+- Label extended passive interface observations as “No clear activity” without asking the model to invent a task. Preserve the observations and combine adjoining passive periods.
+- Use system input idle time to distinguish unlocked inactivity from locking or sleep, with explicit transitions on resumed input, pause, and stop.
+- Refine activity prompts to preserve concrete objects, discussion points, observed results, source details, and attributed claims.
+
+- Resolve full source identities for restarted segments, correct pending-memory counts, and fill missing or failed report dependencies automatically. Preserve usable summaries and wait for active memory writers.
+
+### Interface and performance
+- Refine folded activities, the current-window card, away records, and the trash view.
+- Update the last-write label every second without increasing disk polling; clarify request accounting and custom prompt updates.
+- Keep paginated history scroll height current on macOS 15.
+- Avoid publishing unchanged content versions, model health, and backup state; reuse timeline date formatters and keep historical caches valid during ongoing away periods.
+- Stop polling the current window in the menu bar while recording is paused; reuse segment timestamp parsing and reduce index file-attribute overhead while retaining atomic-replacement detection.
+- Add regression coverage for passive interfaces, stale merged caches, generated intervals, copy/delete behavior, and native refreshes.
+
+### Releases
+- Support alpha, beta, and rc candidates without replacing the latest stable release.
+
 ## 0.2.4 - 2026-10-23
 
 ### Features

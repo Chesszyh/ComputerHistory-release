@@ -89,6 +89,53 @@ final class ReportTests: XCTestCase {
         try memory(root, id: segment.lastPathComponent)
         XCTAssertNoThrow(try gen.generate(period: period, now: period.end))
     }
+    func testReportFillsOnlyMissingAndFailedMemoriesInPeriod() throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let period = ReportPeriod(kind: .daily, date: try ReportPeriod.parseDay("2020-01-05", timeZone: zone), timeZone: zone)
+        let ids = ["2020-01-05T10-00-00Z", "2020-01-05T10-00-00Z_AAAA1111-0000-0000-0000-000000000001", "2020-01-05T11-00-00Z", "2020-01-06T10-00-00Z"]
+        for id in ids {
+            let date = SegmentClock.date(fromSegmentID: id)!
+            let event = EventStreamRecord(id: 1, timestamp: date, kind: .windowChanged,
+                app: .init(name: "Synthetic Editor", bundleIdentifier: "example.editor"))
+            let directory = root.appendingPathComponent("segments/" + id)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try EventStreamJSON.makeEncoder().encode(event).write(to: directory.appendingPathComponent("events.jsonl"))
+            let metadata = EventStreamMetadata(id: id, startedAt: date, endedAt: date.addingTimeInterval(60), endReason: nil,
+                eventCount: 1, suppressedEventCount: 0, eventsPath: directory.appendingPathComponent("events.jsonl").path, firstEventAt: date)
+            try EventStreamJSON.makeEncoder().encode(metadata)
+                .write(to: directory.appendingPathComponent("metadata.json"))
+        }
+        let good = try memory(root, id: ids[2], activity: "保留已有优质摘要")
+        let original = try Data(contentsOf: good)
+        let failed = root.appendingPathComponent("memories/" + MemoryWriter.fileName(segmentID: ids[1]))
+        try ActivityExport.write("---\ntitle: Failed\ngeneration: failed\n---\n", to: failed)
+        let generator = ReportGenerator(root: root, client: nil)
+        _ = try generator.generate(period: period, now: period.end)
+        for id in ids.prefix(3) {
+            let file = root.appendingPathComponent("memories/" + MemoryWriter.fileName(segmentID: id))
+            XCTAssertTrue(MemoryGenerator.hasUsableMemory(at: file))
+            XCTAssertEqual(MemoryIndex.parse(fileURL: file)?.sourceSegmentID, id)
+        }
+        let restarted = MemoryIndex.parse(fileURL: failed)!
+        XCTAssertEqual(restarted.firstEventAt, SegmentClock.date(fromSegmentID: ids[1]))
+        XCTAssertEqual(try Data(contentsOf: good), original)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("memories/" + MemoryWriter.fileName(segmentID: ids[3])).path))
+        XCTAssertEqual(CollectorStatus.read(root: root).memories.pendingSegments, 1)
+    }
+
+    func testAutomaticReportsDiscoverDaysWithNoMemoriesYet() throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let id = "2020-01-05T10-00-00Z"
+        let date = SegmentClock.date(fromSegmentID: id)!
+        let directory = root.appendingPathComponent("segments/" + id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let event = EventStreamRecord(id: 1, timestamp: date, kind: .windowChanged)
+        try EventStreamJSON.makeEncoder().encode(event).write(to: directory.appendingPathComponent("events.jsonl"))
+        try Data("{\"eventCount\":1}".utf8).write(to: directory.appendingPathComponent("metadata.json"))
+        XCTAssertGreaterThan(try ReportGenerator(root: root, client: nil).generateMissing(), 0)
+        let period = ReportPeriod(kind: .daily, date: date)
+        XCTAssertNotNil(try ActivityReport.load(root: root, period: period))
+    }
     func testWeeklyRequiresCompletedDailyAndChangesWithDaily() throws {
         let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
         try memory(root)

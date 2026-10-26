@@ -100,7 +100,29 @@ public struct NarrativeGenerator: Sendable {
             guard entries.count == item.sourceMemories.count else {
                 throw GenerateError.modelFailed("旧活动的来源记忆不完整，已保留原总结。")
             }
-            return entries.map { ActivityNarrative.sourceItem([$0], away: away, previous: item) }
+            return entries.flatMap { entry -> [ActivityNarrative.Item] in
+                guard let numbers = item.sourceActivities?[entry.id] else {
+                    return [ActivityNarrative.sourceItem([entry], away: away, previous: item)]
+                }
+                return ActivityFragment.fragments(in: entry).filter { numbers.contains($0.number) }.map { fragment in
+                    var placeholder = ActivityNarrative.sourceItem([entry], away: away, previous: item)
+                    placeholder.id = Self.itemID(for: [entry.id + ":\(fragment.number)"])
+                    placeholder.sourceActivities = [entry.id: [fragment.number]]
+                    if item.sourceSteps?[entry.id]?.contains(fragment.number) == true {
+                        placeholder.sourceSteps = [entry.id: [fragment.number]]
+                    }
+                    if item.sourceIncidental?[entry.id]?.contains(fragment.number) == true {
+                        placeholder.sourceIncidental = [entry.id: [fragment.number]]
+                    }
+                    placeholder.summary = ActivityExport.formatted(fragment.text, format: "txt")
+                    return placeholder
+                }
+            }
+        }
+        // Legacy whole-source items can share a memory after a task split.
+        var placeholders = Set<String>()
+        narrative.items.removeAll { item in
+            pendingNames.isSuperset(of: item.sourceMemories) && !placeholders.insert(item.id).inserted
         }
 
         guard let client else {
@@ -126,13 +148,26 @@ public struct NarrativeGenerator: Sendable {
         let positions = Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($0.element.id, $0.offset) })
         var added = 0
         var totalUsage: DeepSeekClient.Usage?
+        var usedModel = false
         // 小批次逐次保存，长日历史不会超出远端小模型的上下文，失败也不重付已保存批次。
         var offset = 0
         while offset < pending.count {
+            if pending[offset].noClearActivity {
+                let entry = pending[offset]
+                var item = ActivityNarrative.sourceItem([entry], away: away)
+                item.generationMode = mode
+                Self.replace([item], revisions: revisions, in: &narrative)
+                narrative.items.sort { $0.timestamp > $1.timestamp }
+                narrative.generatedAt = Date()
+                if !overwrite { try narrative.save(root: rootDirectory) }
+                added += 1
+                offset += 1
+                continue
+            }
             let session = away.sessionStart(at: pending[offset].startedAt)
             var end = offset + 1
             if mode == .continuous {
-                while end < min(offset + 4, pending.count),
+                while end < min(offset + 4, pending.count), !pending[end].noClearActivity,
                       away.sessionStart(at: pending[end].startedAt) == session,
                       positions[pending[end].id] == positions[pending[end - 1].id].map({ $0 + 1 }) {
                     end += 1
@@ -141,8 +176,10 @@ public struct NarrativeGenerator: Sendable {
             let batch = Array(pending[offset..<end])
             let batchNames = Set(batch.map(\.id))
             let firstPosition = positions[batch[0].id]!
-            let candidates = narrative.items.filter { item in
+            let continuationItems = Self.continuationItems(narrative.items, positions: positions, before: firstPosition)
+            let candidates = continuationItems.filter { item in
                 guard mode == .continuous, firstPosition > 0,
+                      !item.isIncidentalOnly,
                       (item.generationMode ?? .continuous) == .continuous,
                       item.sourceMemories.contains(sources[firstPosition - 1].id) else { return false }
                 guard !item.sourceMemories.isEmpty,
@@ -151,6 +188,15 @@ public struct NarrativeGenerator: Sendable {
                 let owned = item.sourceMemories.compactMap { positions[$0] }.sorted()
                 guard let first = owned.first, let last = owned.last, last == firstPosition - 1,
                       owned == Array(first...last) else { return false }
+                guard let ownedActivities = item.sourceActivities,
+                      let lastActivities = ownedActivities[sources[firstPosition - 1].id],
+                      lastActivities.max() == ActivityFragment.fragments(in: sources[firstPosition - 1]).last?.number else { return false }
+                let material = sources.filter { item.sourceMemories.contains($0.id) }.flatMap { entry in
+                    ActivityFragment.fragments(in: entry).filter {
+                        ownedActivities[entry.id]?.contains($0.number) == true && item.sourceIncidental?[entry.id]?.contains($0.number) != true
+                    }
+                }
+                guard material.reduce(0, { $0 + $1.text.count }) <= 12000 else { return false }
                 return item.sourceMemories.allSatisfy { name in
                     guard let revision = revisions[name], let time = sourceTimes[name] else { return false }
                     return item.sourceRevisions?[name] == revision && time <= batch[0].startedAt
@@ -158,17 +204,19 @@ public struct NarrativeGenerator: Sendable {
                 }
             }
             let priorItems = candidates.count == 1 ? candidates : []
+            let activityCount = batch.reduce(0) { $0 + ActivityFragment.fragments(in: $1).count }
             let completion = try client.complete(
                 system: prompt,
-                user: Self.userPrompt(day: day, sources: batch, priorItems: priorItems, mode: mode),
-                maxTokens: 1800, recordingAt: rootDirectory, task: "narrative",
+                user: Self.userPrompt(day: day, sources: batch, priorItems: priorItems, mode: mode, historySources: sources),
+                maxTokens: max(1800, min(6000, activityCount * 250)), recordingAt: rootDirectory, task: "narrative",
                 sources: priorItems.flatMap(\.sourceMemories) + batch.map(\.id))
             let text = completion.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty, completion.finishReason != "length" else {
                 throw GenerateError.modelFailed(completion.finishReason == "length" ? "输出达到长度上限" : "模型返回空内容")
             }
-            var items = Self.parseItems(text, sources: batch, claimed: batch, priorItems: priorItems)
-            guard !items.isEmpty else { throw GenerateError.modelFailed("来源编号缺失、重复、跨越其他任务或未覆盖全部来源；请检查叙述提示词的输出格式。") }
+            var items = Self.parseItems(text, sources: batch, claimed: batch, priorItems: priorItems, mode: mode)
+            guard !items.isEmpty else { throw GenerateError.modelFailed("活动编号或任务归属无效；请逐项认领来源，用 + 标记同一任务的步骤，或恢复活动整理的默认提示词。") }
+            usedModel = true
             for i in items.indices { items[i].generationMode = mode }
             Self.replace(items, revisions: revisions, in: &narrative)
             narrative.items.sort { $0.timestamp > $1.timestamp }
@@ -189,17 +237,24 @@ public struct NarrativeGenerator: Sendable {
         if overwrite { try narrative.save(root: rootDirectory) }
         return Outcome(day: day, newItems: added,
                        totalItems: Self.countItems(narrative, on: day),
-                       usedModel: true, usage: totalUsage)
+                       usedModel: usedModel, usage: totalUsage)
     }
 
     private static func replace(_ items: [ActivityNarrative.Item], revisions: [String: String],
                                 in narrative: inout ActivityNarrative) {
+        func overlaps(_ left: ActivityNarrative.Item, _ right: ActivityNarrative.Item) -> Bool {
+            left.sourceMemories.contains { name in
+                guard right.sourceMemories.contains(name) else { return false }
+                guard let a = left.sourceActivities?[name], let b = right.sourceActivities?[name] else { return true }
+                return !Set(a).isDisjoint(with: b)
+            }
+        }
         let names = Set(items.flatMap(\.sourceMemories))
         let previous = narrative.items.filter { !names.isDisjoint(with: $0.sourceMemories) }
         let updated = items.map { item in
             var item = item
-            let related = previous.filter { !Set(item.sourceMemories).isDisjoint(with: $0.sourceMemories) }
-            if let same = related.first(where: { Set($0.sourceMemories) == Set(item.sourceMemories) }) {
+            let related = previous.filter { overlaps(item, $0) }
+            if let same = related.first(where: { Set($0.sourceMemories) == Set(item.sourceMemories) && $0.sourceActivities == item.sourceActivities }) {
                 item.id = same.id
             }
             let aliases = related.flatMap { [$0.id] + ($0.previousIDs ?? []) }.filter { $0 != item.id }
@@ -209,8 +264,42 @@ public struct NarrativeGenerator: Sendable {
             })
             return item
         }
-        narrative.items.removeAll { !names.isDisjoint(with: $0.sourceMemories) }
+        narrative.items.removeAll { previous in items.contains { overlaps(previous, $0) } }
         narrative.items.append(contentsOf: updated)
+    }
+
+    /// A brief aside stays separate until a later source actually resumes the preceding task.
+    private static func continuationItems(_ items: [ActivityNarrative.Item], positions: [String: Int],
+                                          before firstPosition: Int) -> [ActivityNarrative.Item] {
+        func end(_ item: ActivityNarrative.Item) -> (Int, Int) {
+            let last = item.sourceMemories.compactMap { name -> (Int, String)? in positions[name].map { ($0, name) } }
+                .max { $0.0 < $1.0 }
+            return (last?.0 ?? -1, last.flatMap { item.sourceActivities?[$0.1]?.max() } ?? 0)
+        }
+        let prior = items.filter { item in
+            !item.sourceMemories.isEmpty && item.sourceMemories.allSatisfy { positions[$0].map { $0 < firstPosition } == true }
+        }.sorted { end($0) < end($1) }
+        guard let index = prior.lastIndex(where: { !$0.isIncidentalOnly }), index + 1 < prior.count,
+              prior[index].sourceActivities != nil else { return items }
+        var candidate = prior[index]
+        for aside in prior[(index + 1)...] {
+            for (name, numbers) in aside.sourceActivities ?? [:] {
+                candidate.sourceActivities?[name, default: []].append(contentsOf: numbers)
+                if !candidate.sourceMemories.contains(name) { candidate.sourceMemories.append(name) }
+            }
+            for (name, numbers) in aside.sourceIncidental ?? [:] {
+                if candidate.sourceIncidental == nil { candidate.sourceIncidental = [:] }
+                candidate.sourceIncidental?[name, default: []].append(contentsOf: numbers)
+            }
+            for (name, revision) in aside.sourceRevisions ?? [:] {
+                if candidate.sourceRevisions == nil { candidate.sourceRevisions = [:] }
+                candidate.sourceRevisions?[name] = revision
+            }
+            candidate.apps = Array(Set(candidate.apps + aside.apps)).sorted()
+            candidate.previousIDs = Array(Set((candidate.previousIDs ?? []) + [aside.id] + (aside.previousIDs ?? []))).sorted()
+        }
+        candidate.sourceMemories.sort { positions[$0]! < positions[$1]! }
+        return items.filter { $0.id != candidate.id } + [candidate]
     }
 
     /// 为所有有十分钟记忆、但尚无叙述条目的日期补写。
@@ -263,72 +352,119 @@ public struct NarrativeGenerator: Sendable {
     static func parseItems(_ text: String,
                            sources: [MemoryIndex.Entry],
                            claimed: [MemoryIndex.Entry]? = nil,
-                           priorItems: [ActivityNarrative.Item] = []) -> [ActivityNarrative.Item] {
+                           priorItems: [ActivityNarrative.Item] = [],
+                           mode: SummarySettings.TimelineMode = .continuous) -> [ActivityNarrative.Item] {
         let claimNames = Set((claimed ?? sources).map(\.id))
         guard !claimNames.isEmpty else { return [] }
-        var used = Set<String>()
-        var usedPrior = Set<Int>()
+        let fragments = sources.map { ActivityFragment.fragments(in: $0) }
+        let references = sources.indices.flatMap { source in
+            fragments[source].map { "S\(source + 1).A\($0.number)" }
+        }
+        let positions = Dictionary(uniqueKeysWithValues: references.enumerated().map { ($0.element, $0.offset) })
+        let expected = Set(sources.indices.filter { claimNames.contains(sources[$0].id) }.flatMap { source in
+            fragments[source].map { "S\(source + 1).A\($0.number)" }
+        })
+        var used = Set<String>(), usedPrior = Set<Int>()
         var items: [ActivityNarrative.Item] = []
-        var heading: String?
-        var body: [String] = []
+        var heading: String?, body: [String] = []
         var valid = true
         func flush() {
             guard let heading else { return }
             defer { body = [] }
-            guard heading.hasPrefix("["), let closing = heading.firstIndex(of: "]") else {
-                valid = false; return
-            }
+            guard heading.hasPrefix("["), let closing = heading.firstIndex(of: "]") else { valid = false; return }
             let tokens = heading[heading.index(after: heading.startIndex)..<closing]
                 .split(separator: ",", omittingEmptySubsequences: false)
                 .map { $0.trimmingCharacters(in: .whitespaces) }
-            var entries: [MemoryIndex.Entry] = []
-            var sourceNumbers: [Int] = []
+            var selected: [String] = []
             var continued: [ActivityNarrative.Item] = []
+            var activities: [String: [Int]] = [:]
+            var steps: [String: [Int]] = [:], incidental: [String: [Int]] = [:]
+            var mainSources = Set<String>()
             for token in tokens {
                 if token.hasPrefix("P") {
                     guard let number = Int(token.dropFirst()), number > 0,
                           number <= priorItems.count, token == "P\(number)",
+                          !priorItems[number - 1].isIncidentalOnly,
                           usedPrior.insert(number).inserted else { valid = false; return }
                     continued.append(priorItems[number - 1])
                     continue
                 }
-                guard token.hasPrefix("S"), let number = Int(token.dropFirst()),
-                      number > 0, number <= sources.count, token == "S\(number)" else {
-                    valid = false; return
+                let role = token.first == "+" || token.first == "~" ? token.first : nil
+                guard mode == .continuous || role == nil else { valid = false; return }
+                let referenceToken = role == nil ? token : String(token.dropFirst())
+                let parts = referenceToken.components(separatedBy: ".A")
+                guard parts.count <= 2, let part = parts.first, part.hasPrefix("S"),
+                      let number = Int(part.dropFirst()), number > 0, number <= sources.count,
+                      part == "S\(number)", claimNames.contains(sources[number - 1].id) else { valid = false; return }
+                let available = fragments[number - 1]
+                let chosen: [Int]
+                if parts.count == 2 {
+                    guard let activity = Int(parts[1]), parts[1] == "\(activity)",
+                          available.contains(where: { $0.number == activity }) else { valid = false; return }
+                    chosen = [activity]
+                } else {
+                    guard mode == .fixedTenMinutes || available.count == 1 else { valid = false; return }
+                    chosen = available.map(\.number)
                 }
-                let entry = sources[number - 1]
-                guard claimNames.contains(entry.id), used.insert(entry.id).inserted else {
-                    valid = false; return
+                let name = sources[number - 1].id
+                if mode == .continuous, role == nil, !mainSources.insert(name).inserted { valid = false; return }
+                for activity in chosen {
+                    let reference = "S\(number).A\(activity)"
+                    guard used.insert(reference).inserted else { valid = false; return }
+                    selected.append(reference)
+                    activities[name, default: []].append(activity)
+                    if role == "+" { steps[name, default: []].append(activity) }
+                    if role == "~" { incidental[name, default: []].append(activity) }
                 }
-                entries.append(entry)
-                sourceNumbers.append(number)
             }
-            let orderedNumbers = sourceNumbers.sorted()
-            guard let firstNumber = orderedNumbers.first, let lastNumber = orderedNumbers.last,
-                  orderedNumbers == Array(firstNumber...lastNumber),
-                  continued.isEmpty || (continued.count == 1 && firstNumber == 1) else { valid = false; return }
-            entries = orderedNumbers.map { sources[$0 - 1] }
-            let title = heading[heading.index(after: closing)...].trimmingCharacters(in: .whitespaces)
-            let summary = body.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !title.isEmpty, !summary.isEmpty, !entries.isEmpty,
-                  let timestamp = (entries.map(\.startedAt) + continued.map(\.timestamp)).min() else {
-                valid = false; return
+            let ordered = selected.compactMap { positions[$0] }.sorted()
+            guard let first = ordered.first, let last = ordered.last,
+                  ordered == Array(first...last),
+                  continued.isEmpty || (continued.count == 1 && first == 0) else { valid = false; return }
+            let entries = sources.filter { activities[$0.id] != nil }
+            guard continued.isEmpty || !mainSources.isEmpty || !steps.isEmpty else { valid = false; return }
+            let incidentalOnly = mode == .continuous && mainSources.isEmpty && continued.isEmpty
+            guard !incidentalOnly || steps.isEmpty else { valid = false; return }
+            let title = ActivityFragment.title(String(heading[heading.index(after: closing)...]))
+            var summary = body.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            if incidentalOnly && summary.isEmpty {
+                summary = entries.flatMap { entry in
+                    ActivityFragment.fragments(in: entry).filter { incidental[entry.id]?.contains($0.number) == true }
+                }.map { ActivityExport.formatted($0.text, format: "txt") }.joined(separator: "\n\n")
             }
-            let names = continued.flatMap(\.sourceMemories) + entries.map(\.id)
-            guard Set(names).count == names.count else { valid = false; return }
-            items.append(.init(id: itemID(for: names), timestamp: timestamp, title: title, summary: summary,
+            guard !title.isEmpty, incidentalOnly || !summary.isEmpty, !entries.isEmpty,
+                  let timestamp = (entries.map(\.startedAt) + continued.map(\.timestamp)).min() else { valid = false; return }
+            for prior in continued {
+                for name in prior.sourceMemories {
+                    let numbers = prior.sourceActivities?[name]
+                    if let numbers { activities[name, default: []].append(contentsOf: numbers) }
+                    if let numbers = prior.sourceSteps?[name] { steps[name, default: []].append(contentsOf: numbers) }
+                    if let numbers = prior.sourceIncidental?[name] { incidental[name, default: []].append(contentsOf: numbers) }
+                }
+            }
+            let names = (continued.flatMap(\.sourceMemories) + entries.map(\.id)).reduce(into: [String]()) {
+                if !$0.contains($1) { $0.append($1) }
+            }
+            let identity = names.map { name in
+                activities[name].map { name + ":" + $0.sorted().map(String.init).joined(separator: ",") } ?? name
+            }
+            var item = ActivityNarrative.Item(id: itemID(for: identity), timestamp: timestamp, title: title, summary: summary,
                 apps: (continued.flatMap(\.apps) + entries.flatMap(\.applications)).reduce(into: []) { result, app in
                     if !result.contains(app) { result.append(app) }
-                }, sourceMemories: names))
+                }, sourceMemories: names)
+            item.sourceActivities = activities
+            item.sourceSteps = steps.isEmpty ? nil : steps
+            item.sourceIncidental = incidental.isEmpty ? nil : incidental
+            items.append(item)
         }
         for line in text.components(separatedBy: .newlines).map({ $0.trimmingCharacters(in: .whitespaces) }) {
-            if line.hasPrefix("## ") {
-                flush()
-                heading = String(line.dropFirst(3))
-            } else if !line.isEmpty { body.append(line) }
+            if line.hasPrefix("## ") { flush(); heading = String(line.dropFirst(3)) }
+            else if !line.isEmpty { body.append(line) }
         }
         flush()
-        return valid && used == claimNames ? items : []
+        if mode == .fixedTenMinutes,
+           items.count != claimNames.count || items.contains(where: { $0.sourceMemories.count != 1 }) { return [] }
+        return valid && used == expected ? items : []
     }
 
     // MARK: - 提示词
@@ -343,15 +479,23 @@ public struct NarrativeGenerator: Sendable {
     你的任务是将一段时间内采集的计算机活动事件，整理成活动记录。
     目标不是生成工作报告，而是生成便于用户快速回忆、定位和恢复上下文的活动索引。
 
-    输出格式：每条记录写作 `## [S1,S2] 标题`，紧随其后另起一行写摘要。
-    方括号内列出该条覆盖的全部来源编号，以英文逗号分隔；单个来源写作 `[S1]`。
-    每个新增 S 来源必须出现且只能出现一次，不能引用不存在的编号。时间仅用于展示和理解。
-    已有活动以 P1、P2 等编号提供；新增来源与已有活动属于同一持续任务时，写作 `[P1,S1]`，
-    更新整条活动的标题和摘要并保留此前要点。每个 P 编号最多使用一次，不能单独输出 P 编号。
-    不需要更新的已有活动省略；同一应用不代表同一任务，不同主题仍须分开。
-    这是一条不重叠的时间线：只能合并相邻来源，不得跨过另一个任务；A→B→A 必须保留三段。
-    P1 仅代表紧接本批之前的活动，只能与从 S1 开始的连续来源续接；转向其他目标后不得回填旧活动。
-    同一项目、同一应用或相似研究主题不足以证明连续性；每次目标转换和返回都保留为新的活动。
+    输出格式依输入模式：连续模式写 `## [S1.A1] 标题`，下一行概览；固定模式写 `## [S1] 标题`。
+    以下片段认领与续接规则仅用于连续模式；固定模式每份来源只写一条，并在条内保留不同活动。
+    按具体对象与目标区分活动：独立目标使用 S1.A1；为同一目标查阅、询问、核对或执行的步骤使用 +S1.A2。
+    例：`## [S1.A1,+S1.A2] 迁移示例项目`；另一个目标单独写 `## [S1.A3] 核对预约名额`。
+    每项活动平等对待：短暂查看、聊天、休闲和工作都应有具体标题与摘要，不按模型判断的重要性降级。
+    不使用 ~ 标记，不生成“其他活动”“零碎活动”“期间的活动”等兜底类别。
+    同一份记忆里的同目标步骤可以归组，不把询问、查看结果、补充要求各建一项。
+    不同目标分别成项；最终界面会按重叠时段折叠，不需要靠省略或降级活动减少卡片。
+    每个新增片段必须且只能认领一次，不同角色也不能重复引用同一个片段。
+    只有目标与对象相同的主活动和内部步骤才可合并。共同应用、项目或宽泛主题不能把不同目标连成一条。
+    同批涉及多个项目时，标题写明具体项目；不能用“源码处理”“项目工作”把不同对象笼统归组。
+    一个原片段混合多个项目且归属不明确时，单独保留为活动，不强行标为某一项目的步骤；查看另一项目代码不自动属于当前迁移。
+    不得跨过另一个活动回填。A→B→A 保留三段，不用同一个宽泛标题吞并 B。
+    原文条目没有精确时刻时，不推断各步骤的先后和实际耗时。
+    已有主任务 P1 只可续入本批首段，如 `[P1,+S1.A1]`。任务目标变化时另开一条，未更新的 P1 省略。
+    一张卡每份来源最多有一个未加前缀的主活动，其余同目标内容使用 + 标记步骤；不同目标分别成卡。
+    续接依据原活动保留关键动作、对象和结果，标题概括稳定任务，不能被最新一个步骤替换。
     标题与摘要之间不要空行，条目之间空一行。不要输出其它标题或前言。
 
     标题规则：
@@ -360,6 +504,7 @@ public struct NarrativeGenerator: Sendable {
     3. 保留重要项目名、应用名和技术名称。
     4. 不添加「用户」「进行」「相关操作」「工作进展」等无意义表达。
     5. 不得将讨论、计划、尝试描述为已经完成的工作。
+    6. 标题末尾不加句号。
 
     摘要规则：
     1. 使用第二人称「你」，通常写 1–2 句话，建议 50–110 个汉字。
@@ -370,6 +515,12 @@ public struct NarrativeGenerator: Sendable {
     6. 只保留来源明确记载的失败、阻塞或未完成事项，不枚举没有发生的动作。
     7. 不推测用户的情绪、动机或没有证据支持的行为。
     8. 来源中的“会话显示”“回复称”“计划”要保留归属，不得改成用户已完成发布、测试或其他操作。
+    写法示例（仅示范表达，不是来源事实）：
+    `## [S1.A1,+S1.A2] 调整发布说明`
+    `你对照测试反馈补充安装步骤，并修改升级说明。`
+    `## [S1.A3] 核对预约名额`
+    `你查看周末场次的剩余名额。`
+    两项活动分别保留；无需给短活动补写目标、意义或结束状态来凑够字数。
 
     语言风格：
     - 信息密度高，表达自然、客观、克制。
@@ -388,42 +539,36 @@ public struct NarrativeGenerator: Sendable {
 
     static func userPrompt(day: String, sources: [MemoryIndex.Entry],
                            priorItems: [ActivityNarrative.Item] = [],
-                           mode: SummarySettings.TimelineMode = .continuous) -> String {
-        var out = ""
-        out += mode == .fixedTenMinutes ? "模式：固定十分钟。每个 S 来源独立生成一条，禁止合并。\n"
-            : "模式：单一任务时间线。只能合并相邻的连续来源；A→B→A 分为三段，返回任务时另开一段。P1 只能续入 S1 开始的首段。\n"
+                           mode: SummarySettings.TimelineMode = .continuous,
+                           historySources: [MemoryIndex.Entry] = []) -> String {
+        var out = mode == .fixedTenMinutes ? "模式：固定十分钟。每个 S 来源独立生成一条，禁止合并。\n"
+            : "模式：活动时间线。按具体目标区分活动，同目标步骤归组；短查看、交流与工作都正常总结，不按重要性降级。\n"
         if !priorItems.isEmpty {
             out += "## 可续接的已有活动\n"
             for (index, item) in priorItems.enumerated() where item.timestamp <= (sources.first?.startedAt ?? .distantPast) {
-                out += "### 已有活动 P\(index + 1)\n"
-                out += "标题：\(item.title)\n摘要：\(String(item.summary.prefix(600)))\n"
-                if !item.apps.isEmpty { out += "应用：\(item.apps.joined(separator: "、"))\n" }
+                out += "### 已有活动 P\(index + 1)\n标题：\(item.title)\n"
+                let history = historySources.filter { item.sourceMemories.contains($0.id) }
+                if history.isEmpty { out += "摘要：\(item.summary)\n" }
+                for entry in history {
+                    out += "原始任务内容与步骤 · \(entry.timeLabel())\n"
+                    for fragment in ActivityFragment.fragments(in: entry)
+                        where item.sourceActivities?[entry.id]?.contains(fragment.number) == true
+                            && item.sourceIncidental?[entry.id]?.contains(fragment.number) != true {
+                        out += fragment.text + "\n"
+                    }
+                }
             }
-            out += "\n"
         }
         out += "## 待整理的新增活动（\(day)）\n"
-        out += "以下是按时序排列的 \(sources.count) 段十分钟活动记录。"
-        out += "请把它们合并整理成若干条活动记录，条数由内容决定——"
-        out += mode == .fixedTenMinutes ? "固定模式下每个来源单独总结。" : "相邻且目标相同的来源可合并；不同目标、切换和返回应分开，禁止跨来源回填。"
-        if !priorItems.isEmpty {
-            out += "延续已有任务时，用 P 编号与新增 S 编号共同认领，更新原活动；没有新增内容的旧活动不用输出。"
-        }
-        out += "\n输出格式：## [S1,S2] 标题，下一行写摘要；全部新增 S 编号必须各出现一次，已有 P 编号按需续接。\n\n"
+        out += mode == .fixedTenMinutes ? "每份来源用 [S1] 等编号独立生成一条，保留其中不同活动。\n"
+            : "输出 ## [S1.A1,+S1.A2] 具体活动标题，下一行概览；+ 表示同目标步骤。其他目标单独输出 ## [S1.A3] 具体活动标题。每个片段恰好认领一次。\n不使用 ~ 或其他活动分类。独立目标转换必须另开条目。P1 只可续接包含首个片段的首段。\n"
+        out += "十分钟只是来源时间范围；片段编号表示原文顺序，不能推断精确时刻、先后或耗时。概览供定位，保留动作、对象和关键结果。\n\n"
         for (index, entry) in sources.enumerated() {
             out += "### 来源 S\(index + 1) · 时刻 \(entry.timeLabel())\n"
-            out += "标题：\(entry.title)\n"
-            out += "摘要：\(entry.summary)\n"
-            if !entry.applications.isEmpty {
-                out += "应用：\(entry.applications.joined(separator: "、"))\n"
+            out += "标题：\(entry.activityTitle)\n"
+            for fragment in ActivityFragment.fragments(in: entry) {
+                out += "#### 活动 S\(index + 1).A\(fragment.number)\n\(fragment.text)\n\n"
             }
-            // 正文里的叙事小节含更多细节，但过长会撑爆提示词，故截断。
-            let detail = entry.sections
-                .filter { ["本次活动", "整体走向", "延续的工作线"].contains($0.heading) }
-                .map(\.content).joined(separator: " ")
-            if !detail.isEmpty {
-                out += "细节：\(String(detail.prefix(1000)))\n"
-            }
-            out += "\n"
         }
         return out
     }

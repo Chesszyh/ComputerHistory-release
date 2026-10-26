@@ -187,7 +187,10 @@ struct SettingsRegression {
         precondition(arguments.components(separatedBy: "--day").count == 2)
         try "#!/bin/sh\necho $$ > \"\(root.appendingPathComponent("owned-command.pid").path)\"\nexec /bin/sleep 30\n".write(to: command, atomically: true, encoding: .utf8)
         model.recalculateTimeline(.all)
-        settle()
+        let startDeadline = Date().addingTimeInterval(5)
+        while !FileManager.default.fileExists(atPath: root.appendingPathComponent("owned-command.pid").path)
+                && model.timelineRebuilding && Date() < startDeadline { settle() }
+        precondition(model.timelineSettingsError == nil, "Owned command failed to start: \(model.timelineSettingsError ?? "")")
         let ownedPID = Int32(try String(contentsOf: root.appendingPathComponent("owned-command.pid"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines))!
         model.cancelTimelineRecalculation()
         let cancelDeadline = Date().addingTimeInterval(4)

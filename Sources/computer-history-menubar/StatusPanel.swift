@@ -148,7 +148,7 @@ struct LiveActivityCard: View {
                     Spacer()
                     TimelineView(.periodic(from: .now, by: 1)) { _ in
                         Text(model.frontDurationLabel)
-                            .font(.system(size: 10))
+                            .font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(.tertiary)
                     }
                 }
@@ -169,7 +169,7 @@ struct LiveActivityCard: View {
         .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.primary.opacity(0.04))
+                .fill(Color.primary.opacity(0.035))
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
@@ -184,13 +184,18 @@ struct LiveActivityCard: View {
             Image(nsImage: icon)
                 .resizable()
                 .scaledToFit()
+                .clipShape(RoundedRectangle(cornerRadius: 6.5, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6.5, style: .continuous)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+                )
         } else {
             Image(systemName: "macwindow")
                 .font(.system(size: 16))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color.primary.opacity(0.05))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: 6.5, style: .continuous))
         }
     }
 }
@@ -262,11 +267,13 @@ struct RuntimeMetricsGrid: View {
                     value: "\(status.memories.count) 份",
                     subvalue: "\(status.memories.tenMinuteCount) 刻度 · \(status.memories.pendingSegments) 待补"
                 )
-                MetricCard(
-                    title: "最近写入",
-                    value: model.relativeLabel(status.data.lastWriteAt),
-                    subvalue: status.process.pid.map { "PID \($0)" } ?? "未运行"
-                )
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    MetricCard(
+                        title: "最近写入",
+                        value: model.relativeLabel(status.data.lastWriteAt, now: context.date),
+                        subvalue: status.process.pid.map { "PID \($0)" } ?? "未运行"
+                    )
+                }
             }
 
             HStack(spacing: 6) {
@@ -390,7 +397,8 @@ struct TimelineSection: View {
     @ObservedObject var model: StatusModel
 
     var body: some View {
-        LazyVStack(alignment: .leading, spacing: 12) {
+        // 分页已限制行数；天分组延迟布局会使追加后的滚动高度在 macOS 15 上停滞。
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("历史活动")
                     .font(.system(size: 11, weight: .semibold))
@@ -451,12 +459,7 @@ struct TimelineRow: View {
 
     @State private var isHovered = false
 
-    private var timeLabel: String {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm"
-        f.locale = Locale(identifier: "en_US_POSIX")
-        return f.string(from: item.timestamp)
-    }
+    private var timeLabel: String { model.timeLabel(item.timestamp) }
 
     /// 合并条目横跨多段时显示起止两行，中间用竖线连起来。
     ///
@@ -464,15 +467,11 @@ struct TimelineRow: View {
     /// 17:40，而下一条显示 17:50，使用者会以为 17:30 与 17:40 没有被总结。
     /// 一行放不下 `17:20–17:40`（时间列只有 36pt），故分两行。
     private var isMerged: Bool {
-        item.isAway || item.endTimestamp.timeIntervalSince(item.timestamp) > 300
+        (item.sharesSourcePeriod != true || item.coveredCount > 1)
+            && (item.isAway || item.endTimestamp.timeIntervalSince(item.timestamp) > 300)
     }
 
-    private var endTimeLabel: String {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm"
-        f.locale = Locale(identifier: "en_US_POSIX")
-        return f.string(from: item.endTimestamp)
-    }
+    private var endTimeLabel: String { model.timeLabel(item.endTimestamp) }
 
     private var timeColumn: some View {
         VStack(alignment: .trailing, spacing: 1) {
@@ -488,6 +487,14 @@ struct TimelineRow: View {
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(.tertiary)
             }
+        }
+    }
+
+    private var awayIcon: String {
+        if item.title == "用户离开电脑" || item.summary.contains("无操作") {
+            return "moon.zzz"
+        } else {
+            return "lock.display"
         }
     }
 
@@ -511,11 +518,18 @@ struct TimelineRow: View {
                     else { model.copySummary(of: item) }
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(item.title)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.primary)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.leading)
+                        HStack(spacing: 6) {
+                            if item.isAway {
+                                Image(systemName: awayIcon)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(item.title)
+                                .font(.system(size: 12, weight: item.isAway ? .regular : .medium))
+                                .foregroundStyle(item.isAway ? Color.secondary : Color.primary)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                        }
 
                         if !item.summary.isEmpty {
                             Text(item.summary)
@@ -552,7 +566,7 @@ struct TimelineRow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("点击复制这条记录")
+                .help(item.isAway ? "离开电脑记录" : "点击复制这条记录")
 
                 // 概要展开：内容留在原地，不改变布局层级，也不打开新窗口。
                 if !item.isAway {
@@ -582,7 +596,7 @@ struct TimelineRow: View {
                           ? Color.green.opacity(0.10)
                           : (isHovered ? Color.primary.opacity(0.05)
                              : (model.isExpanded(item.id) ? Color.primary.opacity(0.03)
-                                : Color.clear)))
+                                : (item.isAway ? Color.primary.opacity(0.02) : Color.clear))))
             )
             .overlay(alignment: .topTrailing) {
                 // 复制反馈贴在行右上角，不占布局位置。
@@ -627,7 +641,13 @@ struct TimelineRow: View {
                     }.buttonStyle(.plain).padding(.leading, 46).padding(.vertical, 5)
                         .accessibilityIdentifier("edit-summary")
                 }
-                SummaryDetails(item: item, model: model)
+                Group {
+                    if let children = item.children {
+                        FoldedActivities(items: children, model: model)
+                    } else {
+                        SummaryDetails(item: item, model: model)
+                    }
+                }
                     .padding(.leading, 46)
                     .padding(.trailing, 8)
                     .padding(.bottom, 6)
@@ -643,9 +663,53 @@ struct TimelineRow: View {
 /// 概要详情：原地展开，展示这一条自身的元数据与完整摘要。
 ///
 /// 与侧栏详情的分工：这里回答「这一条是什么」，侧栏回答「它底下记了什么」。
+struct FoldedActivities: View {
+    let items: [TrayTimelineItem]
+    @ObservedObject var model: StatusModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(items) { child in
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 6) {
+                        Text(child.title)
+                            .font(.system(size: 11, weight: .medium))
+                        Spacer()
+                        if !child.apps.isEmpty {
+                            ApplicationBadges(bundleIDs: child.apps)
+                        }
+                    }
+                    if !child.summary.isEmpty {
+                        Text(child.summary)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    HStack(spacing: 8) {
+                        Button(model.isExpanded(child.id) ? "收起详情" : "展开详情") { model.toggleExpanded(child.id) }
+                        Button("复制") { model.copySummary(of: child) }
+                        if model.canEditSummary(child) { Button("编辑摘要") { model.editSummary(child) } }
+                    }
+                    .font(.system(size: 10))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+
+                    if model.isExpanded(child.id) { SummaryDetails(item: child, model: model) }
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.primary.opacity(0.025))
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+        }
+    }
+}
+
 struct SummaryDetails: View {
     let item: StatusModel.TimelineItem
     @ObservedObject var model: StatusModel
+    @State private var sourceDetails: [ActivityFragment.Detail] = []
+    @State private var incidentalDetails: [ActivityFragment.Detail] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -655,8 +719,8 @@ struct SummaryDetails: View {
 
             Button("删除总结", role: .destructive) { model.deleteTimelineItem(item) }
                 .font(.system(size: 10)).help("从时间线删除；保留原始记录和来源记忆")
-            DetailLine("层级", item.isNarrative ? "叙述层（模型归纳）" : "记忆层（原始记录）")
-            DetailLine("时刻", fullTime)
+            DetailLine("层级", item.isNarrative ? "活动整理" : "记忆层（原始记录）")
+            DetailLine(item.sharesSourcePeriod == true ? "来源起点" : "时刻", fullTime)
             DetailLine("覆盖", item.coveredCount > 1
                        ? "\(item.coveredCount) 段记忆" : "1 段记忆")
             if let count = item.eventCount {
@@ -680,8 +744,33 @@ struct SummaryDetails: View {
                 }
             }
 
-            // 这一页多出来的是「逐应用明细」——上面的完整摘要已经有了叙述本身，
-            // 所以按钮按它实际多出的内容命名，而不是笼统的「完整记忆」。
+            if !sourceDetails.isEmpty {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("原活动内容")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                    ForEach(sourceDetails) { source in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(source.time)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                            Text(source.text)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .lineSpacing(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                .accessibilityIdentifier("source-activity-details")
+            }
+
+            if !incidentalDetails.isEmpty {
+                IncidentalActivities(details: incidentalDetails, count: item.incidentalCount, collapsible: true)
+                    .accessibilityIdentifier("incidental-activity-details")
+            }
+
             if item.hasDetail {
                 Button {
                     model.openDetail(for: item)
@@ -735,6 +824,19 @@ struct SummaryDetails: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
         )
+        .task(id: model.contentVersion) {
+            let files = item.memoryFiles
+            let activities = item.sourceActivities
+            let incidental = item.sourceIncidental
+            let details = await Task.detached(priority: .userInitiated) {
+                let main = ActivityFragment.details(files: files, activities: activities, excluding: incidental)
+                let other = incidental.map { ActivityFragment.details(files: files, activities: $0) } ?? []
+                return (main, other)
+            }.value
+            guard !Task.isCancelled else { return }
+            sourceDetails = details.0
+            incidentalDetails = details.1
+        }
     }
 
     private var fullTime: String {
@@ -742,6 +844,39 @@ struct SummaryDetails: View {
         f.dateFormat = "M-d HH:mm:ss"
         f.locale = Locale(identifier: "en_US_POSIX")
         return f.string(from: item.timestamp)
+    }
+}
+
+struct IncidentalActivities: View {
+    let details: [ActivityFragment.Detail]
+    let count: Int
+    let collapsible: Bool
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if collapsible {
+                Button { expanded.toggle() } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        Text("期间的其他活动（\(count) 项）")
+                    }
+                    .font(.system(size: 10))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            if !collapsible || expanded {
+                ForEach(details) { source in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(source.time).font(.system(size: 10, design: .monospaced)).foregroundStyle(.tertiary)
+                        Text(source.text).font(.system(size: 11)).foregroundStyle(.secondary)
+                            .lineSpacing(2).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1313,7 +1448,9 @@ struct ModelUsagePane: View {
                             Picker("任务", selection: $model.usageFilter.task) {
                                 Text("全部任务").tag("")
                                 Text("十分钟记忆").tag("10min")
-                                Text("六小时汇总").tag("6h")
+                                if model.modelRequests.contains(where: { $0.task == "6h" }) {
+                                    Text("六小时汇总（历史）").tag("6h")
+                                }
                                 Text("活动整理").tag("narrative")
                                 Text("日报").tag("daily")
                                 Text("周报").tag("weekly")
@@ -1324,7 +1461,7 @@ struct ModelUsagePane: View {
                         }
                         .font(.system(size: 11))
                         totals(filter.period.rawValue, records: filteredRequests)
-                        Text("费用按配置单价估算")
+                        Text("仅统计模型请求，包含补齐、重试和降级；本地整理不产生请求。费用按请求时的单价估算。")
                             .font(.system(size: 10)).foregroundStyle(.tertiary)
                         if filteredRequests.isEmpty {
                             Text("这个范围内暂无请求")
@@ -1403,7 +1540,7 @@ struct ModelUsagePane: View {
                 HStack(spacing: 4) {
                     Image(systemName: "info.circle")
                         .font(.system(size: 9))
-                    Text("\(unknown) 次请求未返回用量或单价")
+                    Text("\(unknown) 次请求用量或费用未知，未计入对应合计")
                         .font(.system(size: 9))
                 }
                 .foregroundStyle(.tertiary)
@@ -1710,22 +1847,32 @@ struct TrashPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Button { model.showsTrash = false } label: { Label("返回", systemImage: "chevron.left") }
-                    .buttonStyle(.plain).foregroundStyle(Color.accentColor)
+            HStack(alignment: .center, spacing: 10) {
+                PanelBackButton { model.showsTrash = false }
                 Spacer()
-                Text("回收站").font(.system(size: 14, weight: .semibold))
+                Text("回收站").font(.system(size: 13, weight: .semibold))
                 Spacer()
-                Text("\(model.deletedSummaries.count) 条").font(.system(size: 10)).foregroundStyle(.secondary)
-            }.padding(14)
-            Divider()
+                Text("\(model.deletedSummaries.count) 条").font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 10)
+            Divider().opacity(0.4)
             if let error = model.timelineError {
                 Text(error).font(.system(size: 10)).foregroundStyle(.red).padding(.horizontal, 14)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     if model.deletedSummaries.isEmpty {
-                        Text("回收站为空").font(.system(size: 12)).foregroundStyle(.secondary).padding(.top, 30)
+                        VStack(spacing: 8) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 22))
+                                .foregroundStyle(.tertiary)
+                            Text("回收站为空")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.top, 40)
                     }
                     ForEach(model.deletedSummaries) { record in
                         TrashRecordCard(record: record, model: model)

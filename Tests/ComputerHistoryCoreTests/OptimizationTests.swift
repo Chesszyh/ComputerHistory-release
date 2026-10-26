@@ -68,6 +68,76 @@ final class OptimizationTests: XCTestCase {
         try restarted.stop(now: start.addingTimeInterval(1401))
     }
 
+    func testSystemIdleIsDistinctFromLockAndResumesOnInput() async throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let session = CollectionSession(configuration: .init(rootDirectory: root))
+        let app = EventStreamApp(bundleIdentifier: "example.editor")
+        let login = EventStreamApp(bundleIdentifier: "com.apple.loginwindow")
+        try session.start(now: start)
+        XCTAssertTrue(session.observeAvailability(app: app, now: start, idleSeconds: 299))
+        XCTAssertFalse(session.observeAvailability(app: app, now: start.addingTimeInterval(1), idleSeconds: 300))
+        XCTAssertEqual(AwayPeriods.load(root: root).startedReason, .idle)
+        let count = session.totalEventsWritten
+        session.recordSnapshot(roots: [.init(id: 0, text: "background reply")], app: app, window: nil, now: start.addingTimeInterval(30))
+        XCTAssertEqual(session.totalEventsWritten, count)
+        XCTAssertFalse(session.observeAvailability(app: login, now: start.addingTimeInterval(601), idleSeconds: 900))
+        let locked = AwayPeriods.load(root: root)
+        XCTAssertEqual(locked.periods.first?.reason, .idle)
+        XCTAssertEqual(locked.startedReason, .locked)
+        XCTAssertTrue(session.observeAvailability(app: app, now: start.addingTimeInterval(1201), idleSeconds: 0))
+        let periods = AwayPeriods.load(root: root).periods
+        XCTAssertEqual(periods.map { $0.reason }, [.idle, .locked])
+        XCTAssertEqual(periods[0].end, periods[1].start)
+        try session.stop(now: start.addingTimeInterval(1202))
+        let snapshot = await TraySnapshotLoader().load(root: root)
+        let away = snapshot.groups.flatMap(\.items).flatMap(\.leafItems).filter(\.isAway)
+        XCTAssertEqual(away.map(\.summary), ["锁屏或休眠", "长时间无操作，未锁屏"])
+    }
+
+    func testFirstClickAfterIdleIsRecordedAndPauseEndsIdleCoverage() throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let session = CollectionSession(configuration: .init(rootDirectory: root))
+        let app = EventStreamApp(bundleIdentifier: "example.editor")
+        try session.start(now: start)
+        _ = session.observeAvailability(app: app, now: start, idleSeconds: 500)
+        let count = session.totalEventsWritten
+        session.recordClick(button: "left", clickCount: 1, modifiers: [], app: app, window: nil,
+                            readTarget: { nil }, at: start.addingTimeInterval(600))
+        XCTAssertFalse(session.isAway)
+        XCTAssertEqual(session.totalEventsWritten, count + 1)
+        _ = session.observeAvailability(app: app, now: start.addingTimeInterval(601), idleSeconds: 500)
+        session.isPaused = true
+        XCTAssertNil(AwayPeriods.load(root: root).startedAt)
+        try session.stop(now: start.addingTimeInterval(602))
+    }
+
+    func testIdleAndLockAreNotReportedAsStalledCollection() throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        var status = CollectorStatus.empty(root: root)
+        status.process.running = true
+        status.data.lastWriteAt = Date().addingTimeInterval(-3600)
+        XCTAssertTrue(status.isStalled)
+        status.awayReason = .idle
+        XCTAssertFalse(status.isStalled)
+        status.awayReason = .locked
+        XCTAssertFalse(status.isStalled)
+    }
+
+    func testIdleEndsAtStopAndInvalidObservationDoesNotCreateAway() throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let session = CollectionSession(configuration: .init(rootDirectory: root))
+        let app = EventStreamApp(bundleIdentifier: "example.editor")
+        try session.start(now: start)
+        XCTAssertTrue(session.observeAvailability(app: app, now: start, idleSeconds: .nan))
+        XCTAssertTrue(session.observeAvailability(app: app, now: start, idleSeconds: -1))
+        XCTAssertFalse(session.observeAvailability(app: app, now: start.addingTimeInterval(1), idleSeconds: 301))
+        try session.stop(now: start.addingTimeInterval(601))
+        let away = AwayPeriods.load(root: root)
+        XCTAssertNil(away.startedAt)
+        XCTAssertEqual(away.periods.last?.end, start.addingTimeInterval(601))
+        XCTAssertEqual(away.periods.last?.reason, .idle)
+    }
+
     func testTimelineHidesLegacyLoginOnlySummariesButKeepsMixedActivity() async throws {
         let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
         try ActivityNarrative(items: [

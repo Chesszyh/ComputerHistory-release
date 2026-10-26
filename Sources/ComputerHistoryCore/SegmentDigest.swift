@@ -79,8 +79,7 @@ public struct SegmentDigest: Sendable {
 
     /// 各段「首末事件跨度」之和。
     ///
-    /// 这是**可证实的下界**：只知道每段内首末事件之间的时间有活动，
-    /// 段与段之间、以及段内事件之间的空隙都可能没有记录。
+    /// 界面自动变化也会产生事件，这个跨度不证明用户持续操作或阅读。
     /// 不能用 `endedAt - startedAt`——那是首末记录的跨度，会把大片空白算成活动。
     public var recordedSpan: TimeInterval {
         activities.map(\.duration).reduce(0, +)

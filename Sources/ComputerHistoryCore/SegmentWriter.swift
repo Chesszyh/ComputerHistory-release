@@ -35,13 +35,17 @@ public enum EventStreamEndReason: String, Sendable {
 public enum SegmentClock {
     public static let durationSeconds: TimeInterval = 600
 
+    private static let formatter: DateFormatter = {
+        let value = DateFormatter()
+        value.dateFormat = "yyyy-MM-dd'T'HH-mm-ss'Z'"
+        value.timeZone = TimeZone(secondsFromGMT: 0)
+        value.locale = Locale(identifier: "en_US_POSIX")
+        return value
+    }()
+
     /// 时间戳前缀格式 `YYYY-MM-DDTHH-MM-SSZ`；目录冲突时写入器追加 UUID。
     public static func segmentID(for date: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd'T'HH-mm-ss'Z'"
-        f.timeZone = TimeZone(secondsFromGMT: 0)
-        f.locale = Locale(identifier: "en_US_POSIX")
-        return f.string(from: date)
+        formatter.string(from: date)
     }
 
     /// 从目录名还原 segment 的起始时刻；格式不符时返回 nil。
@@ -49,14 +53,10 @@ public enum SegmentClock {
     /// 保留策略据此判断超龄——目录名是采集时写入的权威时间，
     /// 而文件修改时间在复制、恢复、备份后会失真。
     public static func date(fromSegmentID id: String) -> Date? {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd'T'HH-mm-ss'Z'"
-        f.timeZone = TimeZone(secondsFromGMT: 0)
-        f.locale = Locale(identifier: "en_US_POSIX")
         let parts = id.split(separator: "_", omittingEmptySubsequences: false)
         guard parts.count == 1 || (parts.count == 2 && UUID(uuidString: String(parts[1])) != nil),
               parts[0].count == 20,
-              let date = f.date(from: String(parts[0])),
+              let date = formatter.date(from: String(parts[0])),
               segmentID(for: date) == String(parts[0]) else { return nil }
         return date
     }

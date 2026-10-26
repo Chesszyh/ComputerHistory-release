@@ -59,8 +59,7 @@ public struct ModelRequest: Codable, Sendable, Equatable, Identifiable {
 /// 只缓存列表字段；请求正文按需读取，刷新不会常驻所有输入和输出。
 public actor ModelRequestLoader {
     private struct Cached {
-        var modified: Date
-        var size: Int
+        var stamp: FileStamp
         var record: ModelRequest
     }
     private var cached: [URL: Cached] = [:]
@@ -72,12 +71,11 @@ public actor ModelRequestLoader {
         let live = Set(files)
         cached = cached.filter { live.contains($0.key) }
         for file in files {
-            guard let attrs = try? FileManager.default.attributesOfItem(atPath: file.path),
-                  let modified = attrs[.modificationDate] as? Date, let size = attrs[.size] as? Int else { continue }
-            if let old = cached[file], old.modified == modified, old.size == size { continue }
+            guard let stamp = FileStamp(file) else { continue }
+            if let old = cached[file], old.stamp == stamp { continue }
             guard var value = try? ModelRequest.load(url: file) else { cached[file] = nil; continue }
             value.system = ""; value.input = ""; value.output = nil
-            cached[file] = Cached(modified: modified, size: size, record: value)
+            cached[file] = Cached(stamp: stamp, record: value)
         }
         return cached.values.map(\.record).sorted { $0.startedAt > $1.startedAt }
     }

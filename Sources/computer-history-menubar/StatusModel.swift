@@ -92,7 +92,7 @@ final class StatusModel: ObservableObject {
     @Published private(set) var collectorConfigurationLoaded = false
     private let requestLoader = ModelRequestLoader()
 
-    private var contentVersion = 0
+    @Published private(set) var contentVersion = 0
     @Published private(set) var timelineGroups: [TrayTimelineGroup] = []
     private var allTimelineGroups: [TrayTimelineGroup] = []
 
@@ -154,7 +154,7 @@ final class StatusModel: ObservableObject {
     }
 
     func refreshLive() {
-        guard !stopped, liveTask == nil else { return }
+        guard !stopped, control.recording, liveTask == nil else { return }
         let app = FrontmostApplication.current()
         let bundle = app?.bundleIdentifier
         let name = AwayPeriods.isLoginWindow(app) ? "离开电脑" : (app?.name ?? bundle ?? "—")
@@ -169,7 +169,7 @@ final class StatusModel: ObservableObject {
             let window = await TrayWindowReader.shared.read(pid: pid)
             guard let self else { return }
             self.liveTask = nil
-            guard !self.stopped, FrontmostApplication.current()?.processIdentifier == pid else { return }
+            guard !self.stopped, self.control.recording, FrontmostApplication.current()?.processIdentifier == pid else { return }
             if self.frontWindow != window?.title { self.frontWindow = window?.title }
         }
     }
@@ -187,12 +187,12 @@ final class StatusModel: ObservableObject {
             let health = await Task.detached { ModelHealth.load(root: root) }.value
             let enabled = await Task.detached { (try? BackupSettings.load(root: root))?.enabled ?? false }.value
             guard let self, !self.stopped else { return }
-            self.modelFailure = health?.error
-            self.effectiveBackupEnabled = enabled
+            if self.modelFailure != health?.error { self.modelFailure = health?.error }
+            if self.effectiveBackupEnabled != enabled { self.effectiveBackupEnabled = enabled }
             if self.modelRequests != requests { self.modelRequests = requests }
             if self.status != snapshot.status { self.status = snapshot.status }
             if self.control != snapshot.control { self.control = snapshot.control }
-            self.contentVersion = snapshot.contentVersion
+            if self.contentVersion != snapshot.contentVersion { self.contentVersion = snapshot.contentVersion }
             if self.effectiveTimelineMode != snapshot.timelineMode { self.effectiveTimelineMode = snapshot.timelineMode }
             if self.deletedSummaries != snapshot.deletedSummaries { self.deletedSummaries = snapshot.deletedSummaries }
             let count = snapshot.groups.reduce(0) { $0 + $1.items.count }
@@ -384,9 +384,9 @@ final class StatusModel: ObservableObject {
     // MARK: - 展示辅助
 
     /// 「3 秒前」这类相对时间。
-    func relativeLabel(_ date: Date?) -> String {
+    func relativeLabel(_ date: Date?, now: Date = Date()) -> String {
         guard let date else { return "—" }
-        let seconds = Int(Date().timeIntervalSince(date))
+        let seconds = max(0, Int(now.timeIntervalSince(date)))
         if seconds < 5 { return "刚刚" }
         if seconds < 60 { return "\(seconds) 秒前" }
         if seconds < 3600 { return "\(seconds / 60) 分钟前" }
@@ -418,18 +418,36 @@ final class StatusModel: ObservableObject {
         }
     }
 
+    private static let dayParser: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .autoupdatingCurrent
+        return formatter
+    }()
+    private static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "M 月 d 日"
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = .autoupdatingCurrent
+        return formatter
+    }()
+    private static let clockFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .autoupdatingCurrent
+        return formatter
+    }()
+
+    func timeLabel(_ date: Date) -> String { Self.clockFormatter.string(from: date) }
+
     func dayLabel(_ day: String) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.locale = Locale(identifier: "en_US_POSIX")
-        guard let date = f.date(from: day) else { return day }
+        guard let date = Self.dayParser.date(from: day) else { return day }
         let cal = Calendar.current
         if cal.isDateInToday(date) { return "今天" }
         if cal.isDateInYesterday(date) { return "昨天" }
-        let out = DateFormatter()
-        out.dateFormat = "M 月 d 日"
-        out.locale = Locale(identifier: "zh_CN")
-        return out.string(from: date)
+        return Self.dayFormatter.string(from: date)
     }
 
     // MARK: - 动作
@@ -455,7 +473,7 @@ final class StatusModel: ObservableObject {
     ///
     /// 不带时刻与来源——贴给别人时那两项是噪声，需要时侧栏里有完整文档可复制。
     func copySummary(of item: TimelineItem) {
-        writeToPasteboard("\(item.title)\n\n\(item.summary)")
+        writeToPasteboard(item.leafItems.map { "\($0.title)\n\n\($0.summary)" }.joined(separator: "\n\n"))
         copiedItemID = item.id
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_400_000_000)
@@ -487,7 +505,7 @@ final class StatusModel: ObservableObject {
         let f = DateFormatter()
         f.dateFormat = "HH:mm"
         f.locale = Locale(identifier: "en_US_POSIX")
-        let body = items.map { "[\(f.string(from: $0.timestamp))] \($0.title)\n\($0.summary)" }
+        let body = items.flatMap(\.leafItems).map { "[\(f.string(from: $0.timestamp))] \($0.title)\n\($0.summary)" }
             .joined(separator: "\n\n")
         writeToPasteboard("\(day)\n\n\(body)")
     }
@@ -901,6 +919,7 @@ final class StatusModel: ObservableObject {
 
     func copySelectedSummaries() {
         let items = allTimelineGroups.flatMap(\.items).filter { selectedSummaryIDs.contains($0.id) && !$0.isAway }
+            .flatMap(\.leafItems)
             .sorted { $0.timestamp < $1.timestamp }
         guard !items.isEmpty else { return }
         let formatter = DateFormatter()
@@ -910,7 +929,7 @@ final class StatusModel: ObservableObject {
     }
 
     func canEditSummary(_ item: TimelineItem) -> Bool {
-        effectiveTimelineMode == .fixedTenMinutes && !item.isAway && item.memoryFiles.count == 1
+        effectiveTimelineMode == .fixedTenMinutes && item.children == nil && !item.isAway && item.memoryFiles.count == 1
     }
 
     func editSummary(_ item: TimelineItem) {

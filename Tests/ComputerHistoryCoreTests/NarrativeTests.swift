@@ -150,7 +150,7 @@ final class NarrativeTests: XCTestCase {
         try ActivityNarrative(items: [merged]).save(root: root)
         let loader = TraySnapshotLoader()
         let before = await loader.load(root: root)
-        let row = try XCTUnwrap(before.groups.flatMap(\.items).first)
+        let row = try XCTUnwrap(before.groups.flatMap(\.items).flatMap(\.leafItems).first)
         try TimelineDeletions.delete(row, root: root)
         try writeMemory(dir, segmentID: "2026-10-14T08-00-00Z", title: "CORRECTED", summary: "new")
         let day = try XCTUnwrap(MemoryIndex.parse(fileURL: first)).dayLabel()
@@ -159,8 +159,8 @@ final class NarrativeTests: XCTestCase {
         XCTAssertTrue(hidden.groups.isEmpty)
         try TimelineDeletions.restore(id: row.deletionID, root: root)
         let restored = await loader.load(root: root)
-        XCTAssertEqual(restored.groups.flatMap(\.items).count, 2, "Restored snapshot must not duplicate its replacements")
-        XCTAssertTrue(restored.groups.flatMap(\.items).contains { $0.title == "CORRECTED" })
+        XCTAssertEqual(restored.groups.flatMap(\.items).flatMap(\.leafItems).count, 2, "Restored snapshot must not duplicate its replacements")
+        XCTAssertTrue(restored.groups.flatMap(\.items).flatMap(\.leafItems).contains { $0.title == "CORRECTED" })
         try TimelineDeletions.delete(row, root: root)
         try TimelineDeletions.purge(id: row.deletionID, root: root)
         let purged = await TraySnapshotLoader().load(root: root)
@@ -168,6 +168,141 @@ final class NarrativeTests: XCTestCase {
     }
 
     // MARK: - 解析
+
+    func testTaskStepsAndBriefAsidesShareOneCardWithoutLosingAnIndependentTask() throws {
+        let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("memories")
+        let file = try writeMemory(dir, segmentID: "2026-10-14T08-00-00Z", title: "Window", summary: "Counts")
+        let body = "- **迁移项目**：核对目标目录。\n- **压缩初测**：确认压缩结果。\n- **查看天气**：短暂查看天气页面。\n- **补充迁移要求**：保留提交历史。\n- **阅读论文**：讨论独立的研究问题。"
+        try String(contentsOf: file, encoding: .utf8).replacingOccurrences(of: "细节内容。", with: body)
+            .write(to: file, atomically: true, encoding: .utf8)
+        let source = entries(dir)
+        let result = NarrativeGenerator.parseItems("## [S1.A1,+S1.A2,~S1.A3,+S1.A4] 迁移项目\n核对目录与压缩结果。\n## [S1.A5] 阅读论文\n讨论研究问题。", sources: source)
+        XCTAssertEqual(result.count, 2)
+        XCTAssertEqual(result.first?.sourceActivities?[source[0].id], [1, 2, 3, 4])
+        XCTAssertEqual(result.first?.sourceSteps?[source[0].id], [2, 4])
+        XCTAssertEqual(result.first?.sourceIncidental?[source[0].id], [3])
+        let main = ActivityFragment.details(files: [file], activities: result.first?.sourceActivities, excluding: result.first?.sourceIncidental)
+        XCTAssertTrue(main[0].text.contains("压缩结果"))
+        XCTAssertFalse(main[0].text.contains("天气"))
+        let aside = ActivityFragment.details(files: [file], activities: result.first?.sourceIncidental)
+        XCTAssertTrue(aside[0].text.contains("天气"))
+        XCTAssertFalse(aside[0].text.contains("提交历史"))
+        for invalid in [
+            "## [S1.A1,+S1.A2,+S1.A4] 遗漏穿插\n概览。\n## [S1.A5] 论文\n概览。",
+            "## [+S1.A1,+S1.A2,~S1.A3,+S1.A4] 没有主任务的步骤\n概览。\n## [S1.A5] 论文\n概览。",
+            "## [S1.A1,+S1.A2,~S1.A3,+S1.A4] 任务\n概览。\n## [~S1.A3,S1.A5] 重复穿插\n概览。"
+        ] { XCTAssertTrue(NarrativeGenerator.parseItems(invalid, sources: source).isEmpty) }
+        let asides = NarrativeGenerator.parseItems("## [~S1.A1,~S1.A2,~S1.A3,~S1.A4,~S1.A5] 期间的其他活动", sources: source)
+        XCTAssertEqual(asides.count, 1)
+        XCTAssertTrue(asides[0].isIncidentalOnly)
+        XCTAssertTrue(asides[0].summary.contains("天气"))
+        XCTAssertTrue(NarrativeGenerator.parseItems("## [P1,+S1.A1,+S1.A2,~S1.A3,+S1.A4,+S1.A5] 无主任务\n概览。", sources: source, priorItems: asides).isEmpty)
+        try ActivityNarrative(items: result).save(root: root)
+        XCTAssertEqual(ActivityNarrative.load(root: root).items, result)
+        let fixed = ActivityNarrative(items: result).separatingAwayPeriods(index: .init(entries: source), away: AwayPeriods(), mode: .fixedTenMinutes)
+        XCTAssertEqual(fixed.items.count, 1)
+        XCTAssertNil(fixed.items[0].sourceIncidental)
+    }
+
+    func testActivitiesInOneMemoryCanBelongToSeparateItems() throws {
+        let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("memories")
+        let url = try writeMemory(dir, segmentID: "2026-10-14T08-00-00Z", title: "Window", summary: "Counts")
+        let text = try String(contentsOf: url, encoding: .utf8)
+            .replacingOccurrences(of: "细节内容。", with: "- **审阅文档。**：核对文档中的边界条件。\n- **迁移示例项目**：保留提交历史并核对目录。")
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        let source = entries(dir)
+        let result = NarrativeGenerator.parseItems("## [S1.A1] 审阅文档。\n核对边界。\n## [S1.A2] 迁移示例项目\n核对目录。", sources: source)
+        XCTAssertEqual(result.count, 2)
+        XCTAssertEqual(result.first?.title, "审阅文档")
+        XCTAssertEqual(result.map(\.sourceMemories), [[source[0].id], [source[0].id]])
+        XCTAssertEqual(Set(result.map(\.id)).count, 2)
+        XCTAssertTrue(NarrativeGenerator.parseItems("## [S1.A1] 遗漏任务\n只提文档。", sources: source).isEmpty)
+        XCTAssertTrue(NarrativeGenerator.parseItems("## [S1.A1,S1.A2] 混合任务\n压成一条。", sources: source).isEmpty)
+        XCTAssertTrue(NarrativeGenerator.parseItems("## [S1] 混合任务\n压成一条。", sources: source).isEmpty)
+        XCTAssertTrue(NarrativeGenerator.parseItems("## [S1.A1] 文档\n核对文档。\n## [S1.A2] 项目\n核对目录。", sources: source, mode: .fixedTenMinutes).isEmpty)
+        let detail = ActivityFragment.details(files: [url], activities: result.first?.sourceActivities)
+        XCTAssertTrue(detail.first?.text.contains("边界条件") == true)
+        XCTAssertFalse(detail.first?.text.contains("提交历史") == true)
+        let fixed = ActivityNarrative(items: result).separatingAwayPeriods(index: .init(entries: source), away: AwayPeriods(), mode: .fixedTenMinutes)
+        XCTAssertEqual(fixed.items.count, 1)
+        XCTAssertTrue(fixed.items[0].summary.contains("边界条件"))
+        XCTAssertTrue(fixed.items[0].summary.contains("提交历史"))
+    }
+
+    func testBriefActivityKeepsItsSpecificTitleAndSummary() throws {
+        let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("memories")
+        try writeMemory(dir, segmentID: "2026-10-14T08-00-00Z", title: "Window", summary: "Counts")
+        let result = NarrativeGenerator.parseItems("## [~S1.A1] 核查预约人数\n你查看预约页面的剩余名额。", sources: entries(dir))
+        XCTAssertEqual(result.first?.title, "核查预约人数")
+        XCTAssertEqual(result.first?.summary, "你查看预约页面的剩余名额。")
+    }
+
+    func testContinuationPromptRehydratesOriginalActivityInsteadOfLossySummary() throws {
+        let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("memories")
+        let first = try writeMemory(dir, segmentID: "2026-10-14T08-00-00Z", title: "Old", summary: "Counts")
+        var original = try String(contentsOf: first, encoding: .utf8)
+        original = original.replacingOccurrences(of: "细节内容。", with: "- **核查报告**：保留早期证据 SYNTHETIC_EARLY_RESULT。")
+        try original.write(to: first, atomically: true, encoding: .utf8)
+        try writeMemory(dir, segmentID: "2026-10-14T08-10-00Z", title: "New", summary: "Counts")
+        let source = entries(dir)
+        var prior = ActivityNarrative.Item(id: "prior", timestamp: source[0].startedAt, title: "核查报告", summary: "LOSSY_SUMMARY", apps: [], sourceMemories: [source[0].id])
+        prior.sourceActivities = [source[0].id: [1]]
+        let prompt = NarrativeGenerator.userPrompt(day: source[0].dayLabel(), sources: [source[1]], priorItems: [prior], historySources: source)
+        XCTAssertTrue(prompt.contains("SYNTHETIC_EARLY_RESULT"))
+        XCTAssertFalse(prompt.contains("LOSSY_SUMMARY"))
+        XCTAssertFalse(prompt.contains("摘要：Counts"))
+        let full = ActivityFragment.details(files: [first], activities: nil)
+        XCTAssertTrue(full.first?.text.contains("SYNTHETIC_EARLY_RESULT") == true)
+    }
+
+    func testContinuationPreservesRolesAndDoesNotFeedIncidentalContentToTaskSummary() throws {
+        let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("memories")
+        let first = try writeMemory(dir, segmentID: "2026-10-14T08-00-00Z", title: "Old", summary: "Counts")
+        let body = "- **迁移项目**：SYNTHETIC_MAIN。\n- **核对目录**：SYNTHETIC_STEP。\n- **查看天气**：SYNTHETIC_ASIDE。"
+        try String(contentsOf: first, encoding: .utf8).replacingOccurrences(of: "细节内容。", with: body)
+            .write(to: first, atomically: true, encoding: .utf8)
+        try writeMemory(dir, segmentID: "2026-10-14T08-10-00Z", title: "New", summary: "Counts")
+        let source = entries(dir)
+        let prior = try XCTUnwrap(NarrativeGenerator.parseItems("## [S1.A1,+S1.A2,~S1.A3] 迁移项目\n核对目标目录。", sources: [source[0]]).first)
+        let prompt = NarrativeGenerator.userPrompt(day: source[0].dayLabel(), sources: [source[1]], priorItems: [prior], historySources: source)
+        XCTAssertTrue(prompt.contains("SYNTHETIC_STEP"))
+        XCTAssertFalse(prompt.contains("SYNTHETIC_ASIDE"))
+        let continued = NarrativeGenerator.parseItems("## [P1,+S1.A1] 迁移项目\n继续核对目录。", sources: [source[1]], priorItems: [prior])
+        XCTAssertEqual(continued.count, 1)
+        XCTAssertEqual(continued[0].sourceIncidental, prior.sourceIncidental)
+        XCTAssertEqual(continued[0].sourceSteps?[source[0].id], [2])
+        XCTAssertEqual(continued[0].sourceSteps?[source[1].id], [1])
+        let incidentalContinuation = NarrativeGenerator.parseItems("## [P1,~S1.A1] 迁移项目\n核对目标目录。", sources: [source[1]], priorItems: [prior])
+        XCTAssertTrue(incidentalContinuation.isEmpty, "Only incidental viewing must not extend a previous task")
+    }
+
+    func testFragmentOwnershipSurvivesNewAwayBoundaryAndMissingSourceCache() throws {
+        let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("memories")
+        let first = try writeMemory(dir, segmentID: "2026-10-14T08-00-00Z", title: "First", summary: "Counts")
+        let second = try writeMemory(dir, segmentID: "2026-10-14T08-10-00Z", title: "Second", summary: "Counts")
+        for (file, activity) in [(first, "- **其他任务**：UNRELATED_FIRST。\n- **迁移项目**：SELECTED_FIRST。"),
+                                 (second, "- **迁移项目**：SELECTED_SECOND。\n- **其他任务**：UNRELATED_SECOND。") ] {
+            let text = try String(contentsOf: file, encoding: .utf8).replacingOccurrences(of: "细节内容。", with: activity)
+            try text.write(to: file, atomically: true, encoding: .utf8)
+        }
+        let source = entries(dir)
+        var item = ActivityNarrative.Item(id: "migration", timestamp: source[0].startedAt, title: "迁移项目", summary: "Combined", apps: [], sourceMemories: source.map(\.id))
+        item.sourceActivities = [source[0].id: [2], source[1].id: [1]]
+        var away = AwayPeriods()
+        away.periods = [.init(start: source[0].startedAt.addingTimeInterval(300), end: source[1].startedAt)]
+        let separated = ActivityNarrative(items: [item]).separatingAwayPeriods(index: .init(entries: source), away: away)
+        XCTAssertEqual(separated.items.count, 2)
+        XCTAssertTrue(separated.items.allSatisfy { !$0.summary.contains("UNRELATED") })
+        XCTAssertTrue(separated.items.allSatisfy { $0.sourceActivities != nil })
+        let unavailable = ActivityNarrative(items: [item]).separatingAwayPeriods(index: .init(entries: []), away: away, mode: .fixedTenMinutes)
+        XCTAssertEqual(unavailable.items, [item])
+    }
 
     /// 编号决定来源，输出顺序不会改变时间与应用归属。
     ///

@@ -6,8 +6,8 @@ public struct SummarySettings: Codable, Sendable, Equatable {
         case continuous = "continuous"
         public var label: String { self == .fixedTenMinutes ? "固定十分钟，不合并" : "按任务连续性合并" }
         public var explanation: String {
-            self == .fixedTenMinutes ? "每段十分钟记忆单独总结，适合能力较弱的本地模型。"
-                : "只合并相邻的同一任务；切换任务后再返回时另开一段，保留任务转换与细节。"
+            self == .fixedTenMinutes ? "每段十分钟记忆单独总结，保留该时段的活动细节。"
+                : "按具体目标整理活动，同一任务的步骤归组；重叠时段折叠展示，保留各项摘要和完整明细。"
         }
     }
     public var timelineMode: TimelineMode = .continuous
@@ -38,6 +38,16 @@ public struct SummarySettings: Codable, Sendable, Equatable {
         case narrative = "活动整理"
         case daily = "日报"
         case weekly = "周报"
+
+        public var explanation: String {
+            switch self {
+            case .tenMinute: return "从事件中总结动作、对象与关键内容。无明显活动由程序判定，不调用模型。"
+            case .sixHour: return "用于命令行手动生成六小时汇总。"
+            case .narrative: return "整理十分钟记忆中的活动；当前时间线模式的编号规则会在请求时追加。"
+            case .daily: return "从当天十分钟记忆生成日报，生成前自动补齐缺失或失败的记忆。"
+            case .weekly: return "从完整日报生成周报，生成前自动补齐所需记忆与日报。"
+            }
+        }
 
         public var defaultPrompt: String {
             switch self {
@@ -115,7 +125,7 @@ public struct SummarySettings: Codable, Sendable, Equatable {
     内容取舍：
     - 摘要必须经过语义概括。普通聊天不要引用原句，不用“输入/编辑/扩写了某句话”交代内容；
       例如“我对AI工具重度依赖了”应概括为“讨论对AI工具的依赖”。命令、文件名、必要术语和任务特有错误可以保留原文。
-    - 不在结尾附加无关应用的短暂前台、零碎点击或界面状态。已有来源摘要若含这些噪声，应先删去再总结。
+    - 应用短暂前台、零碎点击和控件状态本身不是活动；有具体内容的查看、聊天或休闲仍按正常活动总结。
       “页面出现/多次出现询问ChatGPT提示”“页面显示正在思考/回答已完成”等也属于应省略的噪声，不能换种措辞保留。
     - 总结交流、阅读和写作的主题与要点，不逐字搬运原话，不用“在输入区编辑/扩写了……”代替内容总结。
       例如将练习笔记概括为训练时长、交替击打、瞄准与双手配合、难度及准确率；区分讨论的事与电脑上实际完成的事。

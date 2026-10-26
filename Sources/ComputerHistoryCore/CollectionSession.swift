@@ -112,6 +112,7 @@ public final class CollectionSession {
     public var isPaused = false {
         didSet {
             guard isPaused != oldValue else { return }
+            if isPaused { finishIdlePeriod(at: Date()) }
             activityWatchSince = Date()
             activityWatchCursor = nil
             // 恢复时必须重新建立基线，避免把暂停期间的编辑补记为输入。
@@ -141,7 +142,9 @@ public final class CollectionSession {
 
     /// 只记录交互时间与上下文，不保存原始键码或键入内容。
     public func noteInputActivity(at now: Date = Date()) {
-        noteInputActivity(processIdentifier: FrontmostApplication.current()?.processIdentifier, at: now)
+        let app = FrontmostApplication.current()
+        guard isRunning, !isPaused, observeAvailability(app: app, now: now, idleSeconds: 0) else { return }
+        noteInputActivity(processIdentifier: app?.processIdentifier, at: now)
     }
 
     func noteInputActivity(processIdentifier: Int32?, at now: Date) {
@@ -202,6 +205,7 @@ public final class CollectionSession {
             isRunning = false
         }
         try writer?.close(endedAt: now, endReason: .stopped)
+        finishIdlePeriod(at: now)
     }
 
     /// 采样一次前台应用与 AX 树，产出 `window.changed`（内容有变化时）。
@@ -210,7 +214,7 @@ public final class CollectionSession {
     public func sampleFrontmost(now: Date = Date(), force: Bool = false) {
         windowTextContext = nil
         guard isRunning, !isPaused else { return }
-        guard let app = FrontmostApplication.current(), observeAvailability(app: app, now: now) else { return }
+        guard let app = FrontmostApplication.current(), observeAvailability(app: app, now: now, idleSeconds: InputTap.secondsSinceLastInput) else { return }
 
         let window = FrontmostApplication.frontWindow(for: app)
         // 命中抑制时直接返回：既为隐私，也省下每帧整棵树的遍历开销。
@@ -313,7 +317,7 @@ public final class CollectionSession {
     ) {
         guard isRunning, !isPaused else { return }
         let app = FrontmostApplication.current()
-        guard observeAvailability(app: app, now: now) else { return }
+        guard observeAvailability(app: app, now: now, idleSeconds: 0) else { return }
         let window = FrontmostApplication.frontWindow(for: app)
         recordClick(button: button, clickCount: clickCount, modifiers: modifiers, app: app,
                     window: window, readTarget: {
@@ -323,7 +327,7 @@ public final class CollectionSession {
 
     func recordClick(button: String, clickCount: Int, modifiers: [String], app: EventStreamApp?,
                      window: EventStreamWindow?, readTarget: () -> EventStreamAXElement?, at now: Date) {
-        guard isRunning, !isPaused, observeAvailability(app: app, now: now),
+        guard isRunning, !isPaused, observeAvailability(app: app, now: now, idleSeconds: 0),
               allowsInteraction(app: app, window: window) else { return }
         let target = readTarget()
         append(kind: button == "right" ? .mouseContextMenu : .mouseClick, at: now,
@@ -343,7 +347,7 @@ public final class CollectionSession {
         guard isRunning, !isPaused else { return }
         let app = FrontmostApplication.current()
         let window = FrontmostApplication.frontWindow(for: app)
-        guard observeAvailability(app: app, now: now),
+        guard observeAvailability(app: app, now: now, idleSeconds: 0),
               allowsInteraction(app: app, window: window) else { return }
         append(kind: .keyboardShortcut, at: now,
                app: app, window: window, mouse: nil,
@@ -358,7 +362,7 @@ public final class CollectionSession {
         guard isRunning, !isPaused, !text.isEmpty else { return }
         let app = FrontmostApplication.current()
         let window = FrontmostApplication.frontWindow(for: app)
-        guard observeAvailability(app: app, now: now),
+        guard observeAvailability(app: app, now: now, idleSeconds: 0),
               allowsInteraction(app: app, window: window) else { return }
         append(kind: .keyboardTextInput, at: now,
                app: app, window: window, mouse: nil,
@@ -372,7 +376,7 @@ public final class CollectionSession {
         guard isRunning, !isPaused else { return }
         let app = FrontmostApplication.current()
         let window = FrontmostApplication.frontWindow(for: app)
-        guard observeAvailability(app: app, now: now),
+        guard observeAvailability(app: app, now: now, idleSeconds: 0),
               allowsInteraction(app: app, window: window) else { return }
         append(kind: .keyboardSubmit, at: now,
                app: app, window: window, mouse: nil,
@@ -493,13 +497,27 @@ public final class CollectionSession {
     }
 
     @discardableResult
-    func observeAvailability(app: EventStreamApp?, now: Date) -> Bool {
+    func observeAvailability(app: EventStreamApp?, now: Date, idleSeconds: TimeInterval? = nil) -> Bool {
         guard !isPaused else { return false }
         var changed = false
-        if AwayPeriods.isLoginWindow(app), away.startedAt == nil {
+        let reason: AwayPeriods.Reason?
+        if AwayPeriods.isLoginWindow(app) { reason = .locked }
+        else if let idleSeconds, idleSeconds.isFinite, idleSeconds >= AwayPeriods.idleThreshold { reason = .idle }
+        else if away.startedAt != nil && (app == nil || (away.startedReason == .idle && idleSeconds == nil)) {
+            return false
+        } else { reason = nil }
+        let currentReason = away.startedAt.map { _ in away.startedReason ?? .locked }
+        if reason != currentReason, let start = away.startedAt {
+            away.periods.append(.init(start: start, end: max(start, now), reason: away.startedReason))
+            away.startedAt = nil
+            away.startedReason = nil
+            changed = true
+        }
+        if let reason, away.startedAt == nil {
             windowTextEpoch += 1; windowTextContext = nil; lastWindowText = nil
             flushTextInput(at: now)
             away.startedAt = now
+            away.startedReason = reason
             changed = true
             do {
                 try writer?.close(endedAt: now, endReason: nil)
@@ -508,10 +526,6 @@ public final class CollectionSession {
             } catch {
                 FileHandle.standardError.write(Data("封口离开前的事件段失败：\(error)\n".utf8))
             }
-        } else if let app, !AwayPeriods.isLoginWindow(app), let start = away.startedAt {
-            away.periods.append(.init(start: start, end: max(start, now)))
-            away.startedAt = nil
-            changed = true
         }
         if changed {
             textTracker.resetBaseline()
@@ -524,6 +538,15 @@ public final class CollectionSession {
             catch { FileHandle.standardError.write(Data("保存离开时段失败：\(error)\n".utf8)) }
         }
         return !isAway
+    }
+
+    private func finishIdlePeriod(at now: Date) {
+        guard away.startedReason == .idle, let start = away.startedAt else { return }
+        away.periods.append(.init(start: start, end: max(start, now), reason: .idle))
+        away.startedAt = nil
+        away.startedReason = nil
+        do { try away.save(root: config.rootDirectory) }
+        catch { FileHandle.standardError.write(Data("保存无操作时段失败：\(error)\n".utf8)) }
     }
 
     // MARK: - 内部
