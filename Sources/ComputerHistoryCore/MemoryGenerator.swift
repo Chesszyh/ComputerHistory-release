@@ -136,19 +136,22 @@ public struct MemoryGenerator: Sendable {
                            usedModel: false, usage: nil)
         }
 
-        let noClearActivity = ActivityEvidence.hasNoClearActivity(events: events)
+        let isInputDegraded = Self.readMetadata(at: segmentDir)?.inputListeningDegraded != false
+            && !ActivityEvidence.hasMeaningfulInteraction(events: events)
+        let noClearActivity = !isInputDegraded && ActivityEvidence.hasNoClearActivity(events: events)
         // 只有配置了客户端且存在可总结活动时才联网。
         var enrichment: String?
         var usage: DeepSeekClient.Usage?
         var modelNote: String?
-        if let client, !noClearActivity {
+        if let client, !noClearActivity, !isInputDegraded {
             let prior = previousMemoryPath.flatMap { try? String(contentsOfFile: $0,
                                                                 encoding: .utf8) }
             let prompt = try SummarySettings.load(root: rootDirectory)[.tenMinute]
             do {
             let completion = try client.complete(
                 system: prompt,
-                user: Self.userPrompt(digest: digest, events: events, priorMemory: prior),
+                user: Self.userPrompt(digest: digest, events: events, priorMemory: prior,
+                                      inputDegraded: isInputDegraded),
                 maxTokens: 2400, recordingAt: rootDirectory, task: "10min", sources: [segmentID])
             let text = completion.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if text.isEmpty || completion.finishReason == "length" {
@@ -174,7 +177,8 @@ public struct MemoryGenerator: Sendable {
             enrichment: enrichment,
             modelNote: modelNote,
             evidenceMaterial: ActivityEvidence.material(events: events, segmentID: segmentID),
-            noClearActivity: noClearActivity)
+            noClearActivity: noClearActivity,
+            inputListeningDegraded: isInputDegraded)
         try markdown.write(to: memoryURL, atomically: true, encoding: .utf8)
 
         return Outcome(segmentID: segmentID, memoryURL: memoryURL,
@@ -589,11 +593,15 @@ public struct MemoryGenerator: Sendable {
         try EventArchive.readEvents(at: url)
     }
 
-    static func readSuppressedCount(at segmentDir: URL) -> Int {
+    static func readMetadata(at segmentDir: URL) -> EventStreamMetadata? {
         guard let data = try? Data(contentsOf: segmentDir.appendingPathComponent("metadata.json")),
               let meta = try? EventStreamJSON.makeDecoder()
-                .decode(EventStreamMetadata.self, from: data) else { return 0 }
-        return meta.suppressedEventCount
+                .decode(EventStreamMetadata.self, from: data) else { return nil }
+        return meta
+    }
+
+    static func readSuppressedCount(at segmentDir: URL) -> Int {
+        readMetadata(at: segmentDir)?.suppressedEventCount ?? 0
     }
 
     // MARK: - 提示词
@@ -643,13 +651,13 @@ public struct MemoryGenerator: Sendable {
     """
 
     static func userPrompt(digest: SegmentDigest, events: [EventStreamRecord],
-                           priorMemory: String?) -> String {
+                           priorMemory: String?, inputDegraded: Bool = false) -> String {
         var out = ""
         out += "按下列时序观察整理任务。单个控件片段的证据类别只约束该片段。\n\n"
         out += "## 本段时间\n"
         out += "\(iso(digest.startedAt)) 至 \(iso(digest.endedAt))，"
         out += "共 \(digest.eventCount) 条事件。\n\n"
-        out += "## 交互与观测范围\n" + ActivityEvidence.interactionSummary(events: events) + "\n"
+        out += "## 交互与观测范围\n" + ActivityEvidence.interactionSummary(events: events, inputDegraded: inputDegraded) + "\n"
 
         if let priorMemory {
             out += "## 此前记忆（供 Relevant prior context 引用）\n"

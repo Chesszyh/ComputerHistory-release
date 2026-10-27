@@ -36,11 +36,13 @@ public struct NarrativeGenerator: Sendable {
     public let rootDirectory: URL
     public let memoriesDirectory: URL
     public let client: DeepSeekClient?
+    public let recordingDirectory: URL
 
-    public init(rootDirectory: URL, client: DeepSeekClient?) {
+    public init(rootDirectory: URL, client: DeepSeekClient?, recordingDirectory: URL? = nil) {
         self.rootDirectory = rootDirectory
         self.memoriesDirectory = rootDirectory.appendingPathComponent("memories")
         self.client = client
+        self.recordingDirectory = recordingDirectory ?? rootDirectory
     }
 
     /// 为指定日期（本地时区的 `yyyy-MM-dd`）生成叙述条目。
@@ -62,7 +64,8 @@ public struct NarrativeGenerator: Sendable {
             .sorted { $0.startedAt == $1.startedAt ? $0.id < $1.id : $0.startedAt < $1.startedAt }
         guard !sources.isEmpty else { throw GenerateError.noSourceMemories }
 
-        var narrative = ActivityNarrative.load(root: rootDirectory)
+        let corrections = try TimelineCorrections.load(root: rootDirectory)
+        var narrative = corrections.applying(to: ActivityNarrative.load(root: rootDirectory), index: index, away: away)
         let revisions = Dictionary(uniqueKeysWithValues: sources.map { ($0.id, $0.revision) })
         let currentItems = narrative.items.filter { item in
             !item.sourceMemories.isEmpty && item.sourceMemories.allSatisfy {
@@ -106,6 +109,8 @@ public struct NarrativeGenerator: Sendable {
                 }
                 return ActivityFragment.fragments(in: entry).filter { numbers.contains($0.number) }.map { fragment in
                     var placeholder = ActivityNarrative.sourceItem([entry], away: away, previous: item)
+                    placeholder.taskID = item.taskID
+                    placeholder.taskTitle = item.taskTitle
                     placeholder.id = Self.itemID(for: [entry.id + ":\(fragment.number)"])
                     placeholder.sourceActivities = [entry.id: [fragment.number]]
                     if item.sourceSteps?[entry.id]?.contains(fragment.number) == true {
@@ -152,7 +157,7 @@ public struct NarrativeGenerator: Sendable {
         // 小批次逐次保存，长日历史不会超出远端小模型的上下文，失败也不重付已保存批次。
         var offset = 0
         while offset < pending.count {
-            if pending[offset].noClearActivity {
+            if pending[offset].noClearActivity || pending[offset].inputListeningDegraded {
                 let entry = pending[offset]
                 var item = ActivityNarrative.sourceItem([entry], away: away)
                 item.generationMode = mode
@@ -167,9 +172,10 @@ public struct NarrativeGenerator: Sendable {
             let session = away.sessionStart(at: pending[offset].startedAt)
             var end = offset + 1
             if mode == .continuous {
-                while end < min(offset + 4, pending.count), !pending[end].noClearActivity,
+                while end < min(offset + 4, pending.count), !pending[end].noClearActivity, !pending[end].inputListeningDegraded,
                       away.sessionStart(at: pending[end].startedAt) == session,
-                      positions[pending[end].id] == positions[pending[end - 1].id].map({ $0 + 1 }) {
+                      positions[pending[end].id] == positions[pending[end - 1].id].map({ $0 + 1 }),
+                      !Self.hasCollectionBoundary(pending[end - 1], pending[end]) {
                     end += 1
                 }
             }
@@ -179,6 +185,7 @@ public struct NarrativeGenerator: Sendable {
             let continuationItems = Self.continuationItems(narrative.items, positions: positions, before: firstPosition)
             let candidates = continuationItems.filter { item in
                 guard mode == .continuous, firstPosition > 0,
+                      !Self.hasCollectionBoundary(sources[firstPosition - 1], batch[0]),
                       !item.isIncidentalOnly,
                       (item.generationMode ?? .continuous) == .continuous,
                       item.sourceMemories.contains(sources[firstPosition - 1].id) else { return false }
@@ -205,25 +212,46 @@ public struct NarrativeGenerator: Sendable {
             }
             let priorItems = candidates.count == 1 ? candidates : []
             let activityCount = batch.reduce(0) { $0 + ActivityFragment.fragments(in: $1).count }
-            let completion = try client.complete(
-                system: prompt,
-                user: Self.userPrompt(day: day, sources: batch, priorItems: priorItems, mode: mode, historySources: sources),
-                maxTokens: max(1800, min(6000, activityCount * 250)), recordingAt: rootDirectory, task: "narrative",
-                sources: priorItems.flatMap(\.sourceMemories) + batch.map(\.id))
-            let text = completion.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty, completion.finishReason != "length" else {
-                throw GenerateError.modelFailed(completion.finishReason == "length" ? "输出达到长度上限" : "模型返回空内容")
+            var items: [ActivityNarrative.Item]
+            let batchUsage: DeepSeekClient.Usage?
+            if mode == .continuous {
+                var seenTasks = Set<String>()
+                let tasks = narrative.items.filter { item in
+                    !item.sourceMemories.isEmpty && item.sourceMemories.allSatisfy { name in
+                        guard let position = positions[name], position < firstPosition else { return false }
+                        return !sources[position].noClearActivity && !sources[position].inputListeningDegraded
+                    }
+                }.sorted { $0.timestamp > $1.timestamp }.filter { seenTasks.insert($0.taskID ?? $0.id).inserted }.prefix(8)
+                (items, batchUsage) = try groupedItems(day: day, sources: batch, history: sources.filter { !batchNames.contains($0.id) },
+                    prior: priorItems, tasks: Array(tasks), writingPrompt: prompt, client: client)
+            } else {
+                let completion = try client.complete(
+                    system: prompt,
+                    user: Self.userPrompt(day: day, sources: batch, priorItems: priorItems, mode: mode, historySources: sources),
+                    maxTokens: max(1800, min(6000, activityCount * 250)), recordingAt: recordingDirectory, task: "narrative",
+                    sources: priorItems.flatMap(\.sourceMemories) + batch.map(\.id))
+                let text = completion.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty, completion.finishReason != "length" else {
+                    throw GenerateError.modelFailed(completion.finishReason == "length" ? "输出达到长度上限" : "模型返回空内容")
+                }
+                items = Self.parseItems(text, sources: batch, claimed: batch, priorItems: priorItems, mode: mode)
+                guard !items.isEmpty else { throw GenerateError.modelFailed("活动编号或任务归属无效；请逐项认领来源，用 + 标记同一任务的步骤，或恢复活动整理的默认提示词。") }
+                batchUsage = completion.usage
             }
-            var items = Self.parseItems(text, sources: batch, claimed: batch, priorItems: priorItems, mode: mode)
-            guard !items.isEmpty else { throw GenerateError.modelFailed("活动编号或任务归属无效；请逐项认领来源，用 + 标记同一任务的步骤，或恢复活动整理的默认提示词。") }
             usedModel = true
+            let linkedTasks = Set(items.compactMap(\.taskID))
+            for i in narrative.items.indices where narrative.items[i].taskID == nil && linkedTasks.contains(narrative.items[i].id) {
+                narrative.items[i].taskID = narrative.items[i].id
+                narrative.items[i].taskTitle = narrative.items[i].title
+            }
             for i in items.indices { items[i].generationMode = mode }
             Self.replace(items, revisions: revisions, in: &narrative)
+            narrative = corrections.applying(to: narrative, index: index, away: away)
             narrative.items.sort { $0.timestamp > $1.timestamp }
             narrative.generatedAt = Date()
             if !overwrite { try narrative.save(root: rootDirectory) }
             added += items.count
-            if let usage = completion.usage {
+            if let usage = batchUsage {
                 if totalUsage == nil { totalUsage = usage }
                 else {
                     totalUsage!.promptTokens += usage.promptTokens
@@ -232,9 +260,15 @@ public struct NarrativeGenerator: Sendable {
                     totalUsage!.reasoningTokens += usage.reasoningTokens
                 }
             }
+            if mode == .continuous, !overwrite {
+                try? FileManager.default.removeItem(at: ActivityGroupingWork.file(root: rootDirectory, day: day, batch: batch[0].id))
+            }
             offset = end
         }
-        if overwrite { try narrative.save(root: rootDirectory) }
+        if overwrite {
+            try narrative.save(root: rootDirectory)
+            try? FileManager.default.removeItem(at: rootDirectory.appendingPathComponent("narrative-work/" + day))
+        }
         return Outcome(day: day, newItems: added,
                        totalItems: Self.countItems(narrative, on: day),
                        usedModel: usedModel, usage: totalUsage)
@@ -325,6 +359,12 @@ public struct NarrativeGenerator: Sendable {
         }
         if let failure { throw failure }
         return outcomes
+    }
+
+    static func hasCollectionBoundary(_ previous: MemoryIndex.Entry, _ next: MemoryIndex.Entry) -> Bool {
+        if previous.endReason != nil { return true }
+        guard let end = previous.endedAt else { return false }
+        return (next.firstEventAt ?? next.startedAt).timeIntervalSince(end) >= 60
     }
 
     /// 某日在缓存中的条目数。
@@ -479,24 +519,12 @@ public struct NarrativeGenerator: Sendable {
     你的任务是将一段时间内采集的计算机活动事件，整理成活动记录。
     目标不是生成工作报告，而是生成便于用户快速回忆、定位和恢复上下文的活动索引。
 
-    输出格式依输入模式：连续模式写 `## [S1.A1] 标题`，下一行概览；固定模式写 `## [S1] 标题`。
-    以下片段认领与续接规则仅用于连续模式；固定模式每份来源只写一条，并在条内保留不同活动。
-    按具体对象与目标区分活动：独立目标使用 S1.A1；为同一目标查阅、询问、核对或执行的步骤使用 +S1.A2。
-    例：`## [S1.A1,+S1.A2] 迁移示例项目`；另一个目标单独写 `## [S1.A3] 核对预约名额`。
-    每项活动平等对待：短暂查看、聊天、休闲和工作都应有具体标题与摘要，不按模型判断的重要性降级。
-    不使用 ~ 标记，不生成“其他活动”“零碎活动”“期间的活动”等兜底类别。
-    同一份记忆里的同目标步骤可以归组，不把询问、查看结果、补充要求各建一项。
-    不同目标分别成项；最终界面会按重叠时段折叠，不需要靠省略或降级活动减少卡片。
-    每个新增片段必须且只能认领一次，不同角色也不能重复引用同一个片段。
-    只有目标与对象相同的主活动和内部步骤才可合并。共同应用、项目或宽泛主题不能把不同目标连成一条。
-    同批涉及多个项目时，标题写明具体项目；不能用“源码处理”“项目工作”把不同对象笼统归组。
-    一个原片段混合多个项目且归属不明确时，单独保留为活动，不强行标为某一项目的步骤；查看另一项目代码不自动属于当前迁移。
-    不得跨过另一个活动回填。A→B→A 保留三段，不用同一个宽泛标题吞并 B。
-    原文条目没有精确时刻时，不推断各步骤的先后和实际耗时。
-    已有主任务 P1 只可续入本批首段，如 `[P1,+S1.A1]`。任务目标变化时另开一条，未更新的 P1 省略。
-    一张卡每份来源最多有一个未加前缀的主活动，其余同目标内容使用 + 标记步骤；不同目标分别成卡。
-    续接依据原活动保留关键动作、对象和结果，标题概括稳定任务，不能被最新一个步骤替换。
-    标题与摘要之间不要空行，条目之间空一行。不要输出其它标题或前言。
+    活动归属由程序提供，不重新划分任务或增加来源。
+    连续模式每次仅提供一组材料，按本次请求指定的 JSON 格式返回标题与概览。
+    固定十分钟模式按 S 来源独立写 `## [S1] 标题`，下一行活动概览，保留同一来源中的不同活动。
+    阅读、聊天、休闲和工作平等对待，不按重要性降级，不生成“其他活动”等兜底类别。
+    概览保留具体对象、关键操作与可观察结果；续接标题保持稳定目标，最新步骤写入正文。
+    来源时段不是精确的投入时长，片段编号也不证明各项活动的先后。
 
     标题规则：
     1. 使用「动词 + 对象」结构，通常控制在 8–20 个汉字。
@@ -516,11 +544,8 @@ public struct NarrativeGenerator: Sendable {
     7. 不推测用户的情绪、动机或没有证据支持的行为。
     8. 来源中的“会话显示”“回复称”“计划”要保留归属，不得改成用户已完成发布、测试或其他操作。
     写法示例（仅示范表达，不是来源事实）：
-    `## [S1.A1,+S1.A2] 调整发布说明`
-    `你对照测试反馈补充安装步骤，并修改升级说明。`
-    `## [S1.A3] 核对预约名额`
-    `你查看周末场次的剩余名额。`
-    两项活动分别保留；无需给短活动补写目标、意义或结束状态来凑够字数。
+    标题“调整发布说明”，概览“你对照测试反馈补充安装步骤，并修改升级说明。”
+    不为短活动补写目标、意义或结束状态来凑够字数。
 
     语言风格：
     - 信息密度高，表达自然、客观、克制。

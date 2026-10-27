@@ -19,6 +19,9 @@ public struct TrayTimelineItem: Codable, Sendable, Equatable, Identifiable {
     public var sharesSourcePeriod: Bool? = nil
     public var children: [TrayTimelineItem]? = nil
     public var noClearActivity: Bool? = nil
+    public var sourceRevisions: [String: String]? = nil
+    public var taskID: String? = nil
+    public var taskTitle: String? = nil
     public var leafItems: [TrayTimelineItem] { children?.flatMap(\.leafItems) ?? [self] }
     public var incidentalCount: Int { sourceIncidental?.values.reduce(0) { $0 + $1.count } ?? 0 }
     public var isIncidentalOnly: Bool {
@@ -45,6 +48,7 @@ public struct TraySnapshot: Sendable {
     /// 本轮实际读取的事件字节与解析的记忆数，用于固定数据性能验证。
     public var eventBytesRead: Int
     public var memoriesParsed: Int
+    public var invalidCorrections: Int = 0
 }
 
 /// 独立 actor 提供串行磁盘执行边界；快照只携带展示字段，不携带历史正文。
@@ -68,6 +72,7 @@ public actor TraySnapshotLoader {
     private var previousAway = AwayPeriods()
     private var previousTimeZone: TimeZone?
     private var previousEdits = TimelineEdits()
+    private var previousCorrections = TimelineCorrections()
     private var previousTimelineMode: SummarySettings.TimelineMode?
     private var groups: [TrayTimelineGroup] = []
     private var deletedSummaries: [TimelineDeletions.Record] = []
@@ -78,6 +83,7 @@ public actor TraySnapshotLoader {
         var date: Date
         var firstEventAt: Date?
         var endedAt: Date?
+        var endReason: String?
         var title: String
         var summary: String
         var apps: [String]
@@ -87,6 +93,13 @@ public actor TraySnapshotLoader {
     public init() {}
 
     private static func activityPresentation(_ entry: MemoryIndex.Entry) -> MemoryIndex.Entry {
+        if entry.inputListeningDegraded {
+            var result = entry
+            result.title = ActivityEvidence.inputDegradedTitle
+            result.summary = ActivityEvidence.inputDegradedSummary
+            result.activityFragmentCount = 1
+            return result
+        }
         if entry.noClearActivity {
             var result = entry
             result.title = ActivityEvidence.noActivityTitle
@@ -225,15 +238,16 @@ public actor TraySnapshotLoader {
             narrativeStamp = nStamp
         }
         if parsed > 0 || removedMemories || narrativeChanged { contentVersion += 1 }
-        let sources = index.entries.map { TimelineSource(url: $0.fileURL, date: $0.startedAt, firstEventAt: $0.firstEventAt, endedAt: $0.endedAt,
+        let sources = index.entries.map { TimelineSource(url: $0.fileURL, date: $0.startedAt, firstEventAt: $0.firstEventAt, endedAt: $0.endedAt, endReason: $0.endReason,
                                            title: $0.title, summary: $0.summary, apps: $0.applications, activityFragmentCount: $0.activityFragmentCount) }
         let deletions = (try? TimelineDeletions.load(root: root)) ?? previousDeletions
         let away = AwayPeriods.load(root: root)
         let mode = (try? SummarySettings.load(root: root))?.timelineMode ?? previousTimelineMode ?? .continuous
         let edits = (try? TimelineEdits.load(root: root)) ?? previousEdits
-        if edits != previousEdits { contentVersion += 1 }
+        let corrections = (try? TimelineCorrections.load(root: root)) ?? previousCorrections
+        if edits != previousEdits || corrections != previousCorrections { contentVersion += 1 }
         if away != previousAway || deletions != previousDeletions { contentVersion += 1 }
-        if edits != previousEdits || deletions != previousDeletions || away != previousAway || sources != previousTimelineEntries || narrative.items != previousNarrative || previousTimeZone != timeZone || previousTimelineMode != mode {
+        if edits != previousEdits || corrections != previousCorrections || deletions != previousDeletions || away != previousAway || sources != previousTimelineEntries || narrative.items != previousNarrative || previousTimeZone != timeZone || previousTimelineMode != mode {
             if previousTimelineMode != mode { contentVersion += 1 }
             var displayNarrative = narrative
             let lookup = Dictionary(uniqueKeysWithValues: index.entries.map { ($0.id, $0) })
@@ -247,6 +261,9 @@ public actor TraySnapshotLoader {
                 displayNarrative.items[i].summary = entries.map(\.summary)
                     .reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }.joined(separator: "\n\n")
             }
+            if mode == .continuous {
+                displayNarrative = corrections.applying(to: displayNarrative, index: index, away: away)
+            }
             displayNarrative = displayNarrative.separatingAwayPeriods(index: index, away: away, mode: mode)
             let allGroups = Self.timeline(index: index, narrative: displayNarrative, away: away, restored: deletions.restoredItems, timeZone: timeZone, mode: mode)
             deletedSummaries = deletions.trashEntries(candidates: allGroups.flatMap(\.items))
@@ -256,15 +273,7 @@ public actor TraySnapshotLoader {
                     !deletions.ids.contains(item.deletionID)
                         && !(aliases[item.id] ?? []).contains { deletions.ids.contains("narrative:" + $0) }
                 }
-                if mode == .fixedTenMinutes {
-                    for i in items.indices where !items[i].isAway && items[i].memoryFiles.count == 1 {
-                        if let edit = edits.entries[items[i].memoryFiles[0].lastPathComponent] {
-                            items[i].title = edit.title
-                            items[i].summary = edit.summary
-                            items[i].manualEdit = true
-                        }
-                    }
-                }
+                items = items.map { edits.applying(to: $0, mode: mode, index: index) }
                 return items.isEmpty ? nil : TrayTimelineGroup(day: group.day, items: items)
             }
             let cards = TimelineLayout.cards(groups.flatMap(\.items))
@@ -274,6 +283,7 @@ public actor TraySnapshotLoader {
             formatter.timeZone = timeZone
             let days = Dictionary(grouping: cards, by: { formatter.string(from: $0.timestamp) })
             groups = days.keys.sorted(by: >).map { TrayTimelineGroup(day: $0, items: days[$0]!) }
+            previousCorrections = corrections
             previousEdits = edits
             previousDeletions = deletions
             previousTimelineEntries = sources
@@ -287,10 +297,11 @@ public actor TraySnapshotLoader {
                     lastWriteAt: lastWrite, sealedSegmentIDs: sealed)
         let status = CollectorStatus(process: CollectorStatus.readProcess(root: root, fileManager: fm), data: data,
                      memories: CollectorStatus.memoryStats(index: index, data: data), rootDirectory: root,
-                     awayReason: away.startedAt.map { _ in away.startedReason ?? .locked })
+                     awayReason: away.startedAt.map { _ in away.startedReason ?? .locked },
+                     inputListening: InputListeningStatus.load(root: root))
         return TraySnapshot(status: status, control: CollectorControl.load(root: root),
                             groups: Self.addingOpenAway(to: groups, away: away, timeZone: timeZone),
-                            contentVersion: contentVersion, timelineMode: mode, deletedSummaries: deletedSummaries, eventBytesRead: bytesRead, memoriesParsed: parsed)
+                            contentVersion: contentVersion, timelineMode: mode, deletedSummaries: deletedSummaries, eventBytesRead: bytesRead, memoriesParsed: parsed, invalidCorrections: corrections.invalidCount(index: index))
     }
 
     private static func addingOpenAway(to groups: [TrayTimelineGroup], away: AwayPeriods,
@@ -352,7 +363,8 @@ public actor TraySnapshotLoader {
                 sourceSteps: item.sourceSteps, sourceIncidental: nil,
                 sharesSourcePeriod: item.sourceActivities?.contains { name, numbers in
                     lookup[name].map { numbers.count < ActivityFragment.count(in: $0) } ?? false
-                }, noClearActivity: noClearActivity ? true : nil))
+                }, noClearActivity: noClearActivity ? true : nil, sourceRevisions: Dictionary(uniqueKeysWithValues: item.sourceMemories.compactMap { name in lookup[name].map { (name, $0.revision) } }),
+                taskID: item.taskID, taskTitle: item.taskTitle))
         }
         for item in narrative.items {
             covered.formUnion(item.sourceMemories)
@@ -373,6 +385,8 @@ public actor TraySnapshotLoader {
                 var restoredItem = ActivityNarrative.Item(id: item.id, timestamp: item.timestamp,
                     title: item.title, summary: item.summary, apps: item.apps,
                     sourceMemories: item.memoryFiles.map(\.lastPathComponent))
+                restoredItem.taskID = item.taskID
+                restoredItem.taskTitle = item.taskTitle
                 restoredItem.sourceActivities = item.sourceActivities
                 restoredItem.sourceSteps = item.sourceSteps
                 restoredItem.sourceIncidental = item.sourceIncidental

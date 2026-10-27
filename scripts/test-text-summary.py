@@ -31,10 +31,14 @@ class Model(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b'synthetic unavailable')
             return
         user = next(m['content'] for m in payload['messages'] if m['role'] == 'user')
-        if '待整理的新增活动' in user:
+        system = payload['messages'][0]['content']
+        if '只决定归属，不撰写摘要' in system:
+            refs = re.findall(r'^#### 活动 (S\d+\.A\d+)$', user, re.M)
+            content = json.dumps({'groups': [{'references': refs, 'continuesPrevious': mode == 'continuity' and '## 紧邻且可续接的 P1' in user, 'task': None}]})
+        elif '分组已确定' in user:
+            content = json.dumps({'title': '合成活动', 'summary': '查看了合成窗口并编辑合成文档。'})
+        elif '待整理的新增活动' in user:
             numbers = re.findall(r'### 来源 (S\d+)', user)
-            if mode == 'continuity' and '### 已有活动 P1' in user:
-                numbers.insert(0, 'P1')
             content = f'## [{",".join(numbers)}] 合成活动\n查看了合成窗口并编辑合成文档。'
         else:
             content = '### Memory summary\n合成摘要。\n### 本次活动\n查看了合成窗口。'
@@ -42,7 +46,7 @@ class Model(http.server.BaseHTTPRequestHandler):
             content = 'SHADOW OUTPUT'
         if mode == 'empty':
             content = ''
-        if mode == 'invalid_sources' and '待整理的新增活动' in user:
+        if mode == 'invalid_sources' and ('待整理的新增活动' in user or '只决定归属，不撰写摘要' in system or '分组已确定' in user):
             content = '## [S99] 不存在的来源\n合成内容。'
         body = json.dumps({'choices': [{'message': {'content': content}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 30, 'total_tokens': 130, 'prompt_cache_hit_tokens': 20, 'completion_tokens_details': {'reasoning_tokens': 0}}}).encode()
         self.send_response(200)
@@ -136,12 +140,12 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
         narrative = subprocess.run([binary, 'narrative', '--out', directory, '--overwrite'],
                                    env=env, capture_output=True, text=True, timeout=30)
         assert narrative.returncode == 0, narrative.stderr
-        assert len(requests) == 2, f'expected second local narrative request, got {len(requests)}'
+        assert len(requests) == 3, f'expected ownership and prose requests, got {len(requests)}'
         narrative_user = next(m['content'] for m in requests[1]['messages'] if m['role'] == 'user')
         assert '文本证据：本段含未确认归因的值变化' not in narrative_user
         assert '不能把这些片段写成用户输入、发送或完成' not in narrative_user
         ledger = [json.loads(p.read_text()) for p in (root / 'requests').glob('*.json')]
-        assert len(ledger) == 2 and all(r['status'] == 'success' for r in ledger)
+        assert len(ledger) == 3 and all(r['status'] == 'success' for r in ledger)
         assert all(r['usage']['cachedPromptTokens'] == 20 for r in ledger)
         assert all(r['usage']['totalTokens'] == 130 for r in ledger)
         assert all(r['system'] and r['input'] and r['output'] for r in ledger)
@@ -156,7 +160,7 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
         summary_settings = {
             'tenMinutePrompt': requests[0]['messages'][0]['content'] + '\nSYNTHETIC TEN MINUTE OVERRIDE',
             'sixHourPrompt': 'SYNTHETIC SIX HOUR OVERRIDE',
-            'narrativePrompt': requests[1]['messages'][0]['content'] + '\nSYNTHETIC NARRATIVE OVERRIDE',
+            'narrativePrompt': requests[2]['messages'][0]['content'] + '\nSYNTHETIC NARRATIVE OVERRIDE',
         }
         (root / 'summary.json').write_text(json.dumps(summary_settings))
         assert regenerate().returncode == 0
@@ -169,7 +173,7 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
         narrative = subprocess.run([binary, 'narrative', '--out', directory, '--overwrite'],
                                    env=local_env, capture_output=True, text=True, timeout=30)
         assert narrative.returncode == 0, narrative.stderr
-        assert requests[-1]['messages'][0]['content'] == summary_settings['narrativePrompt']
+        assert requests[-1]['messages'][0]['content'].startswith(summary_settings['narrativePrompt'])
         six_hour = subprocess.run([binary, 'memorize', '--out', directory, '--granularity', '6h'],
                                   env=local_env, capture_output=True, text=True, timeout=30)
         assert six_hour.returncode == 0, six_hour.stderr
@@ -210,7 +214,7 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
                    else f'2020-01-01T{minute // 60:02d}-{minute % 60:02d}-00Z')
             (root / 'memories' / f'{sid}-ABCD-10min-memory-summary.md').write_text(template)
         (root / 'narrative.json').unlink()
-        fail_at = len(requests) + 2
+        fail_at = len(requests) + 3
         narrative = subprocess.run([binary, 'narrative', '--out', directory], env=local_env,
                                    capture_output=True, text=True, timeout=30)
         saved = json.loads((root / 'narrative.json').read_text())
@@ -220,7 +224,7 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
         narrative = subprocess.run([binary, 'narrative', '--out', directory], env=local_env,
                                    capture_output=True, text=True, timeout=30)
         assert narrative.returncode == 0, narrative.stderr
-        assert len(requests) == before + 1, 'saved batch was charged again on resume'
+        assert len(requests) == before + 2, 'saved batch was charged again on resume'
         saved = json.loads((root / 'narrative.json').read_text())
         assert len({name for item in saved['items'] for name in item['sourceMemories']}) == 8
         before = len(requests)
@@ -241,7 +245,7 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
         before = len(requests)
         revised = subprocess.run([binary, 'narrative', '--out', directory], env=local_env,
                                  capture_output=True, text=True, timeout=30)
-        assert revised.returncode == 0 and len(requests) == before + 1, revised.stderr
+        assert revised.returncode == 0 and len(requests) == before + 2, revised.stderr
         refreshed = json.loads((root / 'narrative.json').read_text())
         assert unchanged_item in refreshed['items'], 'unrelated item was recomputed'
         assert len({name for item in refreshed['items'] for name in item['sourceMemories']}) == 8
@@ -306,7 +310,7 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
         add_away_source('10:00:00', '10:05:00')
         before = len(requests)
         assert away_narrative().returncode == 0
-        assert len(requests) == before + 2, 'one model batch crossed an away boundary'
+        assert len(requests) == before + 4, 'one model batch crossed an away boundary'
         saved = json.loads((away_root / 'narrative.json').read_text())
         assert len(saved['items']) == 3
         assert sorted(len(i['sourceMemories']) for i in saved['items']) == [1, 2, 2]
@@ -318,7 +322,7 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
         before = len(requests)
         legacy_cache = (away_root / 'narrative.json').read_bytes()
         assert away_narrative().returncode == 0 and len(requests) == before, 'stable history was recalculated without user choice'
-        fail_at = len(requests) + 2
+        fail_at = len(requests) + 3
         assert away_narrative(overwrite=True).returncode != 0
         interrupted = json.loads((away_root / 'narrative.json').read_text())
         assert sorted(s for i in interrupted['items'] for s in i['sourceMemories']) == sorted(legacy['sourceMemories']), 'partial repair lost sources from another episode'
@@ -326,7 +330,7 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
         fail_at = None
         before = len(requests)
         assert away_narrative(overwrite=True).returncode == 0
-        assert len(requests) == before + 3
+        assert len(requests) == before + 4, (len(requests)-before, 'cached first batch must not be regenerated')
         repaired = json.loads((away_root / 'narrative.json').read_text())
         assert len(repaired['items']) == 3
         assert all('legacy-all-day' in i.get('previousIDs', []) for i in repaired['items'])

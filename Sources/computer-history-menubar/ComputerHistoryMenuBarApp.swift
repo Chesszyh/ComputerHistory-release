@@ -28,7 +28,14 @@ struct ComputerHistoryMenuBarApp: App {
             }
             dataRoot = URL(fileURLWithPath: args[index + 1], isDirectory: true)
         } else { dataRoot = CollectorStatus.defaultRoot }
-        _model = StateObject(wrappedValue: StatusModel(root: dataRoot))
+        let statusModel = StatusModel(root: dataRoot)
+        _model = StateObject(wrappedValue: statusModel)
+        AppDelegate.onLaunch = {
+            if Bundle.main.bundleURL.pathExtension == "app",
+               !UserDefaults.standard.bool(forKey: "ComputerHistory.didCompleteSetup") {
+                statusModel.openPermissionSetup()
+            }
+        }
         let root = dataRoot.appendingPathComponent(".menubar")
         if CommandLine.arguments.contains("--stop") {
             guard let identity = CollectorProcessLease.runningIdentity(
@@ -70,9 +77,12 @@ struct ComputerHistoryMenuBarApp: App {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    static var onLaunch: (() -> Void)?
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 只驻留菜单栏，不占用 Dock 与程序切换器。
         NSApp.setActivationPolicy(.accessory)
+        Self.onLaunch?()
     }
 }

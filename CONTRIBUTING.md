@@ -57,8 +57,11 @@ python3 scripts/make-tray-fixture.py --out /tmp/computer-history-tray-fixture --
 bash scripts/test-menubar-panel.sh
 bash scripts/test-menubar-panel.sh scripts/test-menubar-usage.swift
 bash scripts/test-menubar-panel.sh scripts/test-menubar-settings.swift
+bash scripts/test-menubar-panel.sh scripts/test-menubar-permissions.swift
 bash scripts/test-menubar-panel.sh scripts/test-collector-input.swift
 ```
+
+独立授权窗口回归实际创建 `NSWindow`，覆盖初次显示、长提示和关闭重开后的尺寸，不能用嵌入设置页的截图替代。它使用合成权限响应，不发起系统授权。
 
 模型列表与服务端推理强度元数据使用本地模型列表接口验证，不调用生成接口或读取真实密钥：
 
@@ -118,10 +121,30 @@ bash scripts/test-menubar-panel.sh scripts/test-accessibility-relaunch.swift --c
 
 该测试需要为测试程序提供辅助功能权限，不开启真实采集或调用模型。ActivityWatch 常规测试使用模拟接口，验证本机数据桶选择、过期数据、取消请求、屏蔽规则、区间去重和总结来源标注，不访问正在运行的 ActivityWatch 服务。
 
-`test-narrative-activities.py` 使用合成多任务记忆和本地模拟模型，检查共享来源的活动拆分、主任务与步骤归组、穿插归属与续接、原文保留、失败不覆盖、来源修订及固定十分钟模式。
+`test-narrative-activities.py` 使用合成多任务记忆和本地模拟模型，检查先归属后概览、任务间材料隔离、失败阶段续跑、相邻续接、中断后关联、原文保留、来源修订及固定十分钟模式。
 
 `TimelineLayoutTests` 使用同刻、零长度、包含、相交链、相接区间及固定种子的随机区间验证时间点唯一、严格顺序、不重叠和活动完整归属；`InteractionEvidenceTests` 验证动态界面与不确定控件变化不被当作明确交互，不依赖个人项目名或私有历史。
 
 原生面板回归同时检查未变化的刷新不重复发布内容版本、模型健康和备份状态；对照逐次创建与复用日期格式化器的输出，并打印同一组合成时间的耗时。耗时只用于定位该操作的成本，不作为整机 CPU 或长期稳定性的保证。
 
 `VERSION` 可使用三段版本，或带 `-alpha.N`、`-beta.N`、`-rc.N` 的候选版本。发布入口根据版本自动设置预发布，候选版不会标为最新正式版。已有本机运行实例时，测试使用独立的 `--scratch-path .build/verification`，避免测试构建替换运行程序；对应程序位置可用同一 scratch 路径的 `swift build --show-bin-path` 查询。
+
+`ActivityGroupingTests` 覆盖片段完整认领、中断关系、来源修订约束与最终摘要覆盖。原生设置回归通过真实单击和双击验证复制与编辑互斥，并检查连续模式编辑和任务纠错；源记忆保持逐字不变。
+
+## 应用安装与密钥助手验证
+
+密钥回归只创建并删除临时目录对应的合成钥匙串条目，禁止系统验证窗口，不读取用户条目。签名构建后运行：
+
+```bash
+python3 scripts/test-credentials.py .build/release/computer-history
+python3 scripts/test-app-install.py
+python3 scripts/test-app-upgrade.py /你的合成测试应用.app --adhoc
+```
+
+`computer-history-credentials` 独立于核心业务模块。正常更新通过安装器保留其已授权二进制；修改助手协议前应安排显式迁移，不得静默替换并声称授权仍有效。原生面板测试程序旁也须安装签名助手，构建脚本已处理。
+
+## 本地构建与安装版
+
+日常运行使用固定安装位置的应用。源码输出目录通过 `swift build --show-bin-path` 查询，不依赖特定 Swift 构建后端的路径；`scripts/menubar.sh` 默认打开已安装应用，源码调试可通过 `COMPUTER_HISTORY_MENUBAR_BIN` 指定程序。
+
+构建后通过 `scripts/bundle-app.py` 封装，再使用应用资源中的安装器更新。安装器保留已授权密钥助手；直接用构建目录中的助手覆盖安装版会绕过此流程。清理旧构建前先确认运行进程与登录服务已指向安装版，保留当前验收包、可回退的安装基线及必要的验证日志。源码、个人数据和发布台账不属于构建清理范围。

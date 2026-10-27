@@ -12,6 +12,7 @@ public enum InputEvent: Sendable {
     case otherMouseDown(clickCount: Int, flags: CGEventFlags, location: CGPoint)
     case keyDown(keyCode: UInt16, flags: CGEventFlags, isRepeat: Bool)
     case flagsChanged(flags: CGEventFlags)
+    case scroll(deltaX: Double, deltaY: Double, flags: CGEventFlags, location: CGPoint)
 }
 
 /// 修饰键的落盘名称。实测样本取值集合：
@@ -46,6 +47,10 @@ public enum ModifierNames {
 /// `CGEventTap` 的回调是 C 函数指针，没有捕获上下文，因此用全局实例转发。
 /// handler 同步运行于 tap 所在 runloop，耗时会阻塞后续输入处理。
 public final class InputTap {
+    private var nextRecoveryAt = Date.distantPast
+    private var pendingScroll = false
+    public private(set) var interruptionCount = 0
+
     public typealias Handler = (InputEvent) -> Void
     private let handler: Handler
     private var tap: CFMachPort?
@@ -79,28 +84,92 @@ public final class InputTap {
         return AXIsProcessTrustedWithOptions(opts)
     }
 
+    /// 当前进程是否已获 Input Monitoring 权限（监听按键如 keyDown 的前置条件）。
+    public static var hasInputMonitoringPermission: Bool {
+        CGPreflightListenEventAccess()
+    }
+
+    /// 请求输入监控权限：触发系统弹窗。仅应在交互式启动时调用。
+    @discardableResult
+    public static func requestInputMonitoringPermission() -> Bool {
+        CGRequestListenEventAccess()
+    }
+
+    public var isEnabled: Bool {
+        guard let tap, CFMachPortIsValid(tap) else { return false }
+        return CGEvent.tapIsEnabled(tap: tap)
+    }
+
+    /// 当前 tap 是否包含键盘按键监听。
+    public private(set) var hasKeyListening: Bool = false
+
+    /// 检查并在监听被系统禁用或失效时重新激活。
+    @discardableResult
+    public func ensureActive(now: Date = Date()) -> Bool {
+        guard isEnabled || now >= nextRecoveryAt else { return false }
+        let canListenKeys = Self.hasInputMonitoringPermission
+        if let tap, CFMachPortIsValid(tap) {
+            // 如果此前未包含按键监听，而现在已获得输入监控授权，需要重建以升级掩码
+            if hasKeyListening != canListenKeys {
+                nextRecoveryAt = now.addingTimeInterval(30)
+                stop()
+                do {
+                    try start()
+                    return isEnabled
+                } catch {
+                    return false
+                }
+            }
+            if !CGEvent.tapIsEnabled(tap: tap) {
+                CGEvent.tapEnable(tap: tap, enable: true)
+            }
+            if CGEvent.tapIsEnabled(tap: tap) {
+                return true
+            }
+        }
+        nextRecoveryAt = now.addingTimeInterval(30)
+        stop()
+        do {
+            try start()
+            return isEnabled
+        } catch {
+            return false
+        }
+    }
+
     /// 启动监听。
     ///
     /// 用 `kCGSessionEventTap`（会话级）而非 `kCGHIDEventTap`：前者足以覆盖本用户
     /// 的输入，且不需要 root。
     public func start() throws {
-        let mask: CGEventMask =
+        nextRecoveryAt = Date().addingTimeInterval(30)
+        var mask: CGEventMask =
             (1 << CGEventType.leftMouseDown.rawValue) |
             (1 << CGEventType.rightMouseDown.rawValue) |
             (1 << CGEventType.otherMouseDown.rawValue) |
-            (1 << CGEventType.keyDown.rawValue) |
-            (1 << CGEventType.flagsChanged.rawValue)
+            (1 << CGEventType.scrollWheel.rawValue)
+
+        let canListenKeys = Self.hasInputMonitoringPermission
+        if canListenKeys {
+            mask |= (1 << CGEventType.keyDown.rawValue)
+            mask |= (1 << CGEventType.flagsChanged.rawValue)
+        }
+        self.hasKeyListening = canListenKeys
 
         let refcon = Unmanaged.passUnretained(self).toOpaque()
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
-            options: .listenOnly,       // 只监听，不改写事件
+            options: .defaultTap,       // 透传型事件 tap，回调中返回原事件不做改写
             eventsOfInterest: mask,
             callback: { _, type, event, refcon in
                 guard let refcon else { return Unmanaged.passUnretained(event) }
                 let me = Unmanaged<InputTap>.fromOpaque(refcon).takeUnretainedValue()
-                me.dispatch(type: type, event: event)
+                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                    me.handleDisabled(type: type)
+                    return nil
+                }
+                me.dispatch(type: type, event: event, deferred: true)
                 return Unmanaged.passUnretained(event)
             },
             userInfo: refcon
@@ -116,7 +185,12 @@ public final class InputTap {
     }
 
     public func stop() {
-        if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
+        if let tap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+            if CFMachPortIsValid(tap) {
+                CFMachPortInvalidate(tap)
+            }
+        }
         if let source = runLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
         }
@@ -124,25 +198,50 @@ public final class InputTap {
         tap = nil
     }
 
-    func dispatch(type: CGEventType, event: CGEvent) {
+    func handleDisabled(type: CGEventType) {
+        interruptionCount += 1
+        if let tap, CFMachPortIsValid(tap) {
+            CGEvent.tapEnable(tap: tap, enable: true)
+        }
+    }
+
+    func dispatch(type: CGEventType, event: CGEvent, deferred: Bool = false) {
         let flags = event.flags
+        func send(_ value: InputEvent) {
+            if !deferred { handler(value); return }
+            // AX queries and persistence run after the system event callback has returned.
+            let targetPID = Int32(event.getIntegerValueField(.eventTargetUnixProcessID))
+            CFRunLoopPerformBlock(CFRunLoopGetCurrent(), CFRunLoopMode.commonModes.rawValue) { [self] in
+                if case .scroll = value { pendingScroll = false }
+                if targetPID > 0, NSWorkspace.shared.frontmostApplication?.processIdentifier != targetPID { return }
+                handler(value)
+            }
+        }
         switch type {
         case .leftMouseDown:
-            handler(.leftMouseDown(clickCount: Int(event.getIntegerValueField(.mouseEventClickState)), flags: flags, location: event.location))
+            send(.leftMouseDown(clickCount: Int(event.getIntegerValueField(.mouseEventClickState)), flags: flags, location: event.location))
         case .rightMouseDown:
-            handler(.rightMouseDown(clickCount: Int(event.getIntegerValueField(.mouseEventClickState)), flags: flags, location: event.location))
+            send(.rightMouseDown(clickCount: Int(event.getIntegerValueField(.mouseEventClickState)), flags: flags, location: event.location))
         case .otherMouseDown:
-            handler(.otherMouseDown(clickCount: Int(event.getIntegerValueField(.mouseEventClickState)), flags: flags, location: event.location))
+            send(.otherMouseDown(clickCount: Int(event.getIntegerValueField(.mouseEventClickState)), flags: flags, location: event.location))
         case .keyDown:
             let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
             let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
-            handler(.keyDown(keyCode: keyCode, flags: flags, isRepeat: isRepeat))
+            send(.keyDown(keyCode: keyCode, flags: flags, isRepeat: isRepeat))
         case .flagsChanged:
-            handler(.flagsChanged(flags: flags))
+            send(.flagsChanged(flags: flags))
+        case .scrollWheel:
+            guard event.getIntegerValueField(.scrollWheelEventMomentumPhase) == 0 else { return }
+            let dx = event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2)
+            let dy = event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1)
+            guard dx != 0 || dy != 0 else { return }
+            if deferred {
+                guard !pendingScroll else { return }
+                pendingScroll = true
+            }
+            send(.scroll(deltaX: dx, deltaY: dy, flags: flags, location: event.location))
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
-            // 系统会在超时或用户输入时临时禁用 tap，必须显式重新启用，
-            // 否则采集会静默停止。
-            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            handleDisabled(type: type)
         default:
             break
         }

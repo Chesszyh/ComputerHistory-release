@@ -7,6 +7,7 @@ for argument in "$@"; do
 done
 bin_dir="$(swift build "$@" --show-bin-path)"
 if command -v local-codesign >/dev/null 2>&1; then
+    local-codesign --identifier xyz.chesszyh.computer-history.credentials "$bin_dir/computer-history-credentials"
     local-codesign --identifier xyz.chesszyh.computer-history.cli "$bin_dir/computer-history"
     local-codesign --identifier xyz.chesszyh.computer-history.menubar "$bin_dir/computer-history-menubar"
 fi

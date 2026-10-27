@@ -79,6 +79,34 @@ final class TextQualityTests: XCTestCase {
         XCTAssertEqual(tracker.flush().first?.replaces, ["s#1"])
     }
 
+    func testCommittedPrefixSurvivesBoundaryDuringNextComposition() {
+        let tracker = TextInputTracker()
+        _ = tracker.observe(.init(value: "", hasMarkedText: false), at: t0)
+        _ = tracker.observe(.init(value: "你", hasMarkedText: false, hasInputActivity: true), at: t0.addingTimeInterval(1))
+        _ = tracker.observe(.init(value: "你hao", hasMarkedText: true, hasInputActivity: true), at: t0.addingTimeInterval(2))
+        XCTAssertEqual(tracker.flush().map(\.text), ["你"])
+        _ = tracker.observe(.init(value: "你好", hasMarkedText: false, hasInputActivity: true), at: t0.addingTimeInterval(3))
+        XCTAssertEqual(tracker.flush().map(\.text), ["好"])
+    }
+
+    func testExplicitFlushDoesNotPublishUncommittedPinyin() {
+        let tracker = TextInputTracker()
+        _ = tracker.observe(.init(value: "", hasMarkedText: false), at: t0)
+        _ = tracker.observe(.init(value: "ni", hasMarkedText: true, hasInputActivity: true), at: t0.addingTimeInterval(1))
+        XCTAssertTrue(tracker.flush().isEmpty, "A segment or submit boundary cannot turn marked pinyin into committed text")
+        _ = tracker.observe(.init(value: "你", hasMarkedText: false, hasInputActivity: true), at: t0.addingTimeInterval(2))
+        XCTAssertEqual(tracker.flush().map(\.text), ["你"])
+    }
+
+    func testMissingCompositionObservationDoesNotCommitAnActiveComposition() {
+        let tracker = TextInputTracker()
+        _ = tracker.observe(.init(value: "", hasMarkedText: false), at: t0)
+        _ = tracker.observe(.init(value: "ni", hasMarkedText: true), at: t0.addingTimeInterval(1))
+        XCTAssertTrue(tracker.observe(.init(value: "ni"), at: t0.addingTimeInterval(10)).isEmpty)
+        _ = tracker.observe(.init(value: "你", hasMarkedText: false), at: t0.addingTimeInterval(11))
+        XCTAssertEqual(tracker.flush().map(\.text), ["你"])
+    }
+
     func testMarkedTextDoesNotCommitOnPauseAndConfirmedCommitReplacesIt() {
         let tracker = TextInputTracker()
         _ = tracker.observe(.init(value: ""), at: t0)

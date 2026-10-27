@@ -30,6 +30,8 @@ public struct ActivityNarrative: Codable, Sendable, Equatable {
         public var sourceIncidental: [String: [Int]]?
         public var previousIDs: [String]?
         public var generationMode: SummarySettings.TimelineMode?
+        public var taskID: String?
+        public var taskTitle: String?
 
         public var isIncidentalOnly: Bool {
             guard let activities = sourceActivities, !activities.isEmpty else { return false }
@@ -64,6 +66,8 @@ public struct ActivityNarrative: Codable, Sendable, Equatable {
             summary: entries.map(\.activitySummary).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }.joined(separator: "\n\n"),
             apps: entries.flatMap(\.applications).reduce(into: []) { if !$0.contains($1) { $0.append($1) } }, sourceMemories: names)
         if let previous {
+            item.taskID = previous.taskID
+            item.taskTitle = previous.taskTitle
             item.previousIDs = Array(Set([previous.id] + (previous.previousIDs ?? []))).filter { $0 != item.id }.sorted()
         }
         return item
@@ -109,6 +113,8 @@ public struct ActivityNarrative: Codable, Sendable, Equatable {
                 for entry in group {
                     if mode == .continuous, let last = runs.last?.last,
                        last.noClearActivity == entry.noClearActivity,
+                       !NarrativeGenerator.hasCollectionBoundary(last, entry),
+                       last.inputListeningDegraded == entry.inputListeningDegraded,
                        let before = positions[last.id], positions[entry.id] == before + 1 {
                         runs[runs.count - 1].append(entry)
                     } else { runs.append([entry]) }

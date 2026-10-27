@@ -21,6 +21,11 @@ class Model(http.server.BaseHTTPRequestHandler):
             report_started.set();release.wait(12)
         numbers = re.findall(r'### 来源 (S\d+)', data['messages'][1]['content'])
         content=f'## [{",".join(numbers)}] 合成活动\n合成摘要。' if numbers else '### 本次活动\n合成任务取得进展。'
+        user=data['messages'][1]['content']
+        if '只决定归属，不撰写摘要' in data['messages'][0]['content']:
+            content=json.dumps({'groups':[{'references':re.findall(r'^#### 活动 (S\d+\.A\d+)$',user,re.M),'continuesPrevious':False,'task':None}]})
+        elif '分组已确定' in user:
+            content=json.dumps({'title':'合成活动','summary':'合成摘要。'})
         body=json.dumps({'choices':[{'message':{'content':content},'finish_reason':'stop'}],'usage':{'prompt_tokens':10,'completion_tokens':10,'total_tokens':20}}).encode()
         try:self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
         except (BrokenPipeError,ConnectionResetError):pass
@@ -29,7 +34,7 @@ class Model(http.server.BaseHTTPRequestHandler):
 def segment(root,sid):
     directory=root/'segments'/sid;directory.mkdir(parents=True,exist_ok=True)
     stamp=datetime.datetime.strptime(sid,'%Y-%m-%dT%H-%M-%SZ').isoformat()+'Z'
-    (directory/'events.jsonl').write_text(json.dumps({'id':1,'timestamp':stamp,'kind':'window.changed','app':{'name':'Synthetic','bundleIdentifier':'test.app'}})+'\n')
+    (directory/'events.jsonl').write_text(json.dumps({'id':1,'timestamp':stamp,'kind':'mouse.click','app':{'name':'Synthetic','bundleIdentifier':'test.app'}})+'\n')
     (directory/'metadata.json').write_text('{}')
 def ready(root,sid):return bool(list((root/'memories').glob(sid+'-*-10min-memory-summary.md')))
 def launch(root,offline):

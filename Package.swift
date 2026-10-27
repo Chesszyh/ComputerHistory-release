@@ -9,6 +9,7 @@ let package = Package(
         // 拆成 library + 可执行文件，便于对编解码与差分逻辑做单元测试。
         .target(name: "ComputerHistoryCore"),
         .executableTarget(name: "computer-history", dependencies: ["ComputerHistoryCore"]),
+        .executableTarget(name: "computer-history-credentials"),
         // 托盘应用：展示活动时间线、当前状态与运行状态。
         .executableTarget(name: "computer-history-menubar",
                           dependencies: ["ComputerHistoryCore"]),

@@ -43,7 +43,7 @@ public struct SummarySettings: Codable, Sendable, Equatable {
             switch self {
             case .tenMinute: return "从事件中总结动作、对象与关键内容。无明显活动由程序判定，不调用模型。"
             case .sixHour: return "用于命令行手动生成六小时汇总。"
-            case .narrative: return "整理十分钟记忆中的活动；当前时间线模式的编号规则会在请求时追加。"
+            case .narrative: return "先确定活动归属，再逐组生成概览；该提示词用于概览写法，输出格式由程序追加。"
             case .daily: return "从当天十分钟记忆生成日报，生成前自动补齐缺失或失败的记忆。"
             case .weekly: return "从完整日报生成周报，生成前自动补齐所需记忆与日报。"
             }

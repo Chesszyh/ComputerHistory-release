@@ -40,6 +40,7 @@ public struct CollectorStatus: Sendable, Equatable {
     public var memories: MemoryStats
     public var rootDirectory: URL
     public var awayReason: AwayPeriods.Reason? = nil
+    public var inputListening: InputListeningStatus? = nil
 
     /// 采集器是否仍在写入。超过一个段周期没有新事件即视为停滞——
     /// 进程活着但没有产出，与「没在用电脑」不同，值得提示。
@@ -64,7 +65,8 @@ public struct CollectorStatus: Sendable, Equatable {
         let away = AwayPeriods.load(root: root)
         return CollectorStatus(process: process, data: data,
                                memories: memories, rootDirectory: root,
-                               awayReason: away.startedAt.map { _ in away.startedReason ?? .locked })
+                               awayReason: away.startedAt.map { _ in away.startedReason ?? .locked },
+                               inputListening: InputListeningStatus.load(root: root, now: now))
     }
 
     public static func empty(root: URL) -> CollectorStatus {

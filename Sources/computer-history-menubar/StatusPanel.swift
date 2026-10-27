@@ -230,6 +230,7 @@ struct RuntimeSection: View {
             .buttonStyle(.plain)
 
             if model.showsRuntimeDetails {
+                Text(model.status.inputListening?.label ?? "输入监听状态未知").font(.system(size: 10)).foregroundStyle(.secondary)
                 RuntimeMetricsGrid(model: model)
                 Button { model.openLog() } label: {
                     Label("查看日志", systemImage: "doc.text").font(.system(size: 10))
@@ -414,8 +415,21 @@ struct TimelineSection: View {
                     Button("复制所选") { model.copySelectedSummaries() }
                         .disabled(model.selectedSummaryIDs.isEmpty)
                         .accessibilityIdentifier("copy-selected")
+                    if model.effectiveTimelineMode == .continuous {
+                        Menu("归属") {
+                            Button("关联为同一任务") { model.correctActivities(.sameTask) }
+                            Button("标记为不同任务") { model.correctActivities(.differentTask) }
+                            Button("按来源片段拆分") { model.correctActivities(.split) }
+                            Divider()
+                            Button("撤销上次归属修改") { model.undoActivityCorrection() }
+                        }.accessibilityIdentifier("activity-corrections")
+                    }
                     Button("完成") { model.toggleSummarySelection() }
                 }.controlSize(.small)
+            }
+            if model.invalidCorrections > 0 {
+                Text("\(model.invalidCorrections) 项归属修改的来源已变化，请撤销后重新确认。")
+                    .font(.system(size: 10)).foregroundStyle(.orange)
             }
             if model.timelineCount == 0 {
                 HStack(spacing: 8) {
@@ -513,10 +527,6 @@ struct TimelineRow: View {
 
                 // 摘要本体：点击即复制。这是最高频的操作——把一段记录贴给别人
                 // 或别处——所以给它最大的落点。
-                Button {
-                    if model.isSelectingSummaries { model.selectSummary(item) }
-                    else { model.copySummary(of: item) }
-                } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 6) {
                             if item.isAway {
@@ -564,9 +574,18 @@ struct TimelineRow: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(item.isAway ? "离开电脑记录" : "点击复制这条记录")
+                .gesture(TapGesture(count: 2).exclusively(before: TapGesture(count: 1)).onEnded { value in
+                    if model.isSelectingSummaries { model.selectSummary(item); return }
+                    switch value {
+                    case .first:
+                        if item.children != nil { model.toggleExpanded(item.id) }
+                        else { model.editSummary(item) }
+                    case .second: model.copySummary(of: item)
+                    }
+                })
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { model.copySummary(of: item) }
+                .help(item.isAway ? "离开电脑记录" : item.children != nil ? "单击复制，双击展开活动" : "单击复制，双击编辑摘要")
 
                 // 概要展开：内容留在原地，不改变布局层级，也不打开新窗口。
                 if !item.isAway {
@@ -629,6 +648,9 @@ struct TimelineRow: View {
                         if !model.isSelectingSummaries { model.toggleSummarySelection() }
                         model.selectSummary(item)
                     }
+                    if item.isNarrative && model.effectiveTimelineMode == .continuous {
+                        Button("按来源片段拆分") { model.correctActivities(.split, items: [item]) }
+                    }
                     Button("删除总结", role: .destructive) { model.deleteTimelineItem(item) }
                 }
             }
@@ -674,6 +696,14 @@ struct FoldedActivities: View {
                     HStack(spacing: 6) {
                         Text(child.title)
                             .font(.system(size: 11, weight: .medium))
+                            .gesture(TapGesture(count: 2).exclusively(before: TapGesture()).onEnded { value in
+                                switch value {
+                                case .first: model.editSummary(child)
+                                case .second:
+                                    if model.isSelectingSummaries { model.selectSummary(child) }
+                                    else { model.copySummary(of: child) }
+                                }
+                            })
                         Spacer()
                         if !child.apps.isEmpty {
                             ApplicationBadges(bundleIDs: child.apps)
@@ -683,9 +713,20 @@ struct FoldedActivities: View {
                         Text(child.summary)
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
+                            .contentShape(Rectangle())
+                            .gesture(TapGesture(count: 2).exclusively(before: TapGesture()).onEnded { value in
+                                switch value {
+                                case .first: model.editSummary(child)
+                                case .second:
+                                    if model.isSelectingSummaries { model.selectSummary(child) }
+                                    else { model.copySummary(of: child) }
+                                }
+                            })
                     }
                     HStack(spacing: 8) {
+                        if model.isSelectingSummaries {
+                            Button(model.selectedSummaryIDs.contains(child.id) ? "取消选择" : "选择") { model.selectSummary(child) }
+                        }
                         Button(model.isExpanded(child.id) ? "收起详情" : "展开详情") { model.toggleExpanded(child.id) }
                         Button("复制") { model.copySummary(of: child) }
                         if model.canEditSummary(child) { Button("编辑摘要") { model.editSummary(child) } }
@@ -742,6 +783,23 @@ struct SummaryDetails: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
+            }
+
+            if item.taskID != nil {
+                Button("编辑任务名称") { model.editTaskTitle(item) }.font(.system(size: 10))
+            }
+            let related = model.relatedSummaries(item)
+            if !related.isEmpty {
+                DisclosureGroup(item.taskTitle.map { "\($0) · 其他时段（\(related.count)）" } ?? "同一任务的其他时段（\(related.count)）") {
+                    ForEach(related) { other in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(other.timestamp, style: .time).font(.system(size: 10, design: .monospaced))
+                            Text(other.title).font(.system(size: 11, weight: .medium))
+                            Text(other.summary).font(.system(size: 11)).textSelection(.enabled)
+                            Button("查看原内容") { model.openDetail(for: other) }
+                        }.padding(.vertical, 4)
+                    }
+                }.font(.system(size: 10)).accessibilityIdentifier("related-activities")
             }
 
             if !sourceDetails.isEmpty {
@@ -1452,6 +1510,7 @@ struct ModelUsagePane: View {
                                     Text("六小时汇总（历史）").tag("6h")
                                 }
                                 Text("活动整理").tag("narrative")
+                                Text("活动归属").tag("narrative-grouping")
                                 Text("日报").tag("daily")
                                 Text("周报").tag("weekly")
                             }
@@ -1760,6 +1819,7 @@ struct ModelRequestGroup: View {
         case "10min": return "十分钟记忆"
         case "6h": return "六小时汇总"
         case "narrative": return "活动整理"
+        case "narrative-grouping": return "活动归属"
         case "daily": return "日报"
         case "weekly": return "周报"
         default: return records.first?.task ?? "请求"

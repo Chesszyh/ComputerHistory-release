@@ -32,7 +32,9 @@ func usage() {
                                             导出报告或给 AI 的活动材料（不调用模型）
       computer-history backup [--repository owner/repo] [--disable] [--automatic]
                                             设置或执行可选 GitHub 私有备份
-      computer-history model-key [--fallback] [--check|--authorize]
+      computer-history permissions [--request accessibility|input|screen]
+                                            检查权限或交互式请求指定权限
+      computer-history model-key [--all] [--fallback] [--check|--authorize]
                                             保存密钥、静默检查读取或手动请求钥匙串授权
       computer-history verify               校验记忆链完整性
       computer-history --check              检查权限与落盘目录
@@ -43,6 +45,7 @@ func usage() {
 
     选项：
       --out <目录>     落盘根目录。默认 ~/.computer-history
+      --preview-out <目录>  narrative 生成指定日期的独立预览，保留正式结果；请求计入原目录用量
       --seconds <秒>   采集指定时长后自动退出；省略则持续运行直到中断
 
     collect 仅在本地采集；生成任务使用 model.json 配置的服务或 DeepSeek 环境变量。
@@ -97,13 +100,18 @@ func loadConfig(root: URL) -> CollectorConfig {
     }
 }
 
-do {
-    try ModelAPIKey.configureInteraction(allow: flags.contains("model-key") && !flags.contains("--check"))
-} catch { warn(String(describing: error)); exit(1) }
-
 if args.isEmpty || flags.contains("--help") || flags.contains("-h") {
     usage()
     exit(0)
+}
+
+if flags.contains("permissions") {
+    do {
+        if let kind = value(of: "--request") { try PermissionStatus.request(kind) }
+        let data = try JSONEncoder().encode(PermissionStatus.current())
+        FileHandle.standardOutput.write(data)
+        exit(0)
+    } catch { warn(String(describing: error)); exit(1) }
 }
 
 if flags.contains("--schema-version") {
@@ -113,11 +121,16 @@ if flags.contains("--schema-version") {
 
 if flags.contains("--check") && !flags.contains("model-key") {
     let trusted = InputTap.hasAccessibilityPermission
+    let listen = InputTap.hasInputMonitoringPermission
     print("辅助功能权限：\(trusted ? "已授予" : "未授予")")
+    print("输入监控权限：\(listen ? "已授予" : "未授予")（快捷键与按键需要）")
     print("屏幕录制权限：\(CGPreflightScreenCaptureAccess() ? "已授予" : "未授予")（窗口文字识别需要）")
     if !trusted {
         print("  请在 系统设置 → 隐私与安全性 → 辅助功能 中勾选本程序。")
         print("  缺该权限时键盘/鼠标与 AX 树都采不到。")
+    }
+    if !listen {
+        print("  若需采集快捷键，请在 系统设置 → 隐私与安全性 → 输入监控 中勾选本程序。")
     }
     let root = outputRoot()
     print("落盘目录：\(root.path)")
@@ -136,6 +149,7 @@ if flags.contains("--status") {
     let root = outputRoot()
     let running = CollectorProcessLease.runningIdentity(root: root) != nil
     print("采集进程：\(running ? "运行中" : "未运行")")
+    print("运行输入监听：\(InputListeningStatus.load(root: root)?.label ?? "状态未知")")
     let seg = root.appendingPathComponent("segments")
     let cfg = loadConfig(root: root)
     print("落盘目录：\(seg.path)")
@@ -174,6 +188,14 @@ if flags.contains("verify") {
 
 if flags.contains("model-key") {
     do {
+        if flags.contains("--all"), flags.contains("--authorize") {
+            let groups = try ModelGroups.load(root: outputRoot())
+            for group in groups.groups where try ModelAPIKey.contains(root: outputRoot(), groupID: group.id) {
+                try ModelAPIKey.authorize(root: outputRoot(), groupID: group.id)
+            }
+            print("已恢复已保存模型组的密钥访问。")
+            exit(0)
+        }
         let settings = try ModelSettings.load(root: outputRoot())
         let fallback = flags.contains("--fallback")
         let groupID = fallback ? settings?.fallback?.credentialGroupID : settings?.credentialGroupID
@@ -183,6 +205,11 @@ if flags.contains("model-key") {
         if flags.contains("--check") || flags.contains("--authorize") {
             guard !(flags.contains("--check") && flags.contains("--authorize")) else {
                 throw ReportError.invalid("--check 与 --authorize 不能同时使用。")
+            }
+            if flags.contains("--authorize") {
+                try ModelAPIKey.authorize(root: outputRoot(), fallback: fallback, groupID: groupID)
+                print("模型密钥访问已恢复。")
+                exit(0)
             }
             guard let key = try ModelAPIKey.load(root: outputRoot(), fallback: fallback, groupID: groupID), !key.isEmpty else {
                 throw ReportError.invalid("当前模型组没有保存密钥。")
@@ -265,7 +292,13 @@ if flags.contains("backup") {
 }
 
 if flags.contains("narrative") {
-    let root = outputRoot()
+    let sourceRoot = outputRoot()
+    var root = sourceRoot
+    if let directory = value(of: "--preview-out") {
+        guard let day = value(of: "--day") else { warn("预览需要 --day yyyy-MM-dd。"); exit(1) }
+        do { root = try NarrativePreview.prepare(source: sourceRoot, destination: URL(fileURLWithPath: directory), day: day) }
+        catch { warn("无法准备预览：\(error)"); exit(1) }
+    }
     // 与 memorize 同理：并发会让两个进程各写一份相同的条目。
     var lock = GenerationLock.narrative(root: root)
     if flags.contains("--wait-lock") {
@@ -282,9 +315,9 @@ if flags.contains("narrative") {
     defer { generationLock.release() }
     var client: DeepSeekClient?
     if !flags.contains("--no-model") {
-        do { client = try DeepSeekClient.fromEnvironment(rootDirectory: root) }
+        do { client = try DeepSeekClient.fromEnvironment(rootDirectory: sourceRoot) }
         catch DeepSeekClient.ClientError.missingAPIKey {
-            if FileManager.default.fileExists(atPath: root.appendingPathComponent("model.json").path) {
+            if FileManager.default.fileExists(atPath: sourceRoot.appendingPathComponent("model.json").path) {
                 warn("模型配置缺少密钥，请在模型设置中填写或使用 --no-model。")
                 exit(1)
             }
@@ -292,7 +325,7 @@ if flags.contains("narrative") {
         }
         catch { warn("模型初始化失败：\(error)"); exit(1) }
     }
-    let generator = NarrativeGenerator(rootDirectory: root, client: client)
+    let generator = NarrativeGenerator(rootDirectory: root, client: client, recordingDirectory: sourceRoot)
     var outcomes: [NarrativeGenerator.Outcome] = []
     if let day = value(of: "--day") {
         do { outcomes = [try generator.generate(day: day,
@@ -770,6 +803,43 @@ print("开始采集 → \(root.appendingPathComponent("segments").path)")
 print("停止：Ctrl-C")
 if let runSeconds { print("将在 \(Int(runSeconds)) 秒后自动停止。") }
 
+var tap: InputTap?
+
+@Sendable
+func makeTap() -> InputTap {
+    InputTap { event in
+      MainActor.assumeIsolated {
+        switch event {
+        case .leftMouseDown(let n, let flags, let location):
+            session.noteInputActivity()
+            session.recordClick(button: "left", clickCount: n,
+                                modifiers: ModifierNames.names(from: flags), location: location)
+        case .rightMouseDown(let n, let flags, let location):
+            session.recordClick(button: "right", clickCount: n,
+                                modifiers: ModifierNames.names(from: flags), location: location)
+        case .otherMouseDown(let n, let flags, let location):
+            session.recordClick(button: "middle", clickCount: n,
+                                modifiers: ModifierNames.names(from: flags), location: location)
+        case .scroll(let dx, let dy, let flags, let location):
+            session.recordScroll(deltaX: dx, deltaY: dy,
+                                modifiers: ModifierNames.names(from: flags), location: location)
+        case .keyDown(let keyCode, let flags, let isRepeat):
+            session.noteInputActivity()
+            guard !isRepeat else { break }
+            let mods = ModifierNames.names(from: flags)
+            // Shift/Option 可参与字符输入，只有操作组合键在此记录。
+            if InputKey.action(for: keyCode, flags: flags) == .shortcut {
+                session.recordShortcut(keyEquivalent: InputKey.name(for: keyCode), modifiers: mods)
+            } else if InputKey.action(for: keyCode, flags: flags) == .submit {
+                session.recordSubmit()
+            }
+        case .flagsChanged:
+            break
+        }
+      }
+    }
+}
+
 /// 优雅收尾：Ctrl-C 与超时共用同一条封口路径，避免留下未写 metadata 的段。
 ///
 /// 全程在主线程执行——`CGEventTap` 回调、`Timer` 与信号源都投递到主 runloop，
@@ -791,6 +861,8 @@ final class Shutdown {
     func run() -> Int32 {
         guard !done else { return 0 }
         done = true
+        tap?.stop()
+        tap = nil
         windowTextSampler.update(nil) { _, _ in }
         activityWatchSampler.update(enabled: false) { _ in }
         defer { lease.release() }
@@ -810,14 +882,49 @@ final class Shutdown {
 }
 let shutdown = Shutdown(session: session, root: root, lease: processLease)
 
+do {
+    let t = makeTap()
+    tap = t
+    try t.start()
+    session.isInputListeningActive = t.isEnabled && t.hasKeyListening
+} catch {
+    warn("事件监听未启动：\(error)")
+    session.isInputListeningActive = false
+}
+
 // Timer 与信号源都投递到主 runloop；显式标注 MainActor 以满足严格并发检查。
 // COMPUTER_HISTORY_DEBUG_TEXT=1 时打印每轮看到的聚焦值，用于排查文本采集。
 let debugText = ProcessInfo.processInfo.environment["COMPUTER_HISTORY_DEBUG_TEXT"] == "1"
 var lastLogged: String? = nil
 var debugTicks = 0
+var lastInputStatus: InputListeningStatus?
+var lastInputInterruptionCount = 0
 
 let timer = Timer.scheduledTimer(withTimeInterval: sampleInterval, repeats: true) { _ in
     MainActor.assumeIsolated {
+        if let currentTap = tap {
+            let active = currentTap.ensureActive()
+            session.isInputListeningActive = active && currentTap.hasKeyListening
+            if currentTap.interruptionCount != lastInputInterruptionCount {
+                session.noteInputListeningInterruption()
+                lastInputInterruptionCount = currentTap.interruptionCount
+            }
+        } else {
+            let t = makeTap()
+            tap = t
+            if (try? t.start()) != nil {
+                session.isInputListeningActive = t.isEnabled && t.hasKeyListening
+            } else {
+                session.isInputListeningActive = false
+            }
+        }
+        let inputStatus = InputListeningStatus(owner: processLease.identity,
+            enabled: tap?.isEnabled ?? false, keyboard: tap?.hasKeyListening ?? false)
+        if lastInputStatus?.enabled != inputStatus.enabled || lastInputStatus?.keyboard != inputStatus.keyboard
+            || Date().timeIntervalSince(lastInputStatus?.checkedAt ?? .distantPast) >= 30 {
+            do { try inputStatus.save(root: root); lastInputStatus = inputStatus }
+            catch { warn("保存输入监听状态失败：\(error)") }
+        }
         do {
             if let updated = try configurationMonitor.poll() {
                 windowTextSampler.update(nil) { _, _ in }
@@ -885,43 +992,6 @@ let timer = Timer.scheduledTimer(withTimeInterval: sampleInterval, repeats: true
     }
 }
 RunLoop.current.add(timer, forMode: .common)
-
-var tap: InputTap?
-do {
-    // tap 回调同样在主 runloop 上，故直接在主 actor 内归档。
-    let t = InputTap { event in
-      MainActor.assumeIsolated {
-        switch event {
-        case .leftMouseDown(let n, let flags, let location):
-            session.noteInputActivity()
-            session.recordClick(button: "left", clickCount: n,
-                                modifiers: ModifierNames.names(from: flags), location: location)
-        case .rightMouseDown(let n, let flags, let location):
-            session.recordClick(button: "right", clickCount: n,
-                                modifiers: ModifierNames.names(from: flags), location: location)
-        case .otherMouseDown(let n, let flags, let location):
-            session.recordClick(button: "middle", clickCount: n,
-                                modifiers: ModifierNames.names(from: flags), location: location)
-        case .keyDown(let keyCode, let flags, let isRepeat):
-            session.noteInputActivity()
-            guard !isRepeat else { break }
-            let mods = ModifierNames.names(from: flags)
-            // Shift/Option 可参与字符输入，只有操作组合键在此记录。
-            if InputKey.action(for: keyCode, flags: flags) == .shortcut {
-                session.recordShortcut(keyEquivalent: InputKey.name(for: keyCode), modifiers: mods)
-            } else if InputKey.action(for: keyCode, flags: flags) == .submit {
-                session.recordSubmit()
-            }
-        case .flagsChanged:
-            break
-        }
-      }
-    }
-    try t.start()
-    tap = t
-} catch {
-    warn("事件监听未启动：\(error)")
-}
 
 signal(SIGINT, SIG_IGN)
 let sigintSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)

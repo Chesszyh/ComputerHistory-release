@@ -11,7 +11,7 @@ on:
         description: 'Run all checks, or diagnose one native panel'
         type: choice
         default: all
-        options: [all, panel, usage, settings, catalog, reports]
+        options: [all, panel, usage, settings, catalog, reports, permissions]
 
 permissions:
   contents: read
@@ -44,7 +44,9 @@ jobs:
         run: python3 scripts/test-build-tools.py
       - name: Install lifecycle checks
         if: ${{ matrix.configuration == 'debug' }}
-        run: python3 scripts/test-install.py
+        run: |
+          python3 scripts/test-install.py
+          python3 scripts/test-app-install.py
       - name: Agent skill queries (synthetic history)
         if: ${{ matrix.configuration == 'debug' }}
         run: python3 scripts/test-agent-skill.py
@@ -63,6 +65,14 @@ jobs:
       - name: Package tested binaries
         if: ${{ matrix.configuration == 'release' }}
         run: bash scripts/package-release.sh --skip-build
+      - name: Credential helper upgrade (synthetic)
+        if: ${{ matrix.configuration == 'release' }}
+        run: |
+          version="$(cat VERSION)"
+          fixture="$(mktemp -d)"
+          trap 'rm -rf "$fixture"' EXIT
+          tar -xzf "dist/ComputerHistory-v${version}-macos-arm64.tar.gz" -C "$fixture"
+          python3 scripts/test-app-upgrade.py "$fixture/ComputerHistory-v${version}-macos-arm64/ComputerHistory.app" --adhoc
       - name: Upload binaries
         if: ${{ matrix.configuration == 'release' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -90,7 +100,7 @@ jobs:
           NATIVE_CASE: ${{ inputs.native_case || 'all' }}
         run: |
           if [[ "$NATIVE_CASE" == all ]]; then
-            cases=(panel usage settings catalog reports)
+            cases=(panel usage settings catalog reports permissions)
           else
             cases=("$NATIVE_CASE")
           fi

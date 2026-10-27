@@ -24,14 +24,26 @@ public enum TimelineLayout {
             guard members.count > 1 else { result.append(first); return }
             var card = first
             card.id = "period:\(first.timestamp.timeIntervalSince1970)"
-            let noClearActivity = members.allSatisfy { $0.noClearActivity == true }
-            card.title = noClearActivity ? ActivityEvidence.noActivityTitle : "\(first.title)(...等\(members.count)项活动)"
-            card.summary = noClearActivity ? ActivityEvidence.noActivitySummary : members.dropFirst().prefix(3).map(\.title).joined(separator: "；")
+            let isDegraded = members.allSatisfy { $0.title == ActivityEvidence.inputDegradedTitle }
+            let noClearActivity = !isDegraded && members.allSatisfy { $0.noClearActivity == true }
+            if isDegraded {
+                card.title = ActivityEvidence.inputDegradedTitle
+                card.summary = ActivityEvidence.inputDegradedSummary
+            } else if noClearActivity {
+                card.title = ActivityEvidence.noActivityTitle
+                card.summary = ActivityEvidence.noActivitySummary
+            } else {
+                card.title = "\(first.title)(...等\(members.count)项活动)"
+                card.summary = members.dropFirst().prefix(3).map(\.title).joined(separator: "；")
+            }
             card.noClearActivity = noClearActivity ? true : nil
             card.endTimestamp = end
             card.children = members
             card.isAway = false
             card.isNarrative = true
+            card.taskID = nil
+            card.taskTitle = nil
+            card.sourceRevisions = nil
             card.sourceActivities = nil
             card.sourceSteps = nil
             card.sourceIncidental = nil

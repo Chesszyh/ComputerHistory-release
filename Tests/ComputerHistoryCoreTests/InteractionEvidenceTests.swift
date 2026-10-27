@@ -36,9 +36,13 @@ final class InteractionEvidenceTests: XCTestCase {
         var active = events
         active.append(.init(id: 71, timestamp: start.addingTimeInterval(560), kind: .mouseClick))
         XCTAssertFalse(ActivityEvidence.hasNoClearActivity(events: active))
-        XCTAssertFalse(ActivityEvidence.hasNoClearActivity(events: Array(events.prefix(3))))
+        XCTAssertTrue(ActivityEvidence.hasNoClearActivity(events: Array(events.prefix(3))))
         let bytes = try events.map { try EventStreamJSON.makeEncoder().encode($0) + Data([10]) }.reduce(Data(), +)
         try bytes.write(to: folder.appendingPathComponent("events.jsonl"))
+        let metadata = EventStreamMetadata(id: segmentID, startedAt: start, endedAt: start.addingTimeInterval(560),
+            eventCount: events.count, suppressedEventCount: 0, eventsPath: folder.appendingPathComponent("events.jsonl").path,
+            inputListeningDegraded: false)
+        try EventStreamJSON.makeEncoder().encode(metadata).write(to: folder.appendingPathComponent("metadata.json"))
         let client = DeepSeekClient(apiKey: "synthetic", baseURL: URL(string: "http://127.0.0.1:1")!, timeout: 0.1)
         let outcome = try MemoryGenerator(rootDirectory: root, memoriesDirectory: root.appendingPathComponent("memories"), client: client)
             .generate(segmentID: segmentID)
@@ -84,5 +88,72 @@ final class InteractionEvidenceTests: XCTestCase {
         XCTAssertFalse(evidence.contains("未记录到上述明确交互"))
         XCTAssertTrue(evidence.contains("鼠标 1 次"))
         XCTAssertTrue(evidence.contains("确证编辑片段 1 段"))
+    }
+
+    func testScrollEventsCountAsExplicitActivity() {
+        let start = Date(timeIntervalSince1970: 1_600_000_000)
+        let app = EventStreamApp(name: "Browser", bundleIdentifier: "com.apple.Safari")
+        let events = (0..<70).map { n in
+            EventStreamRecord(id: n, timestamp: start.addingTimeInterval(Double(n * 8)), kind: .windowChanged,
+                              app: app, window: .init(title: "Safari"),
+                              ax: .init(mode: .fullTree, text: "0 staticText Value: Page content"))
+        }
+        XCTAssertTrue(ActivityEvidence.hasNoClearActivity(events: events))
+
+        var withScroll = events
+        withScroll.append(.init(id: 71, timestamp: start.addingTimeInterval(560), kind: .mouseScroll,
+                                app: app, mouse: .init(button: "scroll", clickCount: nil, modifiers: [], target: nil)))
+        XCTAssertFalse(ActivityEvidence.hasNoClearActivity(events: withScroll))
+
+        let evidence = ActivityEvidence.interactionSummary(events: withScroll)
+        XCTAssertFalse(evidence.contains("未记录到上述明确交互"))
+        XCTAssertTrue(evidence.contains("浏览滚动证据 1 条"))
+    }
+
+    func testInputListeningDegradedSegmentProducesDegradedMemoryWithoutModel() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let segmentID = "2020-01-01T10-00-00Z"
+        let folder = root.appendingPathComponent("segments/" + segmentID)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let start = SegmentClock.date(fromSegmentID: segmentID)!
+        let events = (0..<70).map { n in
+            EventStreamRecord(id: n, timestamp: start.addingTimeInterval(Double(n * 8)), kind: .windowChanged,
+                              app: .init(name: "Status", bundleIdentifier: "example.status"),
+                              window: .init(title: "Countdown"), ax: .init(mode: .fullTree, text: "0 staticText Value: Remaining \(70-n)"))
+        }
+        let bytes = try events.map { try EventStreamJSON.makeEncoder().encode($0) + Data([10]) }.reduce(Data(), +)
+        try bytes.write(to: folder.appendingPathComponent("events.jsonl"))
+
+        // 写入带有 inputListeningDegraded = true 的 metadata
+        let metadata = EventStreamMetadata(
+            id: segmentID,
+            startedAt: start,
+            endedAt: start.addingTimeInterval(560),
+            endReason: nil,
+            eventCount: events.count,
+            suppressedEventCount: 0,
+            eventsPath: folder.appendingPathComponent("events.jsonl").path,
+            firstEventAt: start,
+            inputListeningDegraded: true
+        )
+        let metaData = try EventStreamJSON.makeEncoder().encode(metadata)
+        try metaData.write(to: folder.appendingPathComponent("metadata.json"))
+
+        let client = DeepSeekClient(apiKey: "synthetic", baseURL: URL(string: "http://127.0.0.1:1")!, timeout: 0.1)
+        let outcome = try MemoryGenerator(rootDirectory: root, memoriesDirectory: root.appendingPathComponent("memories"), client: client)
+            .generate(segmentID: segmentID)
+
+        XCTAssertFalse(outcome.usedModel)
+        let entry = try XCTUnwrap(MemoryIndex.parse(fileURL: outcome.memoryURL))
+        XCTAssertFalse(entry.noClearActivity, "Degraded input must not be treated as noClearActivity")
+        XCTAssertTrue(entry.inputListeningDegraded)
+        XCTAssertEqual(entry.activityTitle, ActivityEvidence.inputDegradedTitle)
+        XCTAssertEqual(entry.activitySummary, ActivityEvidence.inputDegradedSummary)
+
+        let snapshot = await TraySnapshotLoader().load(root: root)
+        let item = try XCTUnwrap(snapshot.groups.first?.items.first)
+        XCTAssertEqual(item.title, ActivityEvidence.inputDegradedTitle)
+        XCTAssertEqual(item.summary, ActivityEvidence.inputDegradedSummary)
     }
 }

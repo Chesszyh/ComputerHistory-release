@@ -4,29 +4,33 @@ import Foundation
 public enum ActivityEvidence {
     public static let noActivityTitle = "无明显活动"
     public static let noActivitySummary = "本时段仅记录到前台界面变化，未记录到明确操作。"
+    public static let inputDegradedTitle = "活动证据不足"
+    public static let inputDegradedSummary = "未记录到明确操作，输入监听记录不足以确认本时段的操作情况。"
 
     public static func hasNoClearActivity(events: [EventStreamRecord]) -> Bool {
-        guard let first = events.first?.timestamp, let last = events.last?.timestamp,
-              last.timeIntervalSince(first) >= AwayPeriods.idleThreshold else { return false }
-        return !events.contains { event in
-            if event.activityWatch?.status == "not-afk" { return true }
-            if [.mouseClick, .mouseContextMenu, .mouseDrag, .keyboardShortcut, .keyboardSubmit].contains(event.kind) { return true }
-            guard event.kind == .keyboardTextInput, let keyboard = event.keyboard,
-                  let text = keyboard.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
-            return keyboard.textEvidence == .editedValue
-                || (["AXTextField", "AXTextArea"].contains(keyboard.target?.role ?? "")
-                    && keyboard.target?.placeholder != text
-                    && !isChatChrome(text, app: event.app ?? EventStreamApp()))
+        !events.isEmpty && !hasMeaningfulInteraction(events: events)
+    }
+
+    public static func hasMeaningfulInteraction(events: [EventStreamRecord]) -> Bool {
+        events.contains { event in
+            if [.mouseClick, .mouseContextMenu, .mouseDrag, .mouseScroll, .keyboardShortcut, .keyboardSubmit].contains(event.kind) { return true }
+            return event.kind == .keyboardTextInput && event.keyboard?.textEvidence == .editedValue
+                && event.keyboard?.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         }
     }
 
-    public static func interactionSummary(events: [EventStreamRecord]) -> String {
+    public static func interactionSummary(events: [EventStreamRecord], inputDegraded: Bool = false) -> String {
         let clicks = events.filter { [.mouseClick, .mouseContextMenu, .mouseDrag].contains($0.kind) }.count
+        let scrolls = events.filter { $0.kind == .mouseScroll }.count
         let keys = events.filter { [.keyboardShortcut, .keyboardSubmit].contains($0.kind) }.count
         let edits = events.filter { $0.kind == .keyboardTextInput && $0.keyboard?.textEvidence == .editedValue }.count
-        var text = "明确交互记录：鼠标 \(clicks) 次，快捷键或提交 \(keys) 次，确证编辑片段 \(edits) 段。\n"
-        if clicks + keys + edits == 0 {
-            text += "本段未记录到上述明确交互。只描述界面处于前台、停留或内容变化，不将页面刷新、倒计时或后台回复写成用户持续查看、阅读或操作。\n"
+        var text = "明确交互记录：鼠标 \(clicks) 次，浏览滚动证据 \(scrolls) 条，快捷键或提交 \(keys) 次，确证编辑片段 \(edits) 段。\n"
+        if clicks + scrolls + keys + edits == 0 {
+            if inputDegraded {
+                text += "本段输入监听未处于活动状态，未能采集键鼠操作证据。只描述界面处于前台、停留或内容变化。\n"
+            } else {
+                text += "本段未记录到上述明确交互。只描述界面处于前台、停留或内容变化，不将页面刷新、倒计时或后台回复写成用户持续查看、阅读或操作。\n"
+            }
         }
         return text + "记录首末时间是观测范围，不代表持续操作时长；不能由缺少交互推断用户离开、看手机或没有阅读。\n"
     }
@@ -61,9 +65,13 @@ public enum ActivityEvidence {
             if let target = event.mouse?.target {
                 if let label = [target.title, target.description].compactMap({ $0 }).first,
                    !isChatChrome(label, app: app) {
-                    facts.append("点击：\(MemoryWriter.truncate(label, 100))")
+                    let action = event.kind == .mouseScroll ? "浏览滚动" : "点击"
+                    facts.append("\(action)：\(MemoryWriter.truncate(label, 100))")
                     hasContent = true
                 }
+            } else if event.kind == .mouseScroll {
+                facts.append("浏览滚动")
+                hasContent = true
             }
             if let ax = event.ax {
                 // 按渲染节点切分，续行仍属于该节点；不能把旧差分的 ~ 续行误作新增内容。

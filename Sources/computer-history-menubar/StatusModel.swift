@@ -3,6 +3,7 @@ import Combine
 import AppKit
 import ApplicationServices
 import ComputerHistoryCore
+import SwiftUI
 
 /// 托盘应用的状态源。
 ///
@@ -46,7 +47,7 @@ final class StatusModel: ObservableObject {
     @Published var summaryDraft = ""
     @Published var summaryMessage: String?
     @Published var summarySettingsError: String?
-    enum SettingsTab: String, CaseIterable { case timeline = "时间线", prompts = "提示词", model = "模型", collector = "采集", backup = "备份" }
+    enum SettingsTab: String, CaseIterable { case timeline = "时间线", prompts = "提示词", model = "模型", collector = "采集", backup = "备份", access = "授权" }
     enum TimelineRecalculation: CaseIterable {
         case today, all, none
         var label: String {
@@ -57,7 +58,7 @@ final class StatusModel: ObservableObject {
             return ["narrative", "--overwrite", "--wait-lock"] + (self == .today ? ["--day", ReportPeriod.day(now)] : [])
         }
     }
-    @Published private var effectiveTimelineMode: SummarySettings.TimelineMode = .continuous
+    @Published private(set) var effectiveTimelineMode: SummarySettings.TimelineMode = .continuous
     @Published var timelineMode: SummarySettings.TimelineMode = .continuous
     @Published var showsTimelineRecalculation = false
     @Published private(set) var timelineSettingsLoaded = false
@@ -79,6 +80,7 @@ final class StatusModel: ObservableObject {
     @Published var editedSummary = ""
     @Published var editError: String?
     @Published var selectionMessage: String?
+    @Published var invalidCorrections = 0
     @Published var timelineError: String?
     @Published var showsTrash = false
     @Published private(set) var deletedSummaries: [TimelineDeletions.Record] = []
@@ -90,6 +92,79 @@ final class StatusModel: ObservableObject {
     @Published var collectorSettingsMessage: String?
     @Published private(set) var modelConfigurationLoaded = false
     @Published private(set) var collectorConfigurationLoaded = false
+    @Published var permissionStatus: PermissionStatus?
+    @Published var permissionBusy = false
+    @Published var permissionMessage: String?
+    private var setupWindow: NSWindow?
+
+    func openPermissionSetup() {
+        if let setupWindow { setupWindow.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
+        let contentSize = NSSize(width: 480, height: 560)
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: contentSize),
+            styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        window.title = "设置 ComputerHistory"
+        window.isReleasedWhenClosed = false
+        // NSHostingController otherwise derives the window size from the view's compressed fitting size.
+        window.contentViewController = NSHostingController(rootView: PermissionSetupPane(model: self)
+            .frame(width: contentSize.width, height: contentSize.height))
+        window.contentMinSize = contentSize
+        window.setContentSize(contentSize)
+        window.center(); window.makeKeyAndOrderFront(nil)
+        setupWindow = window
+        NSApp.activate(ignoringOtherApps: true)
+        refreshPermissions()
+    }
+
+    func refreshPermissions(request kind: String? = nil) {
+        guard !permissionBusy else { return }
+        let binary = commandExecutable
+        permissionBusy = true
+        Task {
+            do {
+                let status = try await Task.detached {
+                    let text = try LocalCommand.run(binary.path, ["permissions"] + (kind.map { ["--request", $0] } ?? []), timeout: 180)
+                    return try JSONDecoder().decode(PermissionStatus.self, from: Data(text.utf8))
+                }.value
+                permissionStatus = status
+                if let kind {
+                    let pane = ["accessibility": "Privacy_Accessibility", "input": "Privacy_ListenEvent", "screen": "Privacy_ScreenCapture"][kind]!
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?" + pane)!)
+                    NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
+                }
+            } catch { permissionMessage = String(describing: error) }
+            permissionBusy = false
+        }
+    }
+
+    func restoreCredentialAccess() {
+        guard !permissionBusy else { return }
+        let binary = commandExecutable, root = root
+        permissionBusy = true; permissionMessage = nil
+        Task {
+            do {
+                _ = try await Task.detached {
+                    try LocalCommand.run(binary.path, ["model-key", "--authorize", "--all", "--out", root.path], timeout: 300)
+                }.value
+                permissionMessage = "密钥访问已恢复"
+                requestFlush()
+            } catch { permissionMessage = String(describing: error) }
+            permissionBusy = false
+        }
+    }
+
+    func startCollectorFromSetup() {
+        do {
+            try CollectorService.start(executable: commandExecutable, root: root)
+            permissionMessage = "后台采集服务已启动"
+            refreshAll()
+        } catch { permissionMessage = String(describing: error) }
+    }
+
+    func finishPermissionSetup() {
+        UserDefaults.standard.set(true, forKey: "ComputerHistory.didCompleteSetup")
+        setupWindow?.close()
+    }
+
     private let requestLoader = ModelRequestLoader()
 
     @Published private(set) var contentVersion = 0
@@ -190,6 +265,7 @@ final class StatusModel: ObservableObject {
             if self.modelFailure != health?.error { self.modelFailure = health?.error }
             if self.effectiveBackupEnabled != enabled { self.effectiveBackupEnabled = enabled }
             if self.modelRequests != requests { self.modelRequests = requests }
+            if self.invalidCorrections != snapshot.invalidCorrections { self.invalidCorrections = snapshot.invalidCorrections }
             if self.status != snapshot.status { self.status = snapshot.status }
             if self.control != snapshot.control { self.control = snapshot.control }
             if self.contentVersion != snapshot.contentVersion { self.contentVersion = snapshot.contentVersion }
@@ -200,7 +276,7 @@ final class StatusModel: ObservableObject {
             if self.allTimelineGroups != snapshot.groups {
                 self.allTimelineGroups = snapshot.groups
                 self.applyTimelineLimit()
-                let ids = Set(snapshot.groups.flatMap(\.items).map(\.id))
+                let ids = Set(snapshot.groups.flatMap(\.items).flatMap { [$0] + $0.leafItems }.map(\.id))
                 self.expandedRows.formIntersection(ids)
                 self.selectedSummaryIDs.formIntersection(ids)
                 if let detail = self.detail, !ids.contains(detail.id) { self.closeDetail() }
@@ -360,7 +436,7 @@ final class StatusModel: ObservableObject {
     var menuBarSymbol: String {
         if !status.process.running { return "clock.badge.xmark" }
         if !control.recording || frontBundleID == "com.apple.loginwindow" { return "pause.circle" }
-        if isStalled { return "clock.badge.exclamationmark" }
+        if isStalled || status.inputListening?.enabled == false || status.inputListening?.keyboard == false { return "clock.badge.exclamationmark" }
         return "clock.arrow.circlepath"
     }
 
@@ -368,6 +444,7 @@ final class StatusModel: ObservableObject {
         if !status.process.running { return "未采集" }
         if !control.recording { return "已暂停" }
         if frontBundleID == "com.apple.loginwindow" { return "已离开" }
+        if status.inputListening?.enabled == false || status.inputListening?.keyboard == false { return "输入监听异常" }
         if isStalled { return "已停滞" }
         return "采集中"
     }
@@ -375,7 +452,7 @@ final class StatusModel: ObservableObject {
     var stateColor: StatusColor {
         if !status.process.running { return .secondary }
         if !control.recording || frontBundleID == "com.apple.loginwindow" { return .secondary }
-        if isStalled { return .warning }
+        if isStalled || status.inputListening?.enabled == false || status.inputListening?.keyboard == false { return .warning }
         return .ok
     }
 
@@ -889,6 +966,7 @@ final class StatusModel: ObservableObject {
             case .model: modelSettingsError = message
             case .collector: collectorSettingsError = message
             case .backup: reportError = message
+            case .access: permissionMessage = message
             }
         }
         if FileManager.default.fileExists(atPath: file.path) {
@@ -918,9 +996,7 @@ final class StatusModel: ObservableObject {
     }
 
     func copySelectedSummaries() {
-        let items = allTimelineGroups.flatMap(\.items).filter { selectedSummaryIDs.contains($0.id) && !$0.isAway }
-            .flatMap(\.leafItems)
-            .sorted { $0.timestamp < $1.timestamp }
+        let items = selectedLeafSummaries
         guard !items.isEmpty else { return }
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
@@ -928,8 +1004,73 @@ final class StatusModel: ObservableObject {
         selectionMessage = "已复制 \(items.count) 条摘要"
     }
 
+    var selectedLeafSummaries: [TimelineItem] {
+        allTimelineGroups.flatMap(\.items).flatMap { item in
+            selectedSummaryIDs.contains(item.id) ? item.leafItems
+                : item.leafItems.filter { selectedSummaryIDs.contains($0.id) }
+        }.filter { !$0.isAway }.sorted { $0.timestamp < $1.timestamp }
+    }
+
+    func relatedSummaries(_ item: TimelineItem) -> [TimelineItem] {
+        guard let task = item.taskID else { return [] }
+        return allTimelineGroups.flatMap(\.items).flatMap(\.leafItems)
+            .filter { $0.id != item.id && $0.taskID == task }.sorted { $0.timestamp < $1.timestamp }
+    }
+
+    func correctActivities(_ action: TimelineCorrections.Action, items: [TimelineItem]? = nil) {
+        let selected = items ?? selectedLeafSummaries
+        guard !selected.isEmpty else { return }
+        do {
+            let index = MemoryIndex.load(from: root.appendingPathComponent("memories"))
+            let groups = selected.filter { $0.isNarrative && !$0.isAway }.map { item -> [TimelineCorrections.Reference] in
+                var source = ActivityNarrative.Item(id: item.id, timestamp: item.timestamp, title: item.title,
+                    summary: item.summary, apps: item.apps, sourceMemories: item.memoryFiles.map(\.lastPathComponent))
+                source.sourceActivities = item.sourceActivities
+                return TimelineCorrections.references(source, index: index)
+            }.filter { !$0.isEmpty }
+            guard !groups.isEmpty, action == .split || groups.count >= 2 else {
+                selectionMessage = "请选择至少两项独立活动。"; return
+            }
+            var corrections = try TimelineCorrections.load(root: root)
+            corrections.entries.append(.init(action: action, groups: groups))
+            try corrections.save(root: root)
+            selectedSummaryIDs.removeAll(); selectionMessage = "已保存活动归属，可撤销。"
+            refreshSlow()
+        } catch { timelineError = "无法保存活动归属：\(error)" }
+    }
+
+    func undoActivityCorrection() {
+        do {
+            var corrections = try TimelineCorrections.load(root: root)
+            guard !corrections.entries.isEmpty else { return }
+            corrections.entries.removeLast(); try corrections.save(root: root)
+            selectionMessage = "已撤销上次归属修改。"; refreshSlow()
+        } catch { timelineError = "无法撤销活动归属：\(error)" }
+    }
+
+    func editTaskTitle(_ item: TimelineItem) {
+        guard let task = item.taskID else { return }
+        let alert = NSAlert(); alert.messageText = "编辑任务名称"
+        let field = NSTextField(string: item.taskTitle ?? item.title)
+        field.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
+        alert.accessoryView = field; alert.addButton(withTitle: "保存"); alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let title = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        do {
+            var edits = try TimelineEdits.load(root: root)
+            if edits.taskTitles == nil { edits.taskTitles = [:] }
+            edits.taskTitles?[task] = title
+            for member in [item] + relatedSummaries(item) {
+                for anchor in TimelineEdits.taskAnchorKeys(for: member) { edits.taskTitles?[anchor] = title }
+            }
+            try edits.save(root: root)
+            refreshSlow()
+        } catch { timelineError = "无法保存任务名称：\(error)" }
+    }
+
     func canEditSummary(_ item: TimelineItem) -> Bool {
-        effectiveTimelineMode == .fixedTenMinutes && item.children == nil && !item.isAway && item.memoryFiles.count == 1
+        TimelineEdits.key(for: item, mode: effectiveTimelineMode) != nil
     }
 
     func editSummary(_ item: TimelineItem) {
@@ -947,7 +1088,11 @@ final class StatusModel: ObservableObject {
         guard restore || (!title.isEmpty && !summary.isEmpty) else { editError = "请填写标题和内容。"; return }
         do {
             var edits = try TimelineEdits.load(root: root)
-            try edits.set(restore ? nil : .init(title: title, summary: summary), for: item.memoryFiles[0].lastPathComponent, root: root)
+            guard let key = TimelineEdits.key(for: item, mode: effectiveTimelineMode) else { return }
+            let revisions = Dictionary(uniqueKeysWithValues: item.memoryFiles.compactMap { file in
+                MemoryIndex.parse(fileURL: file).map { ($0.id, $0.revision) }
+            })
+            try edits.set(restore ? nil : .init(title: title, summary: summary, revisions: revisions), for: key, root: root)
             editingSummary = nil
             refreshSlow()
         } catch { editError = "无法保存摘要：\(error.localizedDescription)" }

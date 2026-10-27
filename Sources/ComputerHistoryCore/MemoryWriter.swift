@@ -56,24 +56,37 @@ public enum MemoryWriter {
         sources: [String] = [],
         titleOverride: String? = nil,
         evidenceMaterial: String? = nil,
-        noClearActivity: Bool = false
+        noClearActivity: Bool = false,
+        inputListeningDegraded: Bool = false
     ) -> String {
         var out = ""
 
         out += "---\n"
-        let heading = noClearActivity ? ActivityEvidence.noActivityTitle : titleOverride ?? title(for: digest)
-        let summary = noClearActivity ? ActivityEvidence.noActivitySummary : granularity == "6h"
-            ? sixHourDescription(for: digest) : description(for: digest)
+        let heading: String
+        let summary: String
+        if noClearActivity {
+            heading = ActivityEvidence.noActivityTitle
+            summary = ActivityEvidence.noActivitySummary
+        } else if inputListeningDegraded {
+            heading = ActivityEvidence.inputDegradedTitle
+            summary = ActivityEvidence.inputDegradedSummary
+        } else {
+            heading = titleOverride ?? title(for: digest)
+            summary = granularity == "6h" ? sixHourDescription(for: digest) : description(for: digest)
+        }
         out += "title: \(heading)\n"
         out += "description: \(summary)\n"
         out += "generation: \(enrichment != nil ? "model" : (modelNote != nil ? "failed" : "factual"))\n"
         if noClearActivity { out += "activity_status: no_clear_activity\n" }
+        else if inputListeningDegraded { out += "activity_status: input_listening_degraded\n" }
         out += "applications: [" + digest.applications.joined(separator: ", ") + "]\n"
         out += "---\n\n"
 
         out += "## Memory summary\n\n"
         if noClearActivity {
             out += "### 本次活动\n\n- **\(ActivityEvidence.noActivityTitle)**：\(ActivityEvidence.noActivitySummary)\n\n"
+        } else if inputListeningDegraded {
+            out += "### 本次活动\n\n- **\(ActivityEvidence.inputDegradedTitle)**：\(ActivityEvidence.inputDegradedSummary)\n\n"
         } else if let enrichment, !enrichment.isEmpty {
             // 模型已按系统提示产出 Relevant prior context 等小节，此处不再补写，
             // 否则会出现两个同名小节。

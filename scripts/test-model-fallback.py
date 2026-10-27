@@ -42,7 +42,7 @@ with tempfile.TemporaryDirectory(prefix='fallback-test-') as d:
     root=Path(d);server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Model)
     threading.Thread(target=server.serve_forever,daemon=True).start()
     sid='2020-01-01T00-00-00Z';segment=root/'segments'/sid;segment.mkdir(parents=True)
-    (segment/'events.jsonl').write_text(json.dumps({'id':1,'kind':'window.changed','timestamp':'2020-01-01T00:00:01Z','app':{'name':'Synthetic','bundleIdentifier':'test.app'}})+'\n')
+    (segment/'events.jsonl').write_text(json.dumps({'id':1,'kind':'mouse.click','timestamp':'2020-01-01T00:00:01Z','app':{'name':'Synthetic','bundleIdentifier':'test.app'}})+'\n')
     (segment/'metadata.json').write_text(json.dumps({'id':sid,'startedAt':'2020-01-01T00:00:00Z','endedAt':'2020-01-01T00:00:01Z','eventCount':1,'suppressedEventCount':0,'eventsPath':str(segment/'events.jsonl')}))
     config={'baseURL':f'http://127.0.0.1:{server.server_port}/v1','model':'synthetic-primary','requiresAPIKey':True,
             'reasoningEffort':'medium','requestStyle':'reasoning','timeoutSeconds':1,

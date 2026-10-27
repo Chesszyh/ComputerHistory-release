@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1 - 2026-10-27
+
+- Separate activity ownership from summary writing, retain task returns as distinct appearances, and preserve completed generation stages during retries.
+- Allow editing final timeline titles and summaries, associating or separating tasks, and splitting grouped fragments while keeping source evidence read-only.
+- Record browsing scrolls, report unavailable input coverage separately from passive activity, and avoid flushing exposed input method composition as committed text.
+- Package a macOS app with first-run permission guidance and an independent credential helper retained across ordinary upgrades.
+- Preserve authorized helpers when upgrading ad-hoc signed packages and reseal the updated app.
+- Keep the standalone setup window at its intended size, allow long messages to scroll, and preserve access to its footer actions.
+- Open the installed app from the launcher and document app upgrades, credential recovery, and standalone window verification.
+
 
 ## 0.3.0 - 2026-10-26
 

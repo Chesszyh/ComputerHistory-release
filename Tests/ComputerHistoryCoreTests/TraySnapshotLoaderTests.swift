@@ -272,15 +272,15 @@ final class TraySnapshotLoaderTests: XCTestCase {
         let loader = TraySnapshotLoader()
         let snapshot = await loader.load(root: root, timeZone: TimeZone(secondsFromGMT: 0)!)
         let items = snapshot.groups.flatMap(\.items).flatMap(\.leafItems)
-        let expected = [libraryReturn, date("11:03:28"), morningReturn, date("01:59:17"), date("01:10:05")]
+        let expected = [libraryReturn, date("11:03:28"), date("11:00:01"), morningReturn, date("01:59:17"), date("01:50:02"), date("01:10:05")]
         XCTAssertEqual(items.count, expected.count)
         for (item, time) in zip(items, expected) {
             XCTAssertEqual(item.timestamp.timeIntervalSince1970, time.timeIntervalSince1970, accuracy: 0.001)
         }
         let active = items.filter { !$0.isAway }
-        XCTAssertEqual(active.map(\.coveredCount), [2, 2, 2])
-        XCTAssertEqual(active.map(\.endTimestamp), [date("12:30:00"), date("11:03:28"), date("01:59:17")])
-        XCTAssertEqual(active.map(\.summary), ["Library evidence", "Morning evidence", "Night evidence"])
+        XCTAssertEqual(active.map(\.coveredCount), [2, 1, 1, 1, 1])
+        XCTAssertEqual(active.map(\.endTimestamp), [date("12:30:00"), date("11:03:28"), date("10:40:00"), date("01:59:17"), date("01:20:00")])
+        XCTAssertEqual(active.map(\.summary), ["Library evidence", "Morning evidence", "Morning evidence", "Night evidence", "Night evidence"])
         XCTAssertTrue(items.filter(\.isAway).allSatisfy { $0.summary == "锁屏或休眠" })
         XCTAssertEqual(try Data(contentsOf: ActivityNarrative.fileURL(root: root)), original)
         let warm = await loader.load(root: root, timeZone: TimeZone(secondsFromGMT: 0)!)
@@ -301,13 +301,13 @@ final class TraySnapshotLoaderTests: XCTestCase {
         try TimelineDeletions.restore(id: parent.deletionID, root: root)
         try TimelineDeletions.delete(active[0], root: root)
         let after = await TraySnapshotLoader().load(root: root)
-        XCTAssertEqual(after.groups.flatMap(\.items).flatMap(\.leafItems).filter { !$0.isAway }.count, 2)
+        XCTAssertEqual(after.groups.flatMap(\.items).flatMap(\.leafItems).filter { !$0.isAway }.count, 4)
         try TimelineDeletions.restore(id: active[0].deletionID, root: root)
         let restored = await TraySnapshotLoader().load(root: root)
-        XCTAssertEqual(restored.groups.flatMap(\.items).flatMap(\.leafItems).filter { !$0.isAway }.count, 3)
+        XCTAssertEqual(restored.groups.flatMap(\.items).flatMap(\.leafItems).filter { !$0.isAway }.count, 5)
         try ActivityNarrative().save(root: root)
         let lostCache = await TraySnapshotLoader().load(root: root)
-        XCTAssertEqual(lostCache.groups.flatMap(\.items).flatMap(\.leafItems).filter { !$0.isAway }.count, 3, "Restored snapshots must obey the same away boundaries")
+        XCTAssertEqual(lostCache.groups.flatMap(\.items).flatMap(\.leafItems).filter { !$0.isAway }.count, 5, "Restored snapshots must obey the same away boundaries")
     }
 
     func testLargeHistoryBenchmark() async throws {

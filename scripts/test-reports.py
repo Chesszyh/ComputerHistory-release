@@ -90,7 +90,7 @@ with tempfile.TemporaryDirectory(prefix='report-test-') as directory:
         segment = dependencies/'segments'/segment_id; segment.mkdir(parents=True)
         (segment/'metadata.json').write_text(json.dumps({'eventCount': 1, 'firstEventAt': '2020-01-05T10:01:00Z'}))
         (segment/'events.jsonl').write_text(json.dumps({'id': 1, 'timestamp': '2020-01-05T10:01:00Z',
-            'kind': 'window.changed', 'app': {'name': 'Synthetic Editor', 'bundleIdentifier': 'example.editor'}})+'\n')
+            'kind': 'mouse.click', 'app': {'name': 'Synthetic Editor', 'bundleIdentifier': 'example.editor'}})+'\n')
         command = [binary, 'report', '--day', '2020-01-05', '--out', str(dependencies)]
         mode='fail'
         p=subprocess.run(command,env=env,capture_output=True,text=True,timeout=60)

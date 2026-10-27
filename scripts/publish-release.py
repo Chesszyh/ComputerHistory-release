@@ -44,16 +44,24 @@ def release_notes(version):
 
 def verify_package(archive, output, version):
     name = f'ComputerHistory-v{version}-macos-arm64'
-    expected = {f'{name}/{item}' for item in ['computer-history', 'computer-history-menubar', 'LICENSE', 'README.md', 'manage-install.py']}
+    expected = {f'{name}/{item}' for item in ['computer-history', 'computer-history-menubar', 'computer-history-credentials', 'LICENSE', 'README.md', 'manage-install.py']}
+    app = f'{name}/ComputerHistory.app/Contents'
+    expected |= {app + '/' + item for item in [
+        'Info.plist', '_CodeSignature/CodeResources', 'Resources/LICENSE', 'Resources/README.md',
+        'Resources/manage-install.py', 'MacOS/computer-history', 'MacOS/computer-history-menubar',
+        'MacOS/computer-history-credentials']}
+    directories = {str(Path(path).parent) for path in expected}
+    directories |= {str(Path(path).parent) for path in list(directories)}
+    directories |= {name, f'{name}/ComputerHistory.app'}
     with tarfile.open(archive) as tar:
         members = tar.getmembers()
         if {m.name for m in members if m.isfile()} != expected or any(
-                m.name not in expected | {name} or not (m.isfile() or m.isdir()) for m in members):
-            raise ValueError('Release package must contain only the two programs, installer, LICENSE, and README.md')
+                m.name not in expected | directories or not (m.isfile() or m.isdir()) for m in members):
+            raise ValueError('Release package contains unexpected files or misses app components')
         tar.extractall(output, filter='data')
     if (output / name / 'manage-install.py').read_bytes() != (ROOT / 'scripts/manage-install.py').read_bytes():
         raise ValueError('Installer does not match the tested source')
-    for executable in ['computer-history', 'computer-history-menubar']:
+    for executable in ['computer-history', 'computer-history-menubar', 'computer-history-credentials']:
         path = str(output / name / executable)
         if command('lipo', '-archs', path) != 'arm64':
             raise ValueError(f'{executable}: expected arm64')
@@ -64,6 +72,9 @@ def verify_package(archive, output, version):
         minimum = re.search(r'\bminos\s+([\d.]+)', command('otool', '-l', path))
         if not minimum or minimum[1] not in ['13.0', '13.0.0']:
             raise ValueError(f'{executable}: unexpected minimum macOS version')
+    if (output / name / 'computer-history-credentials').read_bytes() != (output / name / 'ComputerHistory.app/Contents/MacOS/computer-history-credentials').read_bytes():
+        raise ValueError('Command-line and app copies must use the same credential helper')
+    subprocess.run(['codesign', '--verify', '--deep', '--strict', str(output / name / 'ComputerHistory.app')], check=True)
     subprocess.run([str(output / name / 'computer-history'), '--help'], check=True, stdout=subprocess.DEVNULL)
 
 

@@ -80,6 +80,7 @@ public final class TextInputTracker {
         var character: Character
         var edit: Int?
         var evidence: TextEvidence
+        var marked = false
         var reference: String? = nil
         var replaces: Set<String> = []
         var emittedFragment: Int? = nil
@@ -107,7 +108,15 @@ public final class TextInputTracker {
             establish(obs, now: now)
             return []
         }
-        composing = obs.hasMarkedText == true
+        if let marked = obs.hasMarkedText {
+            composing = marked
+            if !marked {
+                for i in cells.indices where cells[i].marked {
+                    cells[i].marked = false
+                    if obs.hasInputActivity == true { cells[i].evidence = .editedValue }
+                }
+            }
+        }
         guard previous != value else { return flushIfIdle(now: now) }
         let old = Array(previous), new = Array(value)
         var prefix = 0, suffix = 0
@@ -139,7 +148,7 @@ public final class TextInputTracker {
             if let range, range.count == 1, baselineCells[range.lowerBound].character == character {
                 return baselineCells[range.lowerBound]
             }
-            return Cell(character: character, edit: edit, evidence: evidence,
+            return Cell(character: character, edit: edit, evidence: evidence, marked: composing,
                         replaces: replaced, originalRange: range)
         }
         // 同一替换区域整体撤销时恢复原有身份，不能把原正文重新记为输入。
@@ -214,12 +223,14 @@ public final class TextInputTracker {
         }
         for index in cells.indices {
             let cell = cells[index]
+            // A segment boundary may flush committed text, but cannot commit the marked tail.
+            if cell.marked { emit(); currentID = nil; continue }
             if cell.edit != currentID { emit(); currentID = cell.edit }
             guard cell.edit != nil else { continue }
             indices.append(index)
             text.append(cell.character)
             replaces.formUnion(cell.replaces)
-            if cell.evidence == .uncertainValueChange || composing { evidence = .uncertainValueChange }
+            if cell.evidence == .uncertainValueChange { evidence = .uncertainValueChange }
         }
         emit()
         let fragments = runs.enumerated().sorted {

@@ -237,7 +237,45 @@ struct SettingsRegression {
         precondition(try! TimelineEdits.load(root: root).entries.isEmpty)
         var continuous = try SummarySettings.load(root: root); continuous.timelineMode = .continuous
         try continuous.save(root: root); model.refreshAll(); settle(); settle()
-        precondition(!model.canEditSummary(items[0]), "Continuous mode must not expose editing")
+        precondition(!model.canEditSummary(items[0]), "Unprocessed source details must remain read-only")
+        stage("continuous summary gestures and task corrections")
+        let orderedSources = MemoryIndex.load(from: memories).entries.sorted { $0.startedAt < $1.startedAt }
+        let originalSources = try orderedSources.map { try Data(contentsOf: $0.fileURL) }
+        let generated = orderedSources.enumerated().map { n, source in
+            var item = ActivityNarrative.Item(id: "editable-\(n)", timestamp: source.startedAt,
+                title: "合成连续活动 \(n)", summary: "核对合成正文。", apps: [], sourceMemories: [source.id])
+            item.sourceActivities = [source.id: [1]]; item.taskID = "synthetic-task"
+            return item
+        }
+        try ActivityNarrative(items: generated).save(root: root)
+        model.refreshAll(); settle(); settle()
+        let continuousItems = model.timelineGroups.flatMap(\.items).flatMap(\.leafItems).filter { $0.id.hasPrefix("editable-") }
+        precondition(continuousItems.count == 2 && model.canEditSummary(continuousItems[0]))
+        precondition(model.relatedSummaries(continuousItems[0]).count == 1)
+        let row = NSHostingView(rootView: TimelineRow(item: continuousItems[0], model: model).padding(8).frame(width: 380))
+        window.contentView = row
+        window.setContentSize(NSSize(width: 380, height: max(110, row.fittingSize.height)))
+        settle()
+        nativeTestClick(window: window, point: NSPoint(x: 140, y: window.contentLayoutRect.height - 28))
+        RunLoop.main.run(until: Date().addingTimeInterval(NSEvent.doubleClickInterval + 0.2))
+        precondition(NSPasteboard.general.string(forType: .string)?.contains(continuousItems[0].title) == true,
+            "Single click must copy the final summary")
+        NSPasteboard.general.clearContents(); NSPasteboard.general.setString("DOUBLE_CLICK_SENTINEL", forType: .string)
+        nativeTestClick(window: window, point: NSPoint(x: 140, y: window.contentLayoutRect.height - 28))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        nativeTestClick(window: window, point: NSPoint(x: 140, y: window.contentLayoutRect.height - 28), clickCount: 2)
+        RunLoop.main.run(until: Date().addingTimeInterval(NSEvent.doubleClickInterval + 0.2))
+        precondition(model.editingSummary?.id == continuousItems[0].id, "Double click must open editing")
+        precondition(NSPasteboard.general.string(forType: .string) == "DOUBLE_CLICK_SENTINEL", "Double click must not run the single-copy action")
+        model.editedTitle = "个人标题"; model.editedSummary = "个人概述"; model.saveSummaryEdit(); settle(); settle()
+        precondition(try! Data(contentsOf: orderedSources[0].fileURL) == originalSources[0])
+        precondition(try! Data(contentsOf: orderedSources[1].fileURL) == originalSources[1])
+        model.correctActivities(.differentTask, items: continuousItems); settle(); settle()
+        let separated = model.timelineGroups.flatMap(\.items).flatMap(\.leafItems).filter { $0.id.hasPrefix("editable-") }
+        precondition(separated.count == 2 && separated[0].taskID != separated[1].taskID)
+        model.undoActivityCorrection(); settle(); settle()
+        precondition(try! TimelineCorrections.load(root: root).entries.isEmpty)
+        window.contentView = panel; window.setContentSize(NSSize(width: 380, height: 640))
         model.showsSummarySettings = true
         stage("collector form")
         model.settingsTab = .collector
@@ -266,6 +304,11 @@ struct SettingsRegression {
         model.setBackupEnabled(false)
         precondition(try! BackupSettings.load(root: root)?.enabled == false, "Quick toggle must persist disabled state")
         precondition(!model.effectiveBackupEnabled)
+        stage("permission setup")
+        model.settingsTab = .access
+        settle(); settle()
+        try snapshot("permissions")
+        precondition(model.settingsTab == .access)
         print("PASS: full-row request disclosure, native model/collector editing, model-group persistence and swap, rendered summary deletion and trash restoration, timeline mode and scoped recalculation, cancellation, native summary editing, selected copy, save buttons, validation, and malformed-file preservation")
     }
 }

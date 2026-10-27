@@ -15,6 +15,7 @@ public struct EventStreamMetadata: Codable, Sendable {
     /// 读取方不得信任此字段，应以 metadata.json 所在目录推导 events.jsonl。
     public var eventsPath: String
     public var firstEventAt: Date? = nil
+    public var inputListeningDegraded: Bool? = nil
 }
 
 /// 录制结束原因。取值来自反汇编 `ComputerUseIPCEventStreamEndReason.rawValue.getter`。
@@ -147,7 +148,8 @@ public final class SegmentWriter {
     }
 
     /// 写出 metadata.json 并关闭句柄。可重复调用（幂等）。
-    public func close(endedAt: Date?, endReason: EventStreamEndReason? = nil) throws {
+    public func close(endedAt: Date?, endReason: EventStreamEndReason? = nil,
+                      inputListeningDegraded: Bool? = nil) throws {
         guard !closed else { return }
         try handle?.close()
         handle = nil
@@ -161,7 +163,8 @@ public final class SegmentWriter {
             suppressedEventCount: suppressedCount,
             // 与官方一致，写绝对路径；读取方以目录位置为准。
             eventsPath: eventsURL.path,
-            firstEventAt: firstEventAt
+            firstEventAt: firstEventAt,
+            inputListeningDegraded: inputListeningDegraded
         )
         let data = try Self.makeMetadataEncoder().encode(meta)
         try data.write(to: metadataURL, options: .atomic)

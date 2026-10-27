@@ -122,3 +122,41 @@ public enum LoginItem {
         }
     }
 }
+
+public enum CollectorService {
+    public static let label = "xyz.chesszyh.computerhistory.collector"
+
+    public static func start(executable: URL, root: URL) throws {
+        if CollectorProcessLease.runningIdentity(root: root) != nil { return }
+        let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent(label + ".plist")
+        let log = root.appendingPathComponent("collector.log").path
+        let data = try PropertyListSerialization.data(fromPropertyList: [
+            "Label": label, "ProgramArguments": [executable.path, "supervise", "--out", root.path],
+            "RunAtLoad": true, "KeepAlive": ["SuccessfulExit": false], "ProcessType": "Interactive",
+            "StandardOutPath": log, "StandardErrorPath": log, "ThrottleInterval": 5
+        ], format: .xml, options: 0)
+        let previous = try? Data(contentsOf: file)
+        if LoginItem.run("/bin/launchctl", ["print", "gui/\(getuid())/\(label)"]) == 0 {
+            let saved = previous.flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
+            let arguments = saved?["ProgramArguments"] as? [String] ?? []
+            guard let index = arguments.firstIndex(of: "--out"), arguments.indices.contains(index + 1),
+                  arguments[index + 1] == root.path else {
+                throw ConfigurationInputError.invalid("已有其他数据目录的后台服务，请先停止该实例。")
+            }
+            guard LoginItem.run("/bin/launchctl", ["kickstart", "gui/\(getuid())/\(label)"]) == 0 else {
+                throw ConfigurationInputError.invalid("无法启动已登记的后台服务。")
+            }
+            return
+        }
+        try data.write(to: file, options: .atomic)
+        _ = LoginItem.run("/bin/launchctl", ["bootout", "gui/\(getuid())/\(label)"])
+        guard LoginItem.run("/bin/launchctl", ["bootstrap", "gui/\(getuid())", file.path]) == 0 else {
+            if let previous { try previous.write(to: file, options: .atomic) }
+            else { try FileManager.default.removeItem(at: file) }
+            throw ConfigurationInputError.invalid("后台采集服务启动失败，请检查日志后重试。")
+        }
+    }
+}

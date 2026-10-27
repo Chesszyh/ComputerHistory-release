@@ -18,12 +18,13 @@ macOS 本地活动记录工具。通过 Accessibility（辅助功能，简称 AX
 
 需要 macOS 13 或更高版本、Swift 6 工具链。进程集成测试和菜单栏启动脚本另需 Python 3。Swift 包不依赖第三方包。
 
-在源码目录执行：
+日常使用请先按[下载与运行](docs/distribution.md)安装应用，打开应用后完成授权并开始记录。源码构建与验证在仓库目录执行：
 
 ```bash
 bash scripts/build.sh -c release
+bin_dir="$(swift build -c release --show-bin-path)"
 swift test
-python3 scripts/test-process-control.py .build/release/computer-history
+python3 scripts/test-process-control.py "$bin_dir/computer-history"
 ```
 
 常规测试使用合成数据，不需要模型密钥。三项私有兼容性样本测试默认跳过；集成测试使用临时目录和测试进程，以本地模拟接口验证生成路径，不操作真实运行服务。
@@ -32,12 +33,12 @@ python3 scripts/test-process-control.py .build/release/computer-history
 
 ## 开始记录
 
-先检查权限，再进行一次短时采集。检查命令报告辅助功能和屏幕录制授权状态，不代表输入监控、所有应用读取或事件监听已验证成功。
+先检查权限，再进行一次短时采集。检查命令报告系统权限预检状态，不代表所有应用读取或后台事件监听已验证成功。应用版提供首次授权引导，安装及升级见[下载与运行](docs/distribution.md)。
 
 ```bash
-./.build/release/computer-history --check
-./.build/release/computer-history collect --seconds 15
-./.build/release/computer-history --status
+"$bin_dir/computer-history" --check
+"$bin_dir/computer-history" collect --seconds 15
+"$bin_dir/computer-history" --status
 ```
 
 在“系统设置 → 隐私与安全性”中检查辅助功能和输入监控权限；具体需授权的程序受启动方式及系统权限归属影响。查看数据目录中的 `collector.log` 确认是否存在读取或监听错误。
@@ -46,35 +47,35 @@ python3 scripts/test-process-control.py .build/release/computer-history
 
 ```bash
 # 后台采集并定期生成本地事实摘要，禁止模型请求
-./.build/release/computer-history supervise --daemon --no-model
+"$bin_dir/computer-history" supervise --daemon --no-model
 
 # 请求停止采集器；监督进程在检测到正常停止后退出
-./.build/release/computer-history --stop
+"$bin_dir/computer-history" --stop
 
 # 启动菜单栏界面，读取默认数据目录
 ./scripts/menubar.sh
 ```
 
-菜单栏的登录启动设置只登记菜单栏程序，不负责启动采集器。可用 `./scripts/menubar.sh --stop` 停止身份可验证的菜单栏实例；旧版未登记身份的实例需从界面退出后再启动新版。修改 `config.json` 后需停止并重新启动采集；菜单栏运行开关则由进程定期读取。
+安装版的授权页提供“开始记录”，由独立后台服务管理采集。菜单栏的登录启动开关只控制菜单栏。可用 `./scripts/menubar.sh --stop` 停止身份可验证的菜单栏实例；旧版未登记身份的实例需从界面退出后再启动新版。采集配置保存后由运行实例自动重新加载；菜单栏运行开关也由进程定期读取。
 
 ## 记忆与时间线
 
 可安装 [跨 Agent 历史查询 Skill](docs/agent-skill.md)，在其他项目的 Coding Agent 中按需检索本机摘要与原始证据。
 
-历史活动支持[固定十分钟或连续任务两种模式](docs/collector.md#时间线模式编辑与复制)，保存后可选择重算范围；固定模式可编辑摘要，底栏可多选后复制。滚动到底部时自动加载更早记录。锁屏和长时间无操作分别记录离开原因；具体判定和存储见[采集行为](docs/collector.md#采集行为与局限)。
+历史活动支持[固定十分钟或连续任务两种模式](docs/collector.md#时间线模式编辑与复制)，保存后可选择重算范围；摘要单击复制、双击编辑；连续模式支持任务关联和片段归属纠错，底栏可多选后复制。滚动到底部时自动加载更早记录。锁屏和长时间无操作分别记录离开原因；具体判定和存储见[采集行为](docs/collector.md#采集行为与局限)。
 
 ```bash
 # 不联网：为已封口的段生成事实摘要
-./.build/release/computer-history memorize --no-model --limit 6
+"$bin_dir/computer-history" memorize --no-model --limit 6
 
 # 使用当前模型生成指定日期的日报；当天生成截至当前的预览
-./.build/release/computer-history report --day 2026-10-18
+"$bin_dir/computer-history" report --day 2026-10-18
 
 # 导出给其他 AI 的材料，不调用模型
-./.build/release/computer-history export --day 2026-10-18 --material --file activities.md
+"$bin_dir/computer-history" export --day 2026-10-18 --material --file activities.md
 
 # 检查已有十分钟记忆的自引用、未来引用和成环
-./.build/release/computer-history verify
+"$bin_dir/computer-history" verify
 ```
 
 菜单栏“日报、周报与导出”可生成、查看、复制报告，或复制给其他 AI 的活动材料，并导出 Markdown／TXT。监督进程自动补齐已结束时段的日报、周报，不再自动生成六小时汇总；已有六小时记录继续可读。可选的 GitHub 私有备份默认关闭，在“设置 → 总结提示词与配置 → 备份”设置仓库，并可直接用设置区开关启停。详细行为与命令见[报告、导出与备份](docs/collector.md#报告导出与备份)。

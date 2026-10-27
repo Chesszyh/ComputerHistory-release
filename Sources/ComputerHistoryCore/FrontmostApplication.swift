@@ -118,13 +118,24 @@ public enum FrontmostApplication {
         let editable = !knownNonText && (textRole || settableResult == .success && settable.boolValue
             || selection != nil)
         let value = editable ? AXTreeReader.valueString(el) : nil
+        var marked: Bool?
+        var markedValue: CFTypeRef?
+        let markedResult = AXUIElementCopyAttributeValue(el, "AXTextInputMarkedTextMarkerRange" as CFString, &markedValue)
+        if markedResult == .success { marked = markedValue != nil }
+        else if markedResult == .noValue { marked = false }
+        if marked == nil, let raw = AXTreeReader.copyValue(el, "AXMarkedTextRange"), CFGetTypeID(raw) == AXValueGetTypeID() {
+            var range = CFRange()
+            if AXValueGetValue(unsafeDowncast(raw, to: AXValue.self), .cfRange, &range) {
+                marked = range.location != kCFNotFound && range.length > 0
+            }
+        }
         let observation = TextInputTracker.Observation(
             value: value, caret: selection?.location,
             isEditableBuffer: value.map(AXTreeReader.isEditableBuffer) ?? false,
             focusIdentity: Int(truncatingIfNeeded: CFHash(el)),
             role: role, subrole: subrole,
             valueSettable: settableResult == .success ? settable.boolValue : nil,
-            placeholder: placeholder, selectionLength: selection?.length)
+            placeholder: placeholder, selectionLength: selection?.length, hasMarkedText: marked)
         let target: EventStreamAXElement? = observation.isEditableBuffer ? .init(
             role: role, subrole: subrole,
             title: AXTreeReader.copyString(el, kAXTitleAttribute as String),

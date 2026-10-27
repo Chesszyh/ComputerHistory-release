@@ -31,6 +31,7 @@ struct SummarySettingsPane: View {
                 case .model: modelEditor
                 case .collector: collectorEditor
                 case .backup: backupEditor
+                case .access: PermissionSetupPane(model: model)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

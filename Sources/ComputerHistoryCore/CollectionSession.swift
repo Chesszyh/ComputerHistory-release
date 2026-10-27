@@ -123,10 +123,24 @@ public final class CollectionSession {
             pendingText = []
             textContext = nil
             inputActivity = nil
+            lastScrollTime = nil
+            lastScrollPID = nil
+            lastScrollWindowID = nil
             previousTree = nil
             lastSnapshotText = nil
         }
     }
+
+    /// 输入监听是否处于有效状态。由外部采样循环按周期同步。
+    public var isInputListeningActive: Bool = true {
+        didSet {
+            if !isInputListeningActive {
+                hadDegradedInputListening = true
+            }
+        }
+    }
+    private var hadDegradedInputListening: Bool = false
+    public func noteInputListeningInterruption() { hadDegradedInputListening = true }
 
     /// 文本输入聚合。观察聚焦元素的值变化，按停顿切块。
     private let textTracker = TextInputTracker()
@@ -139,6 +153,11 @@ public final class CollectionSession {
     private var textContext: TextContext?
     private var pendingText: [(fragment: TextInputTracker.Fragment, context: TextContext)] = []
     private var inputActivity: (pid: Int32?, windowID: UInt32?, url: String?, focus: Int?, at: Date)?
+    private var lastScrollTime: Date?
+    private var lastScrollPID: Int32?
+    private var lastScrollURL: String?
+    private var lastScrollWindowID: UInt32?
+    private let scrollThrottleInterval: TimeInterval = 1.0
 
     /// 只记录交互时间与上下文，不保存原始键码或键入内容。
     public func noteInputActivity(at now: Date = Date()) {
@@ -204,7 +223,7 @@ public final class CollectionSession {
             currentSegmentID = nil
             isRunning = false
         }
-        try writer?.close(endedAt: now, endReason: .stopped)
+        try writer?.close(endedAt: now, endReason: .stopped, inputListeningDegraded: hadDegradedInputListening)
         finishIdlePeriod(at: now)
     }
 
@@ -334,6 +353,57 @@ public final class CollectionSession {
                app: app, window: window,
                mouse: EventStreamMouseInteraction(
                    button: button, clickCount: clickCount,
+                   modifiers: modifiers, target: target),
+               keyboard: nil, selection: nil, ax: nil)
+    }
+
+    /// 记录一次触控板/鼠标滚轮滚动。
+    public func recordScroll(
+        deltaX: Double,
+        deltaY: Double,
+        modifiers: [String],
+        location: CGPoint? = nil,
+        at now: Date = Date()
+    ) {
+        guard isRunning, !isPaused, deltaX != 0 || deltaY != 0 else { return }
+        let app = FrontmostApplication.current()
+        guard observeAvailability(app: app, now: now, idleSeconds: 0) else { return }
+        if lastScrollPID == app?.processIdentifier, let last = lastScrollTime,
+           treeApp?.processIdentifier == lastScrollPID, treeContext?.windowID == lastScrollWindowID,
+           treeContext?.url == lastScrollURL, now.timeIntervalSince(last) < scrollThrottleInterval { return }
+        let window = FrontmostApplication.frontWindow(for: app)
+        recordScroll(deltaX: deltaX, deltaY: deltaY, modifiers: modifiers, app: app, window: window,
+                     readTarget: {
+                         location.flatMap { FrontmostApplication.clickedElement(at: $0, for: app, window: window) }
+                     }, at: now)
+    }
+
+    func recordScroll(deltaX: Double, deltaY: Double, modifiers: [String], app: EventStreamApp?,
+                      window: EventStreamWindow?, readTarget: () -> EventStreamAXElement?, at now: Date) {
+        guard isRunning, !isPaused, observeAvailability(app: app, now: now, idleSeconds: 0),
+              allowsInteraction(app: app, window: window), deltaX != 0 || deltaY != 0 else { return }
+
+        // 连续滚动进行适度节流（同一应用和窗口内 1.0 秒内只记一次落盘事件），
+        // 避免高频滚动手势产生过多冗余事件。
+        let pid = app?.processIdentifier
+        let winID = window?.windowID
+        if let last = lastScrollTime,
+           lastScrollPID == pid,
+           lastScrollWindowID == winID,
+           lastScrollURL == window?.url,
+           now.timeIntervalSince(last) < scrollThrottleInterval {
+            return
+        }
+        lastScrollTime = now
+        lastScrollPID = pid
+        lastScrollWindowID = winID
+        lastScrollURL = window?.url
+
+        let target = readTarget()
+        append(kind: .mouseScroll, at: now,
+               app: app, window: window,
+               mouse: EventStreamMouseInteraction(
+                   button: "scroll", clickCount: nil,
                    modifiers: modifiers, target: target),
                keyboard: nil, selection: nil, ax: nil)
     }
@@ -520,7 +590,7 @@ public final class CollectionSession {
             away.startedReason = reason
             changed = true
             do {
-                try writer?.close(endedAt: now, endReason: nil)
+                try writer?.close(endedAt: now, endReason: nil, inputListeningDegraded: hadDegradedInputListening)
                 writer = nil
                 currentSegmentID = nil
             } catch {
@@ -629,11 +699,12 @@ public final class CollectionSession {
             return
         }
         if let writer {
-            try writer.close(endedAt: now, endReason: nil)
+            try writer.close(endedAt: now, endReason: nil, inputListeningDegraded: hadDegradedInputListening)
         }
         let w = try SegmentWriter(rootDirectoryURL: config.rootDirectory, start: now)
         writer = w
         currentSegmentID = w.segmentID
+        hadDegradedInputListening = !isInputListeningActive
         previousTree = nil
         lastSnapshotText = nil
 

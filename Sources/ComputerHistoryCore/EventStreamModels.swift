@@ -71,6 +71,7 @@ public enum EventStreamEventKind: String, Codable, Sendable, CaseIterable {
     case keyboardShortcut = "keyboard.shortcut"
     case selectionChanged = "selection.changed"
     case keyboardSubmit = "keyboard.submit"
+    case mouseScroll = "mouse.scroll"
 
     /// 索引 8 的另一个 rawValue，官方在终端场景下使用。
     public static let terminalValueChangedRawValue = "terminal.value_changed"

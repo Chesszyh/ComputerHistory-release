@@ -39,6 +39,7 @@ public struct ModelRequest: Codable, Sendable, Equatable, Identifiable {
         let label: String
         switch task { case "10min": label = "十分钟记忆"; case "6h": label = "六小时汇总"
         case "daily": label = "日报"; case "weekly": label = "周报"
+        case "narrative-grouping": label = "活动归属"
         case "narrative": label = "活动整理"; default: label = task }
         return fallbackOf != nil ? "降级 · " + label : (comparisonOf == nil ? label : "历史对照 · " + label)
     }

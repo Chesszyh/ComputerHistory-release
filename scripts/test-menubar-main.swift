@@ -12,7 +12,8 @@ import AppKit
         case "settings": try SettingsRegression.main()
         case "catalog": try CatalogRegression.main()
         case "reports": try ReportsRegression.main()
-        default: fatalError("Choose panel, usage, settings, catalog, or reports")
+        case "permissions": try PermissionWindowRegression.main()
+        default: fatalError("Choose panel, usage, settings, catalog, reports, or permissions")
         }
     }
 }

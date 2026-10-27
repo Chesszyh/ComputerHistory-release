@@ -1,76 +1,55 @@
 import Foundation
-import Security
 
+/// All keychain access belongs to the separately installed credential executable.
 public enum ModelAPIKey {
-    private static let service = "ComputerHistory.ModelAPIKey"
-
-    public static func configureInteraction(allow: Bool) throws {
-        // 登录钥匙串使用文件式访问控制，不能靠 LAContext 的逐次查询选项禁止其弹窗。
-        let status = SecKeychainSetUserInteractionAllowed(allow)
-        guard status == errSecSuccess else { throw KeyError(status: status) }
-    }
-
-    private static func query(root: URL, fallback: Bool = false, groupID: String? = nil) -> [String: Any] {
-        let suffix: String
-        switch groupID {
-        case nil: suffix = fallback ? "#fallback" : ""
-        case "legacy-primary": suffix = ""
-        case "legacy-fallback": suffix = "#fallback"
-        default: suffix = "#group:" + groupID!
-        }
-        return [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: service,
-         kSecAttrAccount as String: root.standardizedFileURL.path + suffix]
+    public static var helperURL: URL {
+        URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0]).standardizedFileURL.resolvingSymlinksInPath()
+            .deletingLastPathComponent().appendingPathComponent("computer-history-credentials")
     }
 
     public static func contains(root: URL, fallback: Bool = false, groupID: String? = nil) throws -> Bool {
-        var attributes = query(root: root, fallback: fallback, groupID: groupID)
-        // Settings only need existence; requesting secret data here would prompt for another executable's access.
-        attributes[kSecReturnAttributes as String] = true
-        attributes[kSecMatchLimit as String] = kSecMatchLimitOne
-        let status = SecItemCopyMatching(attributes as CFDictionary, nil)
-        if status == errSecItemNotFound { return false }
-        guard status == errSecSuccess else { throw KeyError(status: status) }
-        return true
+        try request("contains", root: root, fallback: fallback, groupID: groupID)["exists"] as? Bool ?? false
     }
-
     public static func load(root: URL, fallback: Bool = false, groupID: String? = nil) throws -> String? {
-        var attributes = query(root: root, fallback: fallback, groupID: groupID)
-        attributes[kSecReturnData as String] = true
-        attributes[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(attributes as CFDictionary, &result)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = result as? Data,
-              let key = String(data: data, encoding: .utf8) else { throw KeyError(status: status) }
-        return key
+        try request("load", root: root, fallback: fallback, groupID: groupID)["key"] as? String
     }
-
     public static func save(_ key: String, root: URL, fallback: Bool = false, groupID: String? = nil) throws {
-        let attributes = query(root: root, fallback: fallback, groupID: groupID)
-        let data = Data(key.utf8)
-        let status = SecItemUpdate(attributes as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if status == errSecItemNotFound {
-            var item = attributes
-            item[kSecValueData as String] = data
-            item[kSecAttrLabel as String] = "ComputerHistory 模型服务密钥"
-            let added = SecItemAdd(item as CFDictionary, nil)
-            guard added == errSecSuccess else { throw KeyError(status: added) }
-        } else if status != errSecSuccess { throw KeyError(status: status) }
+        _ = try request("save", root: root, fallback: fallback, groupID: groupID, key: key)
     }
-
     public static func remove(root: URL, fallback: Bool = false, groupID: String? = nil) throws {
-        let status = SecItemDelete(query(root: root, fallback: fallback, groupID: groupID) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw KeyError(status: status) }
+        _ = try request("remove", root: root, fallback: fallback, groupID: groupID)
+    }
+    public static func authorize(root: URL, fallback: Bool = false, groupID: String? = nil) throws {
+        guard try request("authorize", root: root, fallback: fallback, groupID: groupID)["exists"] as? Bool == true else {
+            throw ConfigurationInputError.invalid("当前模型组没有保存密钥。")
+        }
+        // A one-time Allow only authorizes that helper process. Verify a fresh background reader.
+        guard try load(root: root, fallback: fallback, groupID: groupID) != nil else {
+            throw ConfigurationInputError.invalid("密钥访问尚未恢复，请重试并在系统验证中选择“始终允许”。")
+        }
     }
 
-    public struct KeyError: Error, CustomStringConvertible {
-        let status: OSStatus
-        public var description: String {
-            if status == errSecInteractionNotAllowed || status == errSecAuthFailed {
-                return "钥匙串未允许当前程序读取模型密钥。请手动运行 computer-history model-key --authorize，并在系统验证中选择“始终允许”。备用模型使用 --fallback。后台任务不会弹出验证窗口。"
-            }
-            return "无法访问模型密钥：\(SecCopyErrorMessageString(status, nil) as String? ?? String(status))"
+    private static func request(_ operation: String, root: URL, fallback: Bool, groupID: String?, key: String? = nil) throws -> [String: Any] {
+        let executable = helperURL
+        guard FileManager.default.isExecutableFile(atPath: executable.path) else {
+            throw ConfigurationInputError.invalid("密钥助手缺失，请重新安装 ComputerHistory。")
         }
+        var request: [String: Any] = ["operation": operation, "root": root.standardizedFileURL.path, "fallback": fallback]
+        request["groupID"] = groupID; request["key"] = key
+        let process = Process()
+        process.executableURL = executable
+        let input = Pipe(), output = Pipe(), errors = Pipe()
+        process.standardInput = input; process.standardOutput = output; process.standardError = errors
+        try process.run()
+        try input.fileHandleForWriting.write(contentsOf: JSONSerialization.data(withJSONObject: request))
+        try input.fileHandleForWriting.close()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              process.terminationStatus == 0, result["ok"] as? Bool == true else {
+            let result = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            throw ConfigurationInputError.invalid(result?["error"] as? String ?? "密钥助手未完成操作，请在设置中恢复密钥访问。")
+        }
+        return result
     }
 }

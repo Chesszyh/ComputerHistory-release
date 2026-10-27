@@ -1,6 +1,5 @@
 #!/bin/bash
-# 启动菜单栏应用。与采集器一样脱离终端会话——它是常驻的 GUI，
-# 不应随启动它的终端一起退出。
+# 默认打开已安装应用；源码调试可显式指定二进制。
 #
 # 用法：
 #   ./scripts/menubar.sh          启动（已在运行则提示）
@@ -8,16 +7,20 @@
 
 set -u
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="${COMPUTER_HISTORY_MENUBAR_BIN:-${ROOT}/.build/release/computer-history-menubar}"
+APP="${HOME}/Applications/ComputerHistory.app"
+BIN="${COMPUTER_HISTORY_MENUBAR_BIN:-${APP}/Contents/MacOS/computer-history-menubar}"
 if [[ ! -x "${BIN}" ]]; then
     echo "找不到可执行文件：${BIN}" >&2
-    echo "先构建：swift build -c release" >&2
+    echo "请先安装 ComputerHistory.app；源码调试可用 COMPUTER_HISTORY_MENUBAR_BIN 指定程序。" >&2
     exit 1
 fi
 
 if [[ "${1:-}" == "--stop" ]]; then
     exec "${BIN}" --stop
+fi
+
+if [[ -z "${COMPUTER_HISTORY_MENUBAR_BIN:-}" ]]; then
+    exec /usr/bin/open "$APP"
 fi
 
 python3 - "$BIN" <<'PYTHON'

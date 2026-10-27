@@ -52,6 +52,8 @@ public struct DeepSeekClient: Sendable {
     private let apiKey: String
     private let baseURL: URL
     private let model: String
+    var generationIdentity: String { baseURL.absoluteString + "|" + model }
+
     private let timeout: TimeInterval
     private let settings: ModelSettings?
     private let fallbackAPIKey: String

@@ -29,6 +29,7 @@ public struct SegmentDigest: Sendable {
         public var firstSeen: Date
         public var lastSeen: Date
         public var clickCount: Int
+        public var scrollCount: Int = 0
         public var shortcutCount: Int
         /// 本段内记录的输入片段，按时间顺序。
         public var typedTexts: [String]
@@ -115,6 +116,7 @@ public struct SegmentDigest: Sendable {
                     merged = activity
                     merged.eventCount = 0
                     merged.clickCount = 0
+                    merged.scrollCount = 0
                     merged.shortcutCount = 0
                     merged.windowTitles = []
                     merged.urls = []
@@ -124,6 +126,7 @@ public struct SegmentDigest: Sendable {
                 }
                 merged.eventCount += activity.eventCount
                 merged.clickCount += activity.clickCount
+                merged.scrollCount += activity.scrollCount
                 merged.shortcutCount += activity.shortcutCount
                 merged.firstSeen = min(merged.firstSeen, activity.firstSeen)
                 merged.lastSeen = max(merged.lastSeen, activity.lastSeen)
@@ -198,6 +201,8 @@ public struct SegmentDigest: Sendable {
             switch event.kind {
             case .mouseClick, .mouseContextMenu:
                 activity.clickCount += 1
+            case .mouseScroll:
+                activity.scrollCount += 1
             case .keyboardShortcut:
                 activity.shortcutCount += 1
             case .keyboardTextInput:
