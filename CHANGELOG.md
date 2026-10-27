@@ -2,6 +2,8 @@
 
 ## 0.3.1 - 2026-10-27
 
+The Apple Silicon package uses ad-hoc signing and is not notarized. See the [installation guide](https://github.com/Chesszyh/ComputerHistory-release/blob/main/docs/distribution.md) for first launch and permissions.
+
 - Separate activity ownership from summary writing, retain task returns as distinct appearances, and preserve completed generation stages during retries.
 - Allow editing final timeline titles and summaries, associating or separating tasks, and splitting grouped fragments while keeping source evidence read-only.
 - Record browsing scrolls, report unavailable input coverage separately from passive activity, and avoid flushing exposed input method composition as committed text.

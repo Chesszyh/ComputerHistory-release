@@ -24,9 +24,15 @@ public struct TimelineEdits: Codable, Equatable, Sendable {
     }
 
     public static func taskAnchorKeys(for item: TrayTimelineItem) -> [String] {
-        (item.sourceActivities ?? [:]).keys.sorted().flatMap { name in
-            (item.sourceActivities?[name] ?? []).map { "task-source:" + name + "#" + (item.sourceRevisions?[name] ?? "") + "#" + String($0) }
+        guard let activities = item.sourceActivities else { return [] }
+        var keys: [String] = []
+        for name in activities.keys.sorted() {
+            let numbers: [Int] = activities[name] ?? []
+            let revision: String = item.sourceRevisions?[name] ?? ""
+            let prefix = "task-source:\(name)#\(revision)#"
+            for number in numbers { keys.append(prefix + String(number)) }
         }
+        return keys
     }
 
     public func applying(to item: TrayTimelineItem, mode: SummarySettings.TimelineMode, index: MemoryIndex) -> TrayTimelineItem {

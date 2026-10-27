@@ -1,6 +1,6 @@
 # 下载、安装和升级
 
-从 [GitHub Releases](https://github.com/Chesszyh/ComputerHistory-release/releases/latest) 下载 Apple Silicon 压缩包。运行要求以 `Package.swift` 为准；源码构建入口见 [README](../README.md)。
+从 [GitHub Releases](https://github.com/Chesszyh/ComputerHistory-release/releases/latest) 下载 Apple Silicon 压缩包。运行要求以 [Package.swift](https://github.com/Chesszyh/ComputerHistory-release/blob/main/Package.swift) 为准；源码构建入口见 [README](https://github.com/Chesszyh/ComputerHistory-release#readme)。
 
 ## 安装与首次启动
 
@@ -30,7 +30,7 @@
 
 ## 命令行与卸载
 
-命令行程序位于 `~/Applications/ComputerHistory.app/Contents/MacOS/`，菜单栏、采集命令和密钥助手应一起安装。权限检查使用 `computer-history --check`，实际运行检查使用 `computer-history --status`；后者包括后台输入监听状态。模型外发边界见 [隐私说明](privacy.md)。
+命令行程序位于 `~/Applications/ComputerHistory.app/Contents/MacOS/`，菜单栏、采集命令和密钥助手应一起安装。权限检查使用 `computer-history --check`，实际运行检查使用 `computer-history --status`；后者包括后台输入监听状态。模型外发边界见 [隐私说明](https://github.com/Chesszyh/ComputerHistory-release/blob/main/docs/privacy.md)。
 
 卸载应用与服务并保留历史、配置和钥匙串：
 
