@@ -1,0 +1,45 @@
+CHANGELOG.md
+  s_2993987ff17172::t_3f624a58817302 3-15
+CHANGELOG.zh.md
+  s_2993987ff17172::t_d6f81aa23e347f 3-15
+Sources/ComputerHistoryCore/AXTreeReader.swift
+  s_2993987ff17172::t_4ea2c5ce223830 100-102
+Sources/ComputerHistoryCore/CollectionSession.swift
+  s_2993987ff17172::t_0500b60cb8f282 68-70,92,119,198,215,263-345,691
+Sources/ComputerHistoryCore/InputTap.swift
+  s_2993987ff17172::t_ff3fe564460986 163-164
+Sources/ComputerHistoryCore/UIElementRenderDifference.swift
+  s_2993987ff17172::t_d3dbad8f35c0a0 79-90,189,192-213,215,217-244,246-259,263-340
+Sources/computer-history/main.swift
+  s_2993987ff17172::t_7837b3948bb578 599,603-610,612-634,637-647,649-651,653-671,674-686,688-713,955
+Tests/ComputerHistoryCoreTests/AsyncSnapshotTests.swift
+  s_2993987ff17172::t_7d30a0fbb58ddf 1-195
+Tests/ComputerHistoryCoreTests/RenderAndDiffTests.swift
+  s_2993987ff17172::t_d5e4ea652c9a5e 218-294
+VERSION
+  s_2993987ff17172::t_b01084c2a87400 1
+docs/collector.md
+  s_2993987ff17172::t_0f806320903a33 20
+scripts/test-collector-input.swift
+  s_2993987ff17172::t_a39f8d20f57210 1-182
+scripts/test-integration.py
+  s_2993987ff17172::t_b3bd35c523befe 11
+scripts/test-supervisor-memory.py
+  s_2993987ff17172::t_89ccc2960b5726 1-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ef02d2990382fdf92ae96eafd0988723ffeb2fa3",
+  "prompts": {},
+  "sessions": {
+    "s_2993987ff17172": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a17e2b-9bb0-7c82-a10e-8dadc75ae575",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
