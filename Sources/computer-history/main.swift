@@ -596,119 +596,122 @@ if flags.contains("supervise") {
     var pendingBackground: [GenerationTask] = []
     var runningBackground: (pid: pid_t, label: String)?
     let backlog = MemoryGenerator(rootDirectory: root, memoriesDirectory: root.appendingPathComponent("memories"))
-    var observedSegments = Set(backlog.completedSegmentIDs())
+    var observedSegments = autoreleasepool { Set(backlog.completedSegmentIDs()) }
     while true {
         Thread.sleep(forTimeInterval: 1)
 
-        // ⓪ 运行期把日志截到上限内。只在启动时轮转不够——长期运行会持续增长。
-        // 每 60 秒检查一次，避免频繁 stat。
-        if Date() >= nextLogCheck {
-            nextLogCheck = Date().addingTimeInterval(60)
-            CollectorSupervisor.enforceLogBound(at: logURL,
-                                               maxBytes: cfg.maxLogBytes)
-        }
+        // Foundation 的目录与路径临时对象必须在每轮结束时回收；sleep 不会清空释放池。
+        autoreleasepool {
+            // ⓪ 运行期把日志截到上限内。只在启动时轮转不够——长期运行会持续增长。
+            // 每 60 秒检查一次，避免频繁 stat。
+            if Date() >= nextLogCheck {
+                nextLogCheck = Date().addingTimeInterval(60)
+                CollectorSupervisor.enforceLogBound(at: logURL,
+                                                   maxBytes: cfg.maxLogBytes)
+            }
 
-        // ① 看护采集器：每隔 1 秒检查，生成任务在跑也不中断。
-        if let pid = child, let code = CollectorSupervisor.reap(pid) {
-            if code == 0 || code == 74 {
-                print(code == 0 ? "采集器正常停止，监督退出。" : "采集器停止时封口失败，监督退出；请检查日志与存储。")
-                if let running { _ = CollectorSupervisor.terminate(running.pid) }
-                if let runningBackground { _ = CollectorSupervisor.terminate(runningBackground.pid) }
-                exit(code)
+            // ① 看护采集器：每隔 1 秒检查，生成任务在跑也不中断。
+            if let pid = child, let code = CollectorSupervisor.reap(pid) {
+                if code == 0 || code == 74 {
+                    print(code == 0 ? "采集器正常停止，监督退出。" : "采集器停止时封口失败，监督退出；请检查日志与存储。")
+                    if let running { _ = CollectorSupervisor.terminate(running.pid) }
+                    if let runningBackground { _ = CollectorSupervisor.terminate(runningBackground.pid) }
+                    exit(code)
+                }
+                if code == 73 {
+                    print("已有采集实例，监督退出。")
+                    if let running { _ = CollectorSupervisor.terminate(running.pid) }
+                    if let runningBackground { _ = CollectorSupervisor.terminate(runningBackground.pid) }
+                    exit(0)
+                }
+                print("采集器异常退出（码 \(code)），\(Int(retryDelay)) 秒后重启…")
+                child = nil
+                // 生成任务与采集器无依赖，继续跑完即可，不必打断。
+                Thread.sleep(forTimeInterval: retryDelay)
+                child = CollectorSupervisor.spawnDetachedChild(
+                    executable: exe, arguments: ["collect", "--out", root.path])
+                if child == nil { warn("重启失败，监督退出。"); exit(1) }
+                print("采集器已重启（pid \(child!)）。")
             }
-            if code == 73 {
-                print("已有采集实例，监督退出。")
-                if let running { _ = CollectorSupervisor.terminate(running.pid) }
-                if let runningBackground { _ = CollectorSupervisor.terminate(runningBackground.pid) }
-                exit(0)
-            }
-            print("采集器异常退出（码 \(code)），\(Int(retryDelay)) 秒后重启…")
-            child = nil
-            // 生成任务与采集器无依赖，继续跑完即可，不必打断。
-            Thread.sleep(forTimeInterval: retryDelay)
-            child = CollectorSupervisor.spawnDetachedChild(
-                executable: exe, arguments: ["collect", "--out", root.path])
-            if child == nil { warn("重启失败，监督退出。"); exit(1) }
-            print("采集器已重启（pid \(child!)）。")
-        }
 
-        // ② 回收已结束的生成任务，随即启动下一个。
-        if let current = running, let code = CollectorSupervisor.reap(current.pid) {
-            print(code == 0 ? "生成任务完成：\(current.label)" : "生成任务失败：\(current.label)（退出码 \(code)），请检查日志。")
-            if current.label == "叙述层" { completedRealtime = true }
-            let memoryCount = ((try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("memories").path)) ?? []).count
-            if current.label == "十分钟记忆", code == 0, memoryCount > memoryCountAtLaunch,
-               ModelHealth.load(root: root)?.error == nil,
-               backlog.completedSegmentIDs().contains(where: {
-                   !FileManager.default.fileExists(atPath: root.appendingPathComponent("memories").appendingPathComponent(MemoryWriter.fileName(segmentID: $0)).path)
-               }) { nextMemorize = Date() }
-            running = nil
-        }
-        if let current = runningBackground, let code = CollectorSupervisor.reap(current.pid) {
-            print(code == 0 ? "生成任务完成：\(current.label)" : "生成任务失败：\(current.label)（退出码 \(code)），请检查日志。")
-            runningBackground = nil
-        }
-        if runningBackground == nil, !pendingBackground.isEmpty {
-            let task = pendingBackground.removeFirst()
-            let arguments = task.arguments + (flags.contains("--no-model") ? ["--no-model"] : [])
-            if let pid = CollectorSupervisor.spawnDetachedChild(executable: exe, arguments: arguments) {
-                runningBackground = (pid, task.label)
-                print("生成任务启动：\(task.label)")
+            // ② 回收已结束的生成任务，随即启动下一个。
+            if let current = running, let code = CollectorSupervisor.reap(current.pid) {
+                print(code == 0 ? "生成任务完成：\(current.label)" : "生成任务失败：\(current.label)（退出码 \(code)），请检查日志。")
+                if current.label == "叙述层" { completedRealtime = true }
+                let memoryCount = ((try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("memories").path)) ?? []).count
+                if current.label == "十分钟记忆", code == 0, memoryCount > memoryCountAtLaunch,
+                   ModelHealth.load(root: root)?.error == nil,
+                   backlog.completedSegmentIDs().contains(where: {
+                       !FileManager.default.fileExists(atPath: root.appendingPathComponent("memories").appendingPathComponent(MemoryWriter.fileName(segmentID: $0)).path)
+                   }) { nextMemorize = Date() }
+                running = nil
             }
-        }
-        if running == nil, !pending.isEmpty {
-            let task = pending.removeFirst()
-            if task.label == "十分钟记忆" {
-                memoryCountAtLaunch = ((try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("memories").path)) ?? []).count
+            if let current = runningBackground, let code = CollectorSupervisor.reap(current.pid) {
+                print(code == 0 ? "生成任务完成：\(current.label)" : "生成任务失败：\(current.label)（退出码 \(code)），请检查日志。")
+                runningBackground = nil
             }
-            let generationArguments = task.arguments + (flags.contains("--no-model") ? ["--no-model"] : [])
-            if let pid = CollectorSupervisor.spawnDetachedChild(
-                executable: exe, arguments: generationArguments) {
-                running = (pid, task.label)
-                print("生成任务启动：\(task.label)")
+            if runningBackground == nil, !pendingBackground.isEmpty {
+                let task = pendingBackground.removeFirst()
+                let arguments = task.arguments + (flags.contains("--no-model") ? ["--no-model"] : [])
+                if let pid = CollectorSupervisor.spawnDetachedChild(executable: exe, arguments: arguments) {
+                    runningBackground = (pid, task.label)
+                    print("生成任务启动：\(task.label)")
+                }
             }
-        }
+            if running == nil, !pending.isEmpty {
+                let task = pending.removeFirst()
+                if task.label == "十分钟记忆" {
+                    memoryCountAtLaunch = ((try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("memories").path)) ?? []).count
+                }
+                let generationArguments = task.arguments + (flags.contains("--no-model") ? ["--no-model"] : [])
+                if let pid = CollectorSupervisor.spawnDetachedChild(
+                    executable: exe, arguments: generationArguments) {
+                    running = (pid, task.label)
+                    print("生成任务启动：\(task.label)")
+                }
+            }
 
-        // ③ 到点或收到手动请求时排队新一轮生成。上一轮未跑完时不重复排队。
-        let control = CollectorControl.load(root: root)
-        let sealed = Set(backlog.completedSegmentIDs())
-        if !sealed.subtracting(observedSegments).isEmpty, memorizeInterval > 0 { nextMemorize = Date() }
-        observedSegments = sealed
-        if completedRealtime, control.summarizing, (memorizeInterval > 0 || backgroundRequested),
-           Date() >= nextBackground, pendingBackground.isEmpty, runningBackground == nil {
-            backgroundRequested = false
-            nextBackground = Date().addingTimeInterval(memorizeInterval)
-            pendingBackground = [
-                GenerationTask(label: "日报／周报", arguments: ["report", "--out", root.path]),
-                GenerationTask(label: "GitHub 私有备份", arguments: ["backup", "--automatic", "--out", root.path]),
-            ]
-        }
-        let manual = control.flushRequested
-        if (manual || memorizeInterval > 0), manual || Date() >= nextMemorize {
-            // 上一轮没跑完时不排队，也**不清除请求标记**——清早了这次请求就丢了。
-            // 手动请求最多积压一次：标记是布尔，连点多次与点一次等价。
-            guard pending.isEmpty, running == nil else { continue }
-            // 暂停总结时只保留采集。已经排队的任务跑完即可，不强杀。
-            // 手动请求同样受开关约束——暂停是使用者的明确意图。
-            guard control.summarizing else {
-                if manual { try? CollectorControl.update(root: root, flushRequested: false) }
-                continue
+            // ③ 到点或收到手动请求时排队新一轮生成。上一轮未跑完时不重复排队。
+            let control = CollectorControl.load(root: root)
+            let sealed = Set(backlog.completedSegmentIDs())
+            if !sealed.subtracting(observedSegments).isEmpty, memorizeInterval > 0 { nextMemorize = Date() }
+            observedSegments = sealed
+            if completedRealtime, control.summarizing, (memorizeInterval > 0 || backgroundRequested),
+               Date() >= nextBackground, pendingBackground.isEmpty, runningBackground == nil {
+                backgroundRequested = false
+                nextBackground = Date().addingTimeInterval(memorizeInterval)
+                pendingBackground = [
+                    GenerationTask(label: "日报／周报", arguments: ["report", "--out", root.path]),
+                    GenerationTask(label: "GitHub 私有备份", arguments: ["backup", "--automatic", "--out", root.path]),
+                ]
             }
-            if manual {
-                try? CollectorControl.update(root: root, flushRequested: false)
-                backgroundRequested = true; nextBackground = Date()
-                print("收到立即生成请求。")
+            let manual = control.flushRequested
+            if (manual || memorizeInterval > 0), manual || Date() >= nextMemorize {
+                // 上一轮没跑完时不排队，也**不清除请求标记**——清早了这次请求就丢了。
+                // 手动请求最多积压一次：标记是布尔，连点多次与点一次等价。
+                guard pending.isEmpty, running == nil else { return }
+                // 暂停总结时只保留采集。已经排队的任务跑完即可，不强杀。
+                // 手动请求同样受开关约束——暂停是使用者的明确意图。
+                guard control.summarizing else {
+                    if manual { try? CollectorControl.update(root: root, flushRequested: false) }
+                    return
+                }
+                if manual {
+                    try? CollectorControl.update(root: root, flushRequested: false)
+                    backgroundRequested = true; nextBackground = Date()
+                    print("收到立即生成请求。")
+                }
+                nextMemorize = Date().addingTimeInterval(memorizeInterval)
+                pending = [
+                    GenerationTask(label: "十分钟记忆",
+                                   arguments: ["memorize", "--out", root.path,
+                                               "--limit", String(memorizeBatch), "--recent-first"]),
+                    // 叙述层只处理当天：更早的日期其记忆已稳定，不必反复归纳。
+                    GenerationTask(label: "叙述层",
+                                   arguments: ["narrative", "--out", root.path,
+                                               "--day", todayLabel()]),
+                ]
             }
-            nextMemorize = Date().addingTimeInterval(memorizeInterval)
-            pending = [
-                GenerationTask(label: "十分钟记忆",
-                               arguments: ["memorize", "--out", root.path,
-                                           "--limit", String(memorizeBatch), "--recent-first"]),
-                // 叙述层只处理当天：更早的日期其记忆已稳定，不必反复归纳。
-                GenerationTask(label: "叙述层",
-                               arguments: ["narrative", "--out", root.path,
-                                           "--day", todayLabel()]),
-            ]
         }
     }
 }
@@ -949,7 +952,7 @@ let timer = Timer.scheduledTimer(withTimeInterval: sampleInterval, repeats: true
         } else if !wasPaused, session.isPaused {
             print("已暂停记录。")
         }
-        session.sampleFrontmost()
+        session.sampleFrontmostAsync()
         activityWatchSampler.update(enabled: collectorConfig.activityWatchEnabled && !session.isPaused && !session.isAway) { snapshot in
             guard CollectorControl.load(root: root).recording else { return }
             session.recordActivityWatch(snapshot)

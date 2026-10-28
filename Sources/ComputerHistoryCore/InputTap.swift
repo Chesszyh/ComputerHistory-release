@@ -160,7 +160,8 @@ public final class InputTap {
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
-            options: .defaultTap,       // 透传型事件 tap，回调中返回原事件不做改写
+            // Passive observation keeps system input delivery independent of the collector runloop.
+            options: .listenOnly,
             eventsOfInterest: mask,
             callback: { _, type, event, refcon in
                 guard let refcon else { return Unmanaged.passUnretained(event) }

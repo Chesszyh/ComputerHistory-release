@@ -215,6 +215,83 @@ final class RenderAndDiffTests: XCTestCase {
         XCTAssertEqual(ab.map(\.1), [0, 1])
     }
 
+    func testLongestCommonSubsequenceHandlesLargeIdenticalListsWithoutQuadraticWork() {
+        let ids = Array(0..<5_000)
+        let result = UIElementRenderDifference.longestCommonSubsequence(ids, ids)
+        XCTAssertEqual(result.count, ids.count)
+        XCTAssertEqual(result.first?.0, 0)
+        XCTAssertEqual(result.last?.0, ids.count - 1)
+        XCTAssertEqual(result.map(\.0), result.map(\.1))
+    }
+
+    func testLongestCommonSubsequencePreservesLocalizedChangesAtLargeEdges() {
+        let before = Array(0..<3_000)
+        var after = before
+        after.insert(-1, at: 1_500)
+        let result = UIElementRenderDifference.longestCommonSubsequence(before, after)
+        XCTAssertEqual(result.count, before.count)
+        XCTAssertEqual(result.first?.0, 0)
+        XCTAssertEqual(result.first?.1, 0)
+        XCTAssertEqual(result.last?.0, 2_999)
+        XCTAssertEqual(result.last?.1, 3_000)
+    }
+
+    func testLongestCommonSubsequenceBoundsMemoryForPathologicalSiblingLists() {
+        let before = Array(0..<2_100)
+        let after = Array((0..<2_100).reversed())
+        let result = UIElementRenderDifference.longestCommonSubsequence(before, after)
+        XCTAssertFalse(result.isEmpty)
+        XCTAssertTrue(zip(result, result.dropFirst()).allSatisfy {
+            $0.0.0 < $0.1.0 && $0.0.1 < $0.1.1
+        }, "LCS pairs must remain strictly increasing")
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(before[result[0].0], after[result[0].1])
+    }
+
+    func testWideSlidingListKeepsExactCompactDiff() {
+        let before = (0..<2_100).map { UIElementRender(id: $0, text: "row-\($0)") }
+        let after = (1...2_100).map { UIElementRender(id: $0, text: "row-\($0)") }
+        let matches = UIElementRenderDifference.longestCommonSubsequence(before.map(\.id), after.map(\.id))
+        XCTAssertEqual(matches.count, 2_099)
+        let lines = UIElementRenderDifference.lines(from: before, to: after, includesUnchangedContext: false)
+        XCTAssertEqual(lines?.count, 2)
+        XCTAssertEqual(lines?.first, "Removed element IDs: 0")
+        XCTAssertEqual(lines?.last, "+2099 row-2100")
+    }
+
+    func testLargeUniqueListsKeepOptimalMatchesAcrossReorderings() {
+        let permutations = [[5, 4, 3, 2, 1, 0], [2, 3, 0, 4, 1, 5], [1, 2, 3, 4, 5, 0], [0, 2, 4, 1, 3, 5]]
+        for permutation in permutations {
+            let small = Array(0..<6)
+            var lengths = [[Int]](repeating: [Int](repeating: 0, count: 7), count: 7)
+            for i in small.indices {
+                for j in permutation.indices {
+                    lengths[i + 1][j + 1] = small[i] == permutation[j] ? lengths[i][j] + 1
+                        : max(lengths[i][j + 1], lengths[i + 1][j])
+                }
+            }
+            let before = [-1] + small + Array(10_000..<12_000)
+            let after = [-2] + permutation + Array(20_000..<22_000)
+            let matches = UIElementRenderDifference.longestCommonSubsequence(before, after)
+            XCTAssertEqual(matches.count, lengths[6][6])
+            XCTAssertTrue(matches.allSatisfy { before[$0.0] == after[$0.1] })
+            XCTAssertTrue(zip(matches, matches.dropFirst()).allSatisfy {
+                $0.0.0 < $0.1.0 && $0.0.1 < $0.1.1
+            })
+        }
+    }
+
+    func testLargeDuplicateIDListsRetainExactMatches() {
+        let before = [0] + [Int](repeating: 7, count: 2_100) + [1]
+        let after = [2] + [Int](repeating: 7, count: 2_100) + [3]
+        let matches = UIElementRenderDifference.longestCommonSubsequence(before, after)
+        XCTAssertEqual(matches.count, 2_100)
+        XCTAssertTrue(matches.allSatisfy { before[$0.0] == after[$0.1] })
+        XCTAssertTrue(zip(matches, matches.dropFirst()).allSatisfy {
+            $0.0.0 < $0.1.0 && $0.0.1 < $0.1.1
+        })
+    }
+
     // MARK: - 选项
 
     func testRenderOptionsSuppressParts() {

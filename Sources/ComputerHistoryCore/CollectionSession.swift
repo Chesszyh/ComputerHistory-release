@@ -65,6 +65,9 @@ public final class CollectionSession {
     private var activityWatchSince = Date()
     private var activityWatchCursor: Date?
     private var accessibilityActivation = AccessibilityActivation()
+    private(set) var frontmostSampleInFlight = false
+    private var frontmostSampleEpoch = 0
+    private var frontmostSampleContext: FrontmostSnapshotContext?
     private var config: Configuration
     private var writer: SegmentWriter?
     private var nextID = 1
@@ -86,6 +89,7 @@ public final class CollectionSession {
     public var isAway: Bool { away.startedAt != nil }
 
     public func applyConfiguration(_ updated: CollectorConfig) {
+        frontmostSampleEpoch += 1
         activityWatchSince = Date()
         activityWatchCursor = nil
         // 策略变化后丢弃旧缓冲，避免把新名单排除的文本写入历史。
@@ -112,6 +116,7 @@ public final class CollectionSession {
     public var isPaused = false {
         didSet {
             guard isPaused != oldValue else { return }
+            frontmostSampleEpoch += 1
             if isPaused { finishIdlePeriod(at: Date()) }
             activityWatchSince = Date()
             activityWatchCursor = nil
@@ -190,6 +195,7 @@ public final class CollectionSession {
     /// 开始采集。写一条 `session.started`，并开启第一个 segment。
     public func start(now: Date = Date()) throws {
         guard !isRunning else { return }
+        frontmostSampleEpoch += 1
         nextID = 1
         if !isAway { try rotateIfNeeded(now: now, force: true) }
         try EventArchive.recoverUnsealed(root: config.rootDirectory, excluding: currentSegmentID ?? "")
@@ -206,6 +212,7 @@ public final class CollectionSession {
     /// 结束采集。写 `session.ended` 并封口当前 segment。
     public func stop(now: Date = Date()) throws {
         guard isRunning else { return }
+        frontmostSampleEpoch += 1
         windowTextEpoch += 1
         windowTextContext = nil
         lastWindowText = nil
@@ -251,6 +258,89 @@ public final class CollectionSession {
 
         recordSnapshot(roots: roots, app: app, window: window, now: now, force: force)
         updateWindowTextContext(roots: roots, app: app, window: window)
+    }
+
+    struct FrontmostSnapshotContext: Sendable {
+        var app: EventStreamApp
+        var window: EventStreamWindow?
+
+        func matches(_ other: Self?) -> Bool {
+            guard let other else { return false }
+            return app.processIdentifier == other.app.processIdentifier
+                && app.bundleIdentifier == other.app.bundleIdentifier
+                && window?.windowID == other.window?.windowID
+                && window?.url == other.window?.url
+        }
+
+        @MainActor static func current() -> Self? {
+            guard let app = FrontmostApplication.current() else { return nil }
+            return Self(app: app, window: FrontmostApplication.frontWindow(for: app))
+        }
+    }
+
+    @MainActor
+    public func sampleFrontmostAsync(now: Date = Date(), force: Bool = false) {
+        guard isRunning, !isPaused else { windowTextContext = nil; return }
+        let context = FrontmostSnapshotContext.current()
+        sampleFrontmostAsync(context: context, now: now, force: force,
+            idleSeconds: InputTap.secondsSinceLastInput,
+            prepare: {
+                if let pid = context?.app.processIdentifier {
+                    accessibilityActivation.prepare(pid: pid, now: now)
+                }
+            },
+            read: { AXTreeReader.read(pid: $0, maxNodes: $1) },
+            currentContext: { FrontmostSnapshotContext.current() })
+    }
+
+    @MainActor
+    func sampleFrontmostAsync(
+        context: FrontmostSnapshotContext?, now: Date, force: Bool = false,
+        idleSeconds: TimeInterval? = nil,
+        prepare: () -> Void = {},
+        read: @escaping @Sendable (Int32, Int) -> [UIElementRender],
+        currentContext: @escaping @MainActor @Sendable () -> FrontmostSnapshotContext?,
+        completedAt: @escaping @MainActor @Sendable () -> Date = { Date() }
+    ) {
+        guard isRunning, !isPaused else { windowTextContext = nil; return }
+        if !(context?.matches(frontmostSampleContext) ?? (frontmostSampleContext == nil)) {
+            frontmostSampleEpoch += 1
+            windowTextContext = nil
+        }
+        frontmostSampleContext = context
+        guard let context,
+              observeAvailability(app: context.app, now: now, idleSeconds: idleSeconds) else {
+            windowTextContext = nil
+            return
+        }
+        guard !config.policy.shouldSuppress(app: context.app, window: context.window) else {
+            windowTextContext = nil
+            if config.tracksSuppression { writer?.noteSuppressed() }
+            return
+        }
+        guard !frontmostSampleInFlight, let pid = context.app.processIdentifier else { return }
+        prepare()
+        let maxNodes = config.maxNodesPerSnapshot
+        let epoch = frontmostSampleEpoch
+        frontmostSampleInFlight = true
+        // Only the value snapshot crosses the worker queue; session state stays on the main actor.
+        let complete: @MainActor @Sendable ([UIElementRender]) -> Void = { [weak self] roots in
+            guard let self else { return }
+            self.frontmostSampleInFlight = false
+            guard self.frontmostSampleEpoch == epoch,
+                  self.isRunning, !self.isPaused, !self.isAway,
+                  let current = currentContext(), context.matches(current),
+                  !self.config.policy.shouldSuppress(app: current.app, window: current.window) else { return }
+            // Input events can be written while AX is reading, including after a segment boundary.
+            let finishedAt = completedAt()
+            self.recordSnapshot(roots: roots, app: current.app, window: current.window,
+                                now: finishedAt, force: force)
+            self.updateWindowTextContext(roots: roots, app: current.app, window: current.window)
+        }
+        DispatchQueue.global(qos: .utility).async {
+            let roots = read(pid, maxNodes)
+            DispatchQueue.main.async { complete(roots) }
+        }
     }
 
     func updateWindowTextContext(roots: [UIElementRender], app: EventStreamApp, window: EventStreamWindow?) {
@@ -598,6 +688,7 @@ public final class CollectionSession {
             }
         }
         if changed {
+            frontmostSampleEpoch += 1
             textTracker.resetBaseline()
             pendingText = []
             textContext = nil

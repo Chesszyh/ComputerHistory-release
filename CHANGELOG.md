@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.2 - 2026-10-28
+
+### Collection responsiveness
+- Observe keyboard and mouse events with a passive system listener so a busy collector runloop does not hold up input delivery to other apps. Read full Accessibility trees in the background with one snapshot in flight.
+- Retain one-second sampling and the existing node limit. Optimize unchanged identities and localized edits, and use exact matching with bounded memory for large lists instead of expanding simple updates into full-tree rewrites.
+- Fix WeChat auto-scrolling and flicker by retaining static text values while skipping empty child queries that trigger scrolling.
+- Drain directory-scan temporary objects after each supervisor iteration to prevent memory accumulation during long-running collection.
+
+### Recording accuracy and validation
+- Recheck application, window, and URL before accepting snapshots; invalidate pending results across pause/resume, configuration changes, away transitions, and stop/restart. Timestamp snapshots at completion to preserve event and segment order.
+- Keep session mutations on the main actor under Swift 6 concurrency checking. Add regressions for asynchronous lifecycles, segment boundaries, exact large-list diffs, supervisor memory, and input delivery while the collector runloop is blocked.
+- In a local synthetic benchmark, changing one text value among 3,000 siblings reduced diff time from about 34.6 ms to 0.96 ms with the same two-line result. Removing the first of 2,100 siblings and adding a new last item took about 1.15 ms while retaining 2,099 matches. Local trials covered scrolling, Chinese text input, and an idle WeChat window.
+
 ## 0.3.1 - 2026-10-27
 
 The Apple Silicon package uses ad-hoc signing and is not notarized. See the [installation guide](https://github.com/Chesszyh/ComputerHistory-release/blob/main/docs/distribution.md) for first launch and permissions.

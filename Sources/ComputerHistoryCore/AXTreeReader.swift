@@ -97,7 +97,9 @@ public enum AXTreeReader {
         let id = identityHash(hash: h, occurrence: occurrence)
 
         var children: [UIElementRender] = []
-        if let kids = copyElements(element, kAXChildrenAttribute as String) {
+        // WeChat scrolls when AXChildren is queried on static text, even though it returns no children.
+        if role != kAXStaticTextRole as String,
+           let kids = copyElements(element, kAXChildrenAttribute as String) {
             for kid in kids {
                 if let c = convert(kid, budget: &budget,
                                    depth: depth + 1, maxDepth: maxDepth,
