@@ -1,0 +1,25 @@
+CHANGELOG.md
+  s_c281991561ffe6::t_9d5a11b52ace84 5-6
+CHANGELOG.zh.md
+  s_c281991561ffe6::t_3a732bb7566a20 5-6
+Sources/ComputerHistoryCore/TimelineEdits.swift
+  s_c281991561ffe6::t_5cfe9a333d5f52 27-33,35
+docs/distribution.md
+  s_c281991561ffe6::t_3f97b3f2b9d610 3,33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "39b86bc3ebd7f7f073219595a5eb10f2d1a013a5",
+  "prompts": {},
+  "sessions": {
+    "s_c281991561ffe6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1741f-0bfe-7331-8c3b-89ba4be3f1f8",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
