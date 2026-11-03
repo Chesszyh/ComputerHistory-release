@@ -61,8 +61,18 @@ public struct DeepSeekClient: Sendable {
         if let config = taskSettings[task] {
             return DeepSeekClient(apiKey: "", baseURL: config.baseURL, model: config.model, settings: config).requestIdentity(task: "")
         }
-        return [baseURL.absoluteString, model, settings?.reasoningEffort ?? "", String(settings?.outputTokenBudget ?? ModelSettings.defaultOutputTokenBudget), settings?.requestStyle?.rawValue ?? "standard", settings?.fallback?.baseURL.absoluteString ?? "",
-            settings?.fallback?.model ?? "", settings?.fallback?.reasoningEffort ?? "", settings?.fallback?.outputTokenBudget.map(String.init) ?? "", settings?.fallback?.requestStyle?.rawValue ?? "standard"].joined(separator: "|")
+        var fields: [String] = [baseURL.absoluteString, model]
+        fields.append(settings?.reasoningEffort ?? "")
+        fields.append(String(settings?.outputTokenBudget ?? ModelSettings.defaultOutputTokenBudget))
+        fields.append(settings?.requestStyle?.rawValue ?? "standard")
+        let secondary = settings?.fallback
+        fields.append(secondary?.baseURL.absoluteString ?? "")
+        fields.append(secondary?.model ?? "")
+        fields.append(secondary?.reasoningEffort ?? "")
+        let secondaryBudget: String = secondary?.outputTokenBudget.map { String($0) } ?? ""
+        fields.append(secondaryBudget)
+        fields.append(secondary?.requestStyle?.rawValue ?? "standard")
+        return fields.joined(separator: "|")
     }
 
     var usesFullInput: Bool { settings?.fullInput == true || settings?.fallback?.fullInput == true || taskSettings.values.contains { $0.fullInput == true || $0.fallback?.fullInput == true } }

@@ -2,6 +2,16 @@ import XCTest
 @testable import ComputerHistoryCore
 
 final class ModelGroupsTests: XCTestCase {
+    func testGenerationIdentityRetainsEveryEffectiveSetting() {
+        let url = URL(string: "https://model.example/v1")!
+        let settings = ModelSettings(baseURL: url, model: "writer", reasoningEffort: "medium",
+            fallback: .init(baseURL: URL(string: "https://fallback.example/v1")!, model: "spare", reasoningEffort: "low", requestStyle: .standard, outputTokenBudget: 5678),
+            requestStyle: .reasoning, outputTokenBudget: 1234)
+        let client = DeepSeekClient(apiKey: "synthetic", baseURL: url, model: "writer", settings: settings)
+        let fields = ["https://model.example/v1", "writer", "medium", "1234", "reasoning", "https://fallback.example/v1", "spare", "low", "5678", "standard"]
+        XCTAssertEqual(client.generationIdentity, fields.joined(separator: "|"))
+    }
+
     func testTaskRoutesPreserveIndependentSettingsAndRejectInvalidAssignments() throws {
         let url = URL(string: "http://127.0.0.1:1234/v1")!
         let primary = ModelGroup(id: "primary", name: "Primary", settings: .init(baseURL: url, model: "primary", requiresAPIKey: false, reasoningEffort: "medium"))
