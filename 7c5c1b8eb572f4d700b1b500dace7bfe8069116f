@@ -1,0 +1,157 @@
+.github/workflows/ci.yml
+  s_c281991561ffe6::t_a4aa8d8c701427 14,47-49,68-75,103
+CHANGELOG.md
+  s_c281991561ffe6::t_deb3219f9ee3d6 3-12
+CHANGELOG.zh.md
+  s_c281991561ffe6::t_b524bfae90e7dd 3-12
+CONTRIBUTING.md
+  s_c281991561ffe6::t_eea076b433d885 60,64-65,124,131-150
+Package.swift
+  s_c281991561ffe6::t_c5f24f125fe980 12
+README.md
+  s_c281991561ffe6::t_460bcf7a686931 21,25,27,36,39-41,50,53,59,65,69,72,75,78
+Sources/ComputerHistoryCore/ActivityEvidence.swift
+  s_c281991561ffe6::t_6480e4e119a7c0 7-8,11-18,22,24,27-33,68-69,72-74
+Sources/ComputerHistoryCore/ActivityGrouping.swift
+  s_c281991561ffe6::t_69e97af1ccf762 1-184
+Sources/ComputerHistoryCore/ActivityNarrative.swift
+  s_c281991561ffe6::t_9c84fb6b1a3c02 33-34,69-70,116-117
+Sources/ComputerHistoryCore/CollectionSession.swift
+  s_c281991561ffe6::t_93ca2a72768b06 126-128,134-144,156-160,226,360-410,593,702,707
+Sources/ComputerHistoryCore/CollectorControl.swift
+  s_c281991561ffe6::t_fe9e56fd2c8c55 125-162
+Sources/ComputerHistoryCore/CollectorStatus.swift
+  s_c281991561ffe6::t_70427ae7ff6866 43,68-69
+Sources/ComputerHistoryCore/DeepSeekClient.swift
+  s_c281991561ffe6::t_6e9f2b00141a33 55-56
+Sources/ComputerHistoryCore/EventStreamModels.swift
+  s_c281991561ffe6::t_bec6802169482f 74
+Sources/ComputerHistoryCore/FrontmostApplication.swift
+  s_c281991561ffe6::t_ec865a7f41aaa8 121-131,138
+Sources/ComputerHistoryCore/InputListeningStatus.swift
+  s_c281991561ffe6::t_be955d912a113f 1-23
+Sources/ComputerHistoryCore/InputTap.swift
+  s_c281991561ffe6::t_755299e403b2c5 15,50-53,87-139,145-146,150-157,163,168-172,188-193,201-208,210-219,222,224,226,230,232-242,244
+Sources/ComputerHistoryCore/MemoryGenerator.swift
+  s_c281991561ffe6::t_611576e242ba7b 139-141,146,153-154,180-181,596,599-604,654,660
+Sources/ComputerHistoryCore/MemoryIndex.swift
+  s_c281991561ffe6::t_c28f4fca7bdb31 28,33,37,42,108-109,130,136-137,140
+Sources/ComputerHistoryCore/MemoryWriter.swift
+  s_c281991561ffe6::t_b84ae809bbabfe 59-60,65-76,81,88-89
+Sources/ComputerHistoryCore/ModelAPIKey.swift
+  s_c281991561ffe6::t_b204f5603868e1 3,5-7,11,14,17,20-29,32-51,53
+Sources/ComputerHistoryCore/ModelRequest.swift
+  s_c281991561ffe6::t_88988c5badbdb9 42
+Sources/ComputerHistoryCore/NarrativeGenerator.swift
+  s_c281991561ffe6::t_cb79a5269ba2f2 39,41,45,67-68,112-113,160,175,177-178,188,215-239,242-246,249,254,263-265,268-271,364-369,522-527,547-548
+Sources/ComputerHistoryCore/NarrativePreview.swift
+  s_c281991561ffe6::t_70e37fe78aa0a9 1-43
+Sources/ComputerHistoryCore/PermissionStatus.swift
+  s_c281991561ffe6::t_b8598634ca86dc 1-2,4-7,9-19
+Sources/ComputerHistoryCore/SegmentDigest.swift
+  s_c281991561ffe6::t_de9b90397ddf9a 32,119,129,204-205
+Sources/ComputerHistoryCore/SegmentWriter.swift
+  s_c281991561ffe6::t_1bce19a7531a8d 18,151-152,166-167
+Sources/ComputerHistoryCore/SummarySettings.swift
+  s_c281991561ffe6::t_f0ec65e3c8cf42 46
+Sources/ComputerHistoryCore/TextInputTracker.swift
+  s_c281991561ffe6::t_8e41ab64265566 83,111-119,151,226-227,233
+Sources/ComputerHistoryCore/TimelineCorrections.swift
+  s_c281991561ffe6::t_f30ce8ba93aa89 1-101
+Sources/ComputerHistoryCore/TimelineEdits.swift
+  s_c281991561ffe6::t_689b64ad500f01 8-11,14,16-46,54-56
+Sources/ComputerHistoryCore/TimelineLayout.swift
+  s_c281991561ffe6::t_eeec70cc23b006 27-38,44-46
+Sources/ComputerHistoryCore/TraySnapshotLoader.swift
+  s_c281991561ffe6::t_c5d377a41b59b6 22-24,51,75,86,96-102,241,247-248,250,264-266,276,286,300-301,304,366-367,388-389
+Sources/computer-history-credentials/CredentialStore.swift
+  s_c281991561ffe6::t_8c80859debe98b 1-85
+Sources/computer-history-credentials/main.swift
+  s_c281991561ffe6::t_f1beab42b44087 1-42
+Sources/computer-history-menubar/ComputerHistoryMenuBarApp.swift
+  s_c281991561ffe6::t_58ae61011ffb25 31-38,80,82,86
+Sources/computer-history-menubar/PermissionSetupPane.swift
+  s_c281991561ffe6::t_388c0987dfd192 1-68
+Sources/computer-history-menubar/SettingsPane.swift
+  s_c281991561ffe6::t_d178aac88fcaff 34
+Sources/computer-history-menubar/StatusModel.swift
+  s_c281991561ffe6::t_59887e08b3281f 6,50,61,83,95-167,268,279,439,447,455,969,999,1007-1071,1073,1091-1095
+Sources/computer-history-menubar/StatusPanel.swift
+  s_c281991561ffe6::t_e3b8c8e829c5a5 233,418-426,430-433,577-588,651-653,699-706,716-724,727-729,788-804,1513,1822
+Sources/computer-history/main.swift
+  s_c281991561ffe6::t_0665237b07aa63 35-37,48,108-116,124,126,132-134,152,191-198,209-213,295-301,318,320,328,806-842,864-865,885-894,900-901,905-927
+Tests/ComputerHistoryCoreTests/ActivityGroupingTests.swift
+  s_c281991561ffe6::t_4dff8fdb1e499f 1-128
+Tests/ComputerHistoryCoreTests/InputEventTests.swift
+  s_c281991561ffe6::t_a0f9488adbadc9 65-122
+Tests/ComputerHistoryCoreTests/InteractionEvidenceTests.swift
+  s_c281991561ffe6::t_713382845c04cf 39,42-45,92-158
+Tests/ComputerHistoryCoreTests/TextQualityTests.swift
+  s_c281991561ffe6::t_c5171f4ea4d9de 82-109
+Tests/ComputerHistoryCoreTests/TraySnapshotLoaderTests.swift
+  s_c281991561ffe6::t_31483a31c3ffcf 275,281-283,304,307,310
+VERSION
+  s_c281991561ffe6::t_e3032e287088b6 1
+docs/collector.md
+  s_c281991561ffe6::t_f653621031d6f5 44-49,106-109,157,159-161,213-215,217,234,283
+docs/distribution.md
+  s_c281991561ffe6::t_7c6a478cb39e81 3,5,7,9,11-13,15,17,19,23,25,27,29,31,33-35,38,41-45
+docs/privacy.md
+  s_c281991561ffe6::t_57059cfeb55764 20,23,30
+scripts/build-menubar-tests.py
+  s_c281991561ffe6::t_6456d2e461f62c 14,25,27,40-42
+scripts/build.sh
+  s_c281991561ffe6::t_8a097750dcfbf6 10
+scripts/bundle-app.py
+  s_c281991561ffe6::t_f859a145c981d9 1-55
+scripts/manage-install.py
+  s_c281991561ffe6::t_77985e41be15c7 122-242,248-253,258-263
+scripts/menubar.sh
+  s_c281991561ffe6::t_44c74e085805ef 2,10-11,14,22-25
+scripts/package-release.sh
+  s_c281991561ffe6::t_8d31a628f10580 15,23-30,37-38,43-47
+scripts/publish-release.py
+  s_c281991561ffe6::t_93a7b8c85d17a2 47-55,59-60,64,75-77
+scripts/test-app-install.py
+  s_c281991561ffe6::t_1dd5d3006bd7c2 1-55
+scripts/test-app-upgrade.py
+  s_c281991561ffe6::t_a81b56adf7bdce 1-55
+scripts/test-credentials.py
+  s_c281991561ffe6::t_60bbd7a927626f 1-48
+scripts/test-menubar-input.swift
+  s_c281991561ffe6::t_5de8f3049b2ca0 3,6,9
+scripts/test-menubar-main.swift
+  s_c281991561ffe6::t_0e2f984dd01df2 15-16
+scripts/test-menubar-panel.sh
+  s_c281991561ffe6::t_f2a0b6c6c00cda 7,14-15,30,36
+scripts/test-menubar-permissions.swift
+  s_c281991561ffe6::t_25a4f8a5dc8524 1-51
+scripts/test-menubar-settings.swift
+  s_c281991561ffe6::t_2fb6854f6f46a5 240-278,307-311
+scripts/test-model-fallback.py
+  s_c281991561ffe6::t_a45adfef3c8fbf 45
+scripts/test-narrative-activities.py
+  s_c281991561ffe6::t_4fd4818a3b6a02 2,14-15,19,22-47,50,52-53,56-58,60-61,63-124,126,128
+scripts/test-reports.py
+  s_c281991561ffe6::t_4ce183fadfc78f 93
+scripts/test-scheduling.py
+  s_c281991561ffe6::t_5209f2146d8d54 24-28,37
+scripts/test-text-summary.py
+  s_c281991561ffe6::t_9e7812de096514 34-40,49,143,148,163,176,217,227,248,313,325,333
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7c5c1b8eb572f4d700b1b500dace7bfe8069116f",
+  "prompts": {},
+  "sessions": {
+    "s_c281991561ffe6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1741f-0bfe-7331-8c3b-89ba4be3f1f8",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}

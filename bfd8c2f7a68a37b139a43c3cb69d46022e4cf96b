@@ -1,0 +1,103 @@
+.github/workflows/ci.yml
+  s_36a9239482f267::t_41da94e01d0c5a 5,7,45-50
+.github/workflows/release.yml
+  s_36a9239482f267::t_065f83ff645df0 20
+CHANGELOG.md
+  s_36a9239482f267::t_2b4c6cf03b948f 3-14
+CHANGELOG.zh.md
+  s_36a9239482f267::t_547784331aab4b 3-14
+CONTRIBUTING.md
+  s_36a9239482f267::t_09a442346e69df 58,69-70,73-79,86,91
+README.md
+  s_36a9239482f267::t_0960cf605d2468 62-63,94
+Sources/ComputerHistoryCore/ActivityNarrative.swift
+  s_36a9239482f267::t_95343ae771b221 26-27
+Sources/ComputerHistoryCore/CollectionSession.swift
+  s_36a9239482f267::t_cdb2f9fc2bb60f 2,96,122,139,156-157,176,191,193,195-198,266-267,274-278,299-303,311,317-328,330,345-347,349,360-362,364,374-376,378,401,403,405,413,415,422,428,430,448-450,454-456,458-466,468,471-472,474,479,482,518,531-536,570-571,585-588,591-595
+Sources/ComputerHistoryCore/CollectorControl.swift
+  s_36a9239482f267::t_9f5a8f2e4193a9 90-93,95-96,99-101
+Sources/ComputerHistoryCore/ConfigurationDrafts.swift
+  s_36a9239482f267::t_07f35ee2d3e7b4 58-59,80-81,123,130,133-135
+Sources/ComputerHistoryCore/DeepSeekClient.swift
+  s_36a9239482f267::t_1ce2c4a42b5d42 88-95,141,190,228-230
+Sources/ComputerHistoryCore/FrontmostApplication.swift
+  s_36a9239482f267::t_159b5110fa0307 48,56-72
+Sources/ComputerHistoryCore/InputKey.swift
+  s_36a9239482f267::t_67629aa8efcf82 2,6-15
+Sources/ComputerHistoryCore/InputTap.swift
+  s_36a9239482f267::t_a7ca8ca673422a 10-12,47,117,121,123,125
+Sources/ComputerHistoryCore/MemoryIndex.swift
+  s_36a9239482f267::t_e601c65c69e3b8 2,28,62,92-93
+Sources/ComputerHistoryCore/ModelCatalog.swift
+  s_36a9239482f267::t_4ce931ca51f671 15-18,23
+Sources/ComputerHistoryCore/ModelGroups.swift
+  s_36a9239482f267::t_c086b8655aca7b 6,17,25,60,84
+Sources/ComputerHistoryCore/ModelSettings.swift
+  s_36a9239482f267::t_56143c2b8940e7 25,40-41,73,86,105,114-115
+Sources/ComputerHistoryCore/ModelTransport.swift
+  s_36a9239482f267::t_5925dd6d3a9f9c 1-23
+Sources/ComputerHistoryCore/NarrativeGenerator.swift
+  s_36a9239482f267::t_cfdb1bd5c9ac88 54,58-63,65,82-93,97,106,119-132,143-144,159,166-186,188,193,203,208,233,237-243,245-257,259-263,265-268,270-274,276,279-280,283,298-301,354-356
+Sources/ComputerHistoryCore/ObservationPolicy.swift
+  s_36a9239482f267::t_989ca1fa04707c 2,168-172,175-181,193-200,235
+Sources/ComputerHistoryCore/TraySnapshotLoader.swift
+  s_36a9239482f267::t_726780c3d62223 199,201-204,251
+Sources/computer-history-menubar/SettingsPane.swift
+  s_36a9239482f267::t_ffb713465eb171 197
+Sources/computer-history-menubar/StatusModel.swift
+  s_36a9239482f267::t_e06c0777808a33 514-520,646
+Sources/computer-history/main.swift
+  s_36a9239482f267::t_179d1a9f545225 262-269,278-282,342-347,349-350,871,874-875,877-878,880,885-886,888
+Tests/ComputerHistoryCoreTests/ActivityWatchTests.swift
+  s_36a9239482f267::t_ed050014e669d8 29-52
+Tests/ComputerHistoryCoreTests/AuditRegressionTests.swift
+  s_36a9239482f267::t_7940da93707ef4 205,208,241,244,247
+Tests/ComputerHistoryCoreTests/ConcurrencyTests.swift
+  s_36a9239482f267::t_68c27691f50167 87,90,93,98,106,109,112,121-126,134,137
+Tests/ComputerHistoryCoreTests/HandoffRegressionTests.swift
+  s_36a9239482f267::t_dc9d91962e2327 1-197
+Tests/ComputerHistoryCoreTests/InputEventTests.swift
+  s_36a9239482f267::t_ed1491133e1403 1-65
+Tests/ComputerHistoryCoreTests/ModelTransportTests.swift
+  s_36a9239482f267::t_eae39ab6c13451 1-55
+Tests/ComputerHistoryCoreTests/NarrativeTests.swift
+  s_36a9239482f267::t_5f550a1ab5535f 43-113,116,133,136,149-150,156,159-160,166,175-176
+VERSION
+  s_36a9239482f267::t_558044ab3a1435 1
+docs/agent-skill.md
+  s_36a9239482f267::t_6ced45378989ca 1-100
+docs/collector.md
+  s_36a9239482f267::t_15a92d07005e79 20,24-25,67,73-74,137-139,187-188,191-192
+docs/distribution.md
+  s_36a9239482f267::t_6f250ad24a8cd7 1,3,5-7,10-11,14-29,31,34-35,38-54,57,60
+docs/privacy.md
+  s_36a9239482f267::t_d5ee2987797e00 9,28
+scripts/manage-install.py
+  s_36a9239482f267::t_0c90dd6ee9c106 1-140
+scripts/package-release.sh
+  s_36a9239482f267::t_f41ddca02eef3f 30
+scripts/publish-release.py
+  s_36a9239482f267::t_6727b5cfb8b828 47,52,54-55
+scripts/test-agent-skill.py
+  s_36a9239482f267::t_b94d72a660f9d4 1-266
+scripts/test-build-tools.py
+  s_36a9239482f267::t_0a2d8f40a24b1d 65
+scripts/test-install.py
+  s_36a9239482f267::t_3d014654fa201c 1-113
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bfd8c2f7a68a37b139a43c3cb69d46022e4cf96b",
+  "prompts": {},
+  "sessions": {
+    "s_36a9239482f267": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1634a-3690-7592-9e51-a029f4d48b5e",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
