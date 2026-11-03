@@ -151,7 +151,7 @@ extension NarrativeGenerator {
             addUsage(response.usage)
         }
         let summaryModel = client.requestIdentity(task: "narrative")
-        if work!.writingPrompt != writingPrompt || work!.summaryModel != summaryModel || !reuseSummaries {
+        if work!.writingPrompt != writingPrompt || work!.summaryModel != summaryModel {
             work!.writingPrompt = writingPrompt; work!.summaryModel = summaryModel; work!.summaries = [:]
         }
         for i in work!.items.indices {

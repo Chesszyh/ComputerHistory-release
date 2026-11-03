@@ -207,8 +207,10 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
         del config['dailyBudget']
         (root / 'model.json').write_text(json.dumps(config))
         mode = 'ok'
-        # Eight sources require two requests; a failed second batch must preserve the first.
-        template = next((root / 'memories').glob('*.md')).read_text()
+        # A dedicated activity section separates model material from citation-only revisions.
+        template = '---\ntitle: Synthetic\ndescription: Counts\n---\n### 本次活动\n- **核对合成窗口**：SYNTHETIC ORIGINAL ACTIVITY。\n## Citations\n- synthetic#1\n'
+        for memory_file in (root / 'memories').glob('*10min-memory-summary.md'):
+            memory_file.write_text(template)
         for minute in range(10, 80, 10):
             sid = (segment_id + f'_00000000-0000-0000-0000-{minute:012d}' if minute in [10, 20]
                    else f'2020-01-01T{minute // 60:02d}-{minute % 60:02d}-00Z')
@@ -232,7 +234,14 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
                                    capture_output=True, text=True, timeout=30)
         assert no_change.returncode == 0 and len(requests) == before, 'unchanged sources were charged again'
         source = root / 'memories' / saved['items'][0]['sourceMemories'][0]
-        source.write_text(source.read_text() + '\nSYNTHETIC REVISION CORRECTED\n')
+        source.write_text(source.read_text() + '\nSYNTHETIC CITATION REVISION\n')
+        before = len(requests)
+        metadata_revision = subprocess.run([binary, 'narrative', '--out', directory], env=local_env,
+                                          capture_output=True, text=True, timeout=30)
+        assert metadata_revision.returncode == 0 and len(requests) == before + 1, (metadata_revision.stderr, len(requests) - before)
+        saved = json.loads((root / 'narrative.json').read_text())
+        assert 'SYNTHETIC ORIGINAL ACTIVITY' in source.read_text()
+        source.write_text(source.read_text().replace('SYNTHETIC ORIGINAL ACTIVITY', 'SYNTHETIC REVISION CORRECTED'))
         unchanged_item = saved['items'][1]
         original_cache = (root / 'narrative.json').read_bytes()
         for failure_mode in ['http_error', 'invalid_sources']:
@@ -245,7 +254,8 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
         before = len(requests)
         revised = subprocess.run([binary, 'narrative', '--out', directory], env=local_env,
                                  capture_output=True, text=True, timeout=30)
-        assert revised.returncode == 0 and len(requests) == before + 2, revised.stderr
+        assert revised.returncode == 0 and len(requests) == before + 2, (revised.stderr, len(requests) - before)
+        assert 'SYNTHETIC REVISION CORRECTED' in requests[-1]['messages'][-1]['content']
         refreshed = json.loads((root / 'narrative.json').read_text())
         assert unchanged_item in refreshed['items'], 'unrelated item was recomputed'
         assert len({name for item in refreshed['items'] for name in item['sourceMemories']}) == 8
