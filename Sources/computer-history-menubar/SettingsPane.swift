@@ -246,7 +246,9 @@ struct SummarySettingsPane: View {
             Text("参数格式不决定是否推理，需按服务接口选择。")
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
             reasoningEditor(index)
-            SettingsField("超时（秒）", text: $model.modelGroups[index].settings.timeoutSeconds, placeholder: "60", id: "model-timeout")
+            SettingsField("输出额度（token）", text: $model.modelGroups[index].settings.outputTokenBudget, placeholder: String(ModelSettings.defaultOutputTokenBudget), id: "model-output-budget")
+            Toggle("发送完整活动材料", isOn: $model.modelGroups[index].settings.fullInput)
+            SettingsField("超时（秒）", text: $model.modelGroups[index].settings.timeoutSeconds, placeholder: String(Int(ModelSettings.defaultTimeoutSeconds)), id: "model-timeout")
             Toggle("允许此服务使用明文 HTTP（活动内容和密钥可能被窃听）", isOn: $model.modelGroups[index].settings.allowInsecureHTTP)
             Toggle("服务需要密钥", isOn: $model.modelGroups[index].settings.requiresAPIKey)
             if model.modelGroups[index].settings.requiresAPIKey {
@@ -286,6 +288,33 @@ struct SummarySettingsPane: View {
                         Text("主模型请求失败时尝试备用组；下次仍先使用主模型组。")
                             .font(.system(size: 10)).foregroundStyle(.secondary)
                     }
+                    SettingsDisclosure("按任务选择模型") {
+                        ForEach(ModelTaskConfiguration.tasks, id: \.self) { task in
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(["10min": "十分钟记忆", "narrative-grouping": "活动归属", "narrative": "活动概览", "daily": "日报", "weekly": "周报", "6h": "六小时汇总"][task] ?? task)
+                                Picker("模型组", selection: Binding(get: { model.modelTasks[task]?.groupID ?? "" }, set: { id in
+                                    var options = model.modelTasks[task] ?? .init()
+                                    options.groupID = id.isEmpty ? nil : id
+                                    model.modelTasks[task] = options
+                                })) {
+                                    Text("沿用主模型").tag("")
+                                    ForEach(model.modelGroups) { Text($0.name).tag($0.id) }
+                                }
+                                HStack {
+                                    TextField("推理强度：沿用模型组", text: Binding(get: { model.modelTasks[task]?.reasoningEffort ?? "" }, set: { text in
+                                        var options = model.modelTasks[task] ?? .init()
+                                        options.reasoningEffort = text.isEmpty ? nil : text
+                                        model.modelTasks[task] = options
+                                    }))
+                                    TextField("输出额度：沿用模型组", value: Binding<Int?>(get: { model.modelTasks[task]?.outputTokenBudget }, set: { value in
+                                        var options = model.modelTasks[task] ?? .init()
+                                        options.outputTokenBudget = value
+                                        model.modelTasks[task] = options
+                                    }), format: .number)
+                                }.textFieldStyle(.roundedBorder)
+                            }
+                        }
+                    }
                     SettingsCard("管理模型组") {
                         Picker("编辑", selection: $model.editingGroupID) {
                             ForEach(model.modelGroups) { Text($0.name).tag($0.id) }
@@ -294,7 +323,7 @@ struct SummarySettingsPane: View {
                             Button("新增模型组") { model.addModelGroup() }
                             Spacer()
                             Button("删除模型组", role: .destructive) { model.removeEditingModelGroup() }
-                                .disabled(model.modelGroups.count < 2 || model.editingGroupID == model.primaryGroupID || model.editingGroupID == model.fallbackGroupID)
+                                .disabled(model.modelGroups.count < 2 || model.editingGroupID == model.primaryGroupID || model.editingGroupID == model.fallbackGroupID || model.modelTasks.values.contains { $0.groupID == model.editingGroupID })
                         }
                         if let index = model.modelGroups.firstIndex(where: { $0.id == model.editingGroupID }) {
                             modelGroupEditor(index)

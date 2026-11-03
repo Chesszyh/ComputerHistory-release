@@ -21,6 +21,9 @@ public struct ModelPricing: Codable, Sendable, Equatable {
 }
 
 public struct ModelSettings: Codable, Sendable {
+    public static let defaultOutputTokenBudget = 32768
+    public static let defaultTimeoutSeconds: Double = 300
+
     public var credentialGroupID: String?
     public var allowInsecureHTTP: Bool?
     public var baseURL: URL
@@ -33,11 +36,14 @@ public struct ModelSettings: Codable, Sendable {
     public var fallback: FallbackModelSettings?
     public var requestStyle: ChatRequestStyle?
     public var timeoutSeconds: Double?
+    public var outputTokenBudget: Int?
+    public var fullInput: Bool?
 
     public init(baseURL: URL, model: String, requiresAPIKey: Bool = true,
                 reasoningEffort: String? = nil, pricing: ModelPricing? = nil,
                 dailyBudget: Double? = nil, monthlyBudget: Double? = nil,
-                fallback: FallbackModelSettings? = nil, requestStyle: ChatRequestStyle? = nil, timeoutSeconds: Double? = nil, allowInsecureHTTP: Bool = false) {
+                fallback: FallbackModelSettings? = nil, requestStyle: ChatRequestStyle? = nil, timeoutSeconds: Double? = nil, allowInsecureHTTP: Bool = false, outputTokenBudget: Int? = nil, fullInput: Bool = false) {
+        self.outputTokenBudget = outputTokenBudget; self.fullInput = fullInput
         self.allowInsecureHTTP = allowInsecureHTTP
         self.baseURL = baseURL; self.model = model; self.requiresAPIKey = requiresAPIKey
         self.reasoningEffort = reasoningEffort; self.pricing = pricing
@@ -82,6 +88,9 @@ public struct ModelSettings: Codable, Sendable {
         for seconds in [timeoutSeconds, fallback?.timeoutSeconds].compactMap({ $0 }) {
             guard seconds.isFinite, seconds >= 1, seconds <= 600 else { throw SettingsError.invalid("请求超时应为 1 至 600 秒。") }
         }
+        for tokens in [outputTokenBudget, fallback?.outputTokenBudget].compactMap({ $0 }) {
+            guard tokens > 0 else { throw SettingsError.invalid("输出额度应为正整数 token。") }
+        }
         if let secondary = fallback {
             try ModelTransport.validate(secondary.baseURL, allowInsecureHTTP: secondary.allowInsecureHTTP == true)
             guard ["http", "https"].contains(secondary.baseURL.scheme), secondary.baseURL.host != nil,
@@ -110,8 +119,11 @@ public struct FallbackModelSettings: Codable, Sendable {
     public var requiresAPIKey: Bool?
     public var requestStyle: ChatRequestStyle?
     public var timeoutSeconds: Double?
+    public var outputTokenBudget: Int?
+    public var fullInput: Bool?
     public init(baseURL: URL, model: String, reasoningEffort: String? = nil, pricing: ModelPricing? = nil,
-                requiresAPIKey: Bool = true, requestStyle: ChatRequestStyle? = nil, timeoutSeconds: Double? = nil, allowInsecureHTTP: Bool = false) {
+                requiresAPIKey: Bool = true, requestStyle: ChatRequestStyle? = nil, timeoutSeconds: Double? = nil, allowInsecureHTTP: Bool = false, outputTokenBudget: Int? = nil, fullInput: Bool = false) {
+        self.outputTokenBudget = outputTokenBudget; self.fullInput = fullInput
         self.allowInsecureHTTP = allowInsecureHTTP
         self.baseURL = baseURL; self.model = model; self.reasoningEffort = reasoningEffort
         self.pricing = pricing; self.requiresAPIKey = requiresAPIKey; self.requestStyle = requestStyle; self.timeoutSeconds = timeoutSeconds

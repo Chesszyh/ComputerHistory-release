@@ -597,6 +597,7 @@ if flags.contains("supervise") {
     var runningBackground: (pid: pid_t, label: String)?
     let backlog = MemoryGenerator(rootDirectory: root, memoriesDirectory: root.appendingPathComponent("memories"))
     var observedSegments = autoreleasepool { Set(backlog.completedSegmentIDs()) }
+    let generationPower = GenerationPowerState.shared
     while true {
         Thread.sleep(forTimeInterval: 1)
 
@@ -633,6 +634,8 @@ if flags.contains("supervise") {
                 if child == nil { warn("重启失败，监督退出。"); exit(1) }
                 print("采集器已重启（pid \(child!)）。")
             }
+
+            guard generationPower.canGenerate else { return }
 
             // ② 回收已结束的生成任务，随即启动下一个。
             if let current = running, let code = CollectorSupervisor.reap(current.pid) {

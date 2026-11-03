@@ -33,12 +33,16 @@ public struct MemoryIndex: Sendable {
         public var endReason: String? = nil
         public var activityFragmentCount: Int? = nil
 
+        public var generationFailed: Bool { generationStatus == "failed" }
+
         public var activitySummary: String {
+            if generationFailed { return "该时段的总结生成失败，等待重试。原始记录已保留。" }
             if inputListeningDegraded { return ActivityEvidence.inputDegradedSummary }
             if noClearActivity { return ActivityEvidence.noActivitySummary }
             return String(ActivityExport.formatted(ActivityExport.text(for: self), format: "txt").prefix(1800))
         }
         public var activityTitle: String {
+            if generationFailed { return "总结生成失败" }
             if inputListeningDegraded { return ActivityEvidence.inputDegradedTitle }
             if noClearActivity { return ActivityEvidence.noActivityTitle }
             let content = sections.filter { ["本次活动", "整体走向", "延续的工作线"].contains($0.heading) }

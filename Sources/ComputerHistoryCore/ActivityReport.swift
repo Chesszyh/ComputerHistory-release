@@ -248,7 +248,7 @@ public struct ReportGenerator {
     }
     private struct ReportPart: Codable { var input: String; var output: String }
     private func complete(_ client: DeepSeekClient, prompt: String, input: String, period: ReportPeriod) throws -> String {
-        let response = try client.complete(system: prompt, user: input, maxTokens: 3500, recordingAt: root,
+        let response = try client.complete(system: prompt, user: input, recordingAt: root,
             task: period.kind.rawValue, sources: [period.id])
         guard !response.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, response.finishReason != "length" else {
             throw ReportError.invalid("\(period.title)模型返回空内容或超出输出长度，保留已有报告，稍后重试。")

@@ -2,6 +2,23 @@ import XCTest
 @testable import ComputerHistoryCore
 
 final class ConfigurationEditorTests: XCTestCase {
+    func testOutputBudgetAndFullInputSurviveGroupEditingAndFallbackResolution() throws {
+        let root = try temporaryRoot()
+        let settings = ModelSettings(baseURL: URL(string: "http://127.0.0.1:1234/v1")!, model: "synthetic",
+            outputTokenBudget: 32768, fullInput: true)
+        let first = ModelGroup(name: "First", settings: settings)
+        let second = ModelGroup(name: "Second", settings: settings)
+        var draft = ModelGroupDraft(second)
+        draft.settings.model = "edited"
+        try ModelGroups(groups: [first, draft.value()], primaryGroupID: first.id, fallbackGroupID: second.id).save(root: root)
+        let resolved = try XCTUnwrap(ModelSettings.load(root: root))
+        XCTAssertEqual(resolved.outputTokenBudget, 32768)
+        XCTAssertTrue(resolved.fullInput == true)
+        XCTAssertEqual(resolved.fallback?.outputTokenBudget, 32768)
+        XCTAssertTrue(resolved.fallback?.fullInput == true)
+        draft.settings.outputTokenBudget = "0"
+        XCTAssertThrowsError(try draft.value())
+    }
     private func temporaryRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

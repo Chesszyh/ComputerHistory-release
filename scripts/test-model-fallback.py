@@ -26,7 +26,7 @@ class Model(http.server.BaseHTTPRequestHandler):
         if mode=='malformed':body=b'{"broken":true}'
         else:
             text='' if mode=='empty' else '### 本次活动\n'+('Fallback synthetic result.' if model=='synthetic-fallback' else 'Primary synthetic result.')
-            body=json.dumps({'choices':[{'message':{'content':text},'finish_reason':'length' if mode=='truncated' else 'stop'}],
+            body=json.dumps({'choices':[{'message':{'content':text},'finish_reason':'length' if mode=='truncated' or (mode=='needs_budget' and (data.get('max_tokens') or data.get('max_completion_tokens',0))<32000) else 'stop'}],
                              'usage':{'prompt_tokens':100,'completion_tokens':20,'total_tokens':120}}).encode()
         if mode=='keepalive':
             try:
@@ -57,11 +57,12 @@ with tempfile.TemporaryDirectory(prefix='fallback-test-') as d:
     try:
         save();out=run();assert len(calls)==1 and 'Primary synthetic result' in out
         assert calls[0][1]=='Bearer synthetic-primary-key'
+        assert calls[0][0]['max_completion_tokens']==32768
         assert 'max_completion_tokens' in calls[0][0] and 'max_tokens' not in calls[0][0] and 'temperature' not in calls[0][0]
         for failure in ['http','empty','truncated','malformed','timeout','keepalive','redirect']:
             primary=failure;start=len(calls);started=time.monotonic();out=run()
             if failure=="keepalive":assert time.monotonic()-started<2.5,"keepalive extended the wall-clock deadline"
-            assert len(calls)==start+2 and 'Fallback synthetic result' in out,(failure,out)
+            assert len(calls)==start+(3 if failure=='truncated' else 2) and 'Fallback synthetic result' in out,(failure,out)
             assert calls[-1][1]=='Bearer synthetic-fallback-key'
             assert calls[-1][0]['messages']==calls[-2][0]['messages']
             assert calls[-1][0]['reasoning_effort']=='none' and 'max_tokens' in calls[-1][0]
@@ -97,5 +98,24 @@ with tempfile.TemporaryDirectory(prefix='fallback-test-') as d:
         (root/'model.json').write_text(json.dumps(groups))
         run();assert calls[-1][0]['reasoning_effort']=='provider-custom-level'
         assert 'max_tokens' in calls[-1][0], 'standard parameter format must not disable reasoning effort'
-        print('PASS: model-group selection and swap; primary-only success; HTTP, empty, truncated, malformed and timeout fallback; independent credentials; next request resets; total-failure health; linked ledger; keyless fallback; budget boundary')
+        primary='needs_budget';secondary='ok'
+        config['outputTokenBudget']=16000
+        config['fallback']=fallback
+        save();before=len(calls);out=run()
+        assert len(calls)==before+2 and 'Primary synthetic result' in out
+        assert calls[-2][0]['max_completion_tokens']==16000 and calls[-1][0]['max_completion_tokens']==32000
+        records=[json.loads(p.read_text()) for p in (root/'requests').glob('*.json')]
+        retry=next(r for r in records if r.get('retryOf') and r['status']=='success')
+        parent=next(r for r in records if r['id']==retry['retryOf'])
+        assert parent['status']=='truncated' and retry['outputTokenBudget']==32000
+        assert parent['input']==retry['input'] and parent['system']==retry['system']
+        primary='http';secondary='needs_budget';config['fallback']['outputTokenBudget']=16000
+        save();before=len(calls);run()
+        assert len(calls)==before+3 and calls[-1][0]['max_tokens']==32000
+        primary='truncated';config.pop('fallback');save()
+        good=next((root/'memories').glob('*10min-memory-summary.md')).read_bytes()
+        before=len(calls);run(ok=False)
+        assert len(calls)==before+2, 'length retry must be bounded'
+        assert next((root/'memories').glob('*10min-memory-summary.md')).read_bytes()==good, 'failed overwrite replaced a good memory'
+        print('PASS: model-group selection and swap; primary-only success; HTTP, empty, truncated, malformed and timeout fallback; independent credentials; next request resets; total-failure health; linked ledger; keyless fallback; budget boundary; expanded output retry and good-memory preservation')
     finally:server.shutdown();server.server_close()

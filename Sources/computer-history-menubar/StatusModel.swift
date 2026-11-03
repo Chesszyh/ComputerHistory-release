@@ -71,6 +71,7 @@ final class StatusModel: ObservableObject {
     @Published var editingGroupID = ""
     @Published var primaryGroupID = ""
     @Published var fallbackGroupID = ""
+    @Published var modelTasks: [String: ModelTaskConfiguration] = [:]
     @Published var dailyBudget = ""
     @Published var monthlyBudget = ""
     @Published var isSelectingSummaries = false
@@ -738,6 +739,7 @@ final class StatusModel: ObservableObject {
             }
             primaryGroupID = groups.primaryGroupID
             fallbackGroupID = groups.fallbackGroupID ?? ""
+            modelTasks = groups.tasks ?? [:]
             editingGroupID = groups.primaryGroupID
             dailyBudget = groups.dailyBudget.map(String.init(describing:)) ?? ""
             monthlyBudget = groups.monthlyBudget.map(String.init(describing:)) ?? ""
@@ -812,6 +814,7 @@ final class StatusModel: ObservableObject {
 
     func removeEditingModelGroup() {
         guard modelGroups.count > 1, editingGroupID != primaryGroupID, editingGroupID != fallbackGroupID else { return }
+        guard !modelTasks.values.contains(where: { $0.groupID == editingGroupID }) else { return }
         modelGroups.removeAll { $0.id == editingGroupID }
         editingGroupID = primaryGroupID
     }
@@ -828,7 +831,7 @@ final class StatusModel: ObservableObject {
             }
             let settings = try ModelGroups(groups: modelGroups.map { try $0.value() },
                 primaryGroupID: primaryGroupID, fallbackGroupID: fallbackGroupID.isEmpty ? nil : fallbackGroupID,
-                dailyBudget: budget(dailyBudget), monthlyBudget: budget(monthlyBudget))
+                dailyBudget: budget(dailyBudget), monthlyBudget: budget(monthlyBudget), tasks: modelTasks.isEmpty ? nil : modelTasks)
             _ = try settings.resolved()
             for group in modelGroups {
                 if !group.apiKey.isEmpty { try ModelAPIKey.save(group.apiKey, root: root, groupID: group.id) }

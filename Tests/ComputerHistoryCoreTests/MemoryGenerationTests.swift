@@ -7,6 +7,23 @@ final class MemoryGenerationTests: XCTestCase {
 
     private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
 
+    func testFullInputPreservesEveryObservationAndLongTextTail() {
+        let events = (0..<30).map { i in
+            var event = record(Double(i), bundle: "test.app.\(i % 12)", title: "Window \(i)",
+                text: String(repeating: "编辑内容", count: 800) + "EDIT_TAIL_\(i)", id: i)
+            event.ax = .init(mode: .fullTree, text: "0 text Value: " + String(repeating: "界面正文", count: 800) + "AX_TAIL_\(i)")
+            return event
+        }
+        let digest = SegmentDigest.make(events: events, segmentID: "synthetic")
+        let compact = MemoryGenerator.userPrompt(digest: digest, events: events, priorMemory: nil)
+        let full = MemoryGenerator.userPrompt(digest: digest, events: events, priorMemory: nil, fullInput: true)
+        XCTAssertFalse(compact.contains("AX_TAIL_0"))
+        for i in 0..<30 {
+            XCTAssertTrue(full.contains("EDIT_TAIL_\(i)"))
+            XCTAssertTrue(full.contains("AX_TAIL_\(i)"))
+        }
+    }
+
     private func record(_ offset: TimeInterval,
                         kind: EventStreamEventKind = .windowChanged,
                         bundle: String? = "com.example.app",

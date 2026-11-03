@@ -87,7 +87,7 @@ struct SettingsRegression {
             (parent as? NSTextField).map { [$0] } ?? parent.subviews.flatMap(fields)
         }
         func edit(_ id: String, value: String) {
-            let placeholders = ["model-name": "deepseek-flash", "model-reasoning": "留空使用服务默认值", "collector-days": "0 表示不按天数清理"]
+            let placeholders = ["model-name": "deepseek-flash", "model-output-budget": "32768", "model-reasoning": "留空使用服务默认值", "collector-days": "0 表示不按天数清理"]
             guard let field = fields(panel).first(where: { $0.placeholderString == placeholders[id] }) else {
                 fatalError("Missing settings field: \(id)")
             }
@@ -114,6 +114,11 @@ struct SettingsRegression {
         edit("model-reasoning", value: "")
         saveByClick()
         precondition(try! ModelSettings.load(root: root)?.reasoningEffort == nil, "Blank effort must remain unspecified")
+        edit("model-output-budget", value: "16384")
+        model.modelGroups[0].settings.fullInput = true
+        saveByClick()
+        precondition(try! ModelSettings.load(root: root)?.outputTokenBudget == 16384)
+        precondition(try! ModelSettings.load(root: root)?.fullInput == true)
         stage("model group persistence")
         let originalID = model.primaryGroupID
         model.addModelGroup()
@@ -130,6 +135,11 @@ struct SettingsRegression {
         model.loadConfigurationDrafts()
         precondition(model.modelGroups.count == 2 && model.primaryGroupID == newID)
         precondition(model.modelGroups[0].settings.model == "edited-in-form", "Changing selection must retain other groups")
+        model.modelTasks = ["narrative": .init(groupID: originalID, reasoningEffort: "none", outputTokenBudget: 2048)]
+        model.saveModelConfiguration()
+        model.loadConfigurationDrafts()
+        precondition(model.modelTasks["narrative"]?.groupID == originalID)
+        precondition(try! ModelGroups.load(root: root).resolved(for: "narrative").outputTokenBudget == 2048)
         stage("summary deletion and trash")
         try ActivityNarrative(items: [.init(id: "synthetic-delete", timestamp: Date(), title: "Synthetic summary",
             summary: "Synthetic duplicate", apps: [], sourceMemories: [])]).save(root: root)

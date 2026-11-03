@@ -24,11 +24,13 @@ public struct NarrativeGenerator: Sendable {
     public enum GenerateError: Error, CustomStringConvertible {
         case noSourceMemories
         case modelFailed(String)
+        case sourceMemoriesFailed([String])
 
         public var description: String {
             switch self {
             case .noSourceMemories: return "没有可用于归纳的记忆文件"
             case .modelFailed(let detail): return "模型调用失败：\(detail)"
+            case .sourceMemoriesFailed(let names): return "\(names.count) 份来源记忆生成失败，等待重试；未用于活动归纳：\(names.joined(separator: "、"))"
             }
         }
     }
@@ -67,10 +69,11 @@ public struct NarrativeGenerator: Sendable {
         let corrections = try TimelineCorrections.load(root: rootDirectory)
         var narrative = corrections.applying(to: ActivityNarrative.load(root: rootDirectory), index: index, away: away)
         let revisions = Dictionary(uniqueKeysWithValues: sources.map { ($0.id, $0.revision) })
+        let failedSources = Set(sources.filter(\.generationFailed).map(\.id))
         let currentItems = narrative.items.filter { item in
             !item.sourceMemories.isEmpty && item.sourceMemories.allSatisfy {
                 guard let revision = revisions[$0] else { return false }
-                return item.sourceRevisions?[$0] == revision
+                return item.sourceRevisions?[$0] == revision && !failedSources.contains($0)
             }
         }
         let covered = Set(currentItems.flatMap(\.sourceMemories))
@@ -95,6 +98,11 @@ public struct NarrativeGenerator: Sendable {
             expanded = pendingNames != before
         }
         pending = sources.filter { pendingNames.contains($0.id) }
+
+        let failedNames = pending.filter(\.generationFailed).map(\.id)
+        pending.removeAll(where: \.generationFailed)
+        pendingNames = Set(pending.map(\.id))
+        if pending.isEmpty, !failedNames.isEmpty { throw GenerateError.sourceMemoriesFailed(failedNames) }
 
         // Keep every unprocessed source when a merged item is replaced a batch at a time.
         narrative.items = try narrative.items.flatMap { item -> [ActivityNarrative.Item] in
@@ -142,6 +150,7 @@ public struct NarrativeGenerator: Sendable {
             narrative.items.sort { $0.timestamp > $1.timestamp }
             narrative.generatedAt = Date()
             try narrative.save(root: rootDirectory)
+            if !failedNames.isEmpty { throw GenerateError.sourceMemoriesFailed(failedNames) }
             return Outcome(day: day, newItems: fallback.count,
                            totalItems: Self.countItems(narrative, on: day),
                            usedModel: false, usage: nil)
@@ -203,15 +212,15 @@ public struct NarrativeGenerator: Sendable {
                         ownedActivities[entry.id]?.contains($0.number) == true && item.sourceIncidental?[entry.id]?.contains($0.number) != true
                     }
                 }
-                guard material.reduce(0, { $0 + $1.text.count }) <= 12000 else { return false }
+                guard client.usesFullInput || material.reduce(0, { $0 + $1.text.count }) <= 12000 else { return false }
                 return item.sourceMemories.allSatisfy { name in
                     guard let revision = revisions[name], let time = sourceTimes[name] else { return false }
-                    return item.sourceRevisions?[name] == revision && time <= batch[0].startedAt
+                    return !failedSources.contains(name)
+                        && item.sourceRevisions?[name] == revision && time <= batch[0].startedAt
                         && away.sessionStart(at: time) == session
                 }
             }
             let priorItems = candidates.count == 1 ? candidates : []
-            let activityCount = batch.reduce(0) { $0 + ActivityFragment.fragments(in: $1).count }
             var items: [ActivityNarrative.Item]
             let batchUsage: DeepSeekClient.Usage?
             if mode == .continuous {
@@ -219,16 +228,16 @@ public struct NarrativeGenerator: Sendable {
                 let tasks = narrative.items.filter { item in
                     !item.sourceMemories.isEmpty && item.sourceMemories.allSatisfy { name in
                         guard let position = positions[name], position < firstPosition else { return false }
-                        return !sources[position].noClearActivity && !sources[position].inputListeningDegraded
+                        return !sources[position].generationFailed && !sources[position].noClearActivity && !sources[position].inputListeningDegraded
                     }
                 }.sorted { $0.timestamp > $1.timestamp }.filter { seenTasks.insert($0.taskID ?? $0.id).inserted }.prefix(8)
-                (items, batchUsage) = try groupedItems(day: day, sources: batch, history: sources.filter { !batchNames.contains($0.id) },
-                    prior: priorItems, tasks: Array(tasks), writingPrompt: prompt, client: client)
+                (items, batchUsage) = try groupedItems(day: day, sources: batch, history: sources.filter { !$0.generationFailed && !batchNames.contains($0.id) },
+                    prior: priorItems, tasks: Array(tasks), writingPrompt: prompt, client: client, reuseSummaries: !overwrite)
             } else {
                 let completion = try client.complete(
                     system: prompt,
-                    user: Self.userPrompt(day: day, sources: batch, priorItems: priorItems, mode: mode, historySources: sources),
-                    maxTokens: max(1800, min(6000, activityCount * 250)), recordingAt: recordingDirectory, task: "narrative",
+                    user: Self.userPrompt(day: day, sources: batch, priorItems: priorItems, mode: mode, historySources: sources.filter { !$0.generationFailed }),
+                    recordingAt: recordingDirectory, task: "narrative",
                     sources: priorItems.flatMap(\.sourceMemories) + batch.map(\.id))
                 let text = completion.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty, completion.finishReason != "length" else {
@@ -269,6 +278,7 @@ public struct NarrativeGenerator: Sendable {
             try narrative.save(root: rootDirectory)
             try? FileManager.default.removeItem(at: rootDirectory.appendingPathComponent("narrative-work/" + day))
         }
+        if !failedNames.isEmpty { throw GenerateError.sourceMemoriesFailed(failedNames) }
         return Outcome(day: day, newItems: added,
                        totalItems: Self.countItems(narrative, on: day),
                        usedModel: usedModel, usage: totalUsage)

@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Source ownership is validated before any prose is generated.
 struct ActivityGrouping: Codable, Equatable {
@@ -76,6 +77,7 @@ struct ActivityGroupingWork: Codable {
     var writingPrompt: String
     var model: String
     var ownershipPrompt: String?
+    var summaryModel: String?
     var plan: ActivityGrouping
     var items: [ActivityNarrative.Item]
     var summaries: [String: Summary] = [:]
@@ -104,14 +106,14 @@ struct ActivityGroupingWork: Codable {
 extension NarrativeGenerator {
     func groupedItems(day: String, sources: [MemoryIndex.Entry], history: [MemoryIndex.Entry],
                       prior: [ActivityNarrative.Item], tasks: [ActivityNarrative.Item],
-                      writingPrompt: String, client: DeepSeekClient) throws -> ([ActivityNarrative.Item], DeepSeekClient.Usage?) {
+                      writingPrompt: String, client: DeepSeekClient, reuseSummaries: Bool = true) throws -> ([ActivityNarrative.Item], DeepSeekClient.Usage?) {
         var input = "## 新来源\n"
         let fragmentCount = sources.reduce(0) { $0 + ActivityFragment.count(in: $1) }
         let fragmentBudget = min(2400, max(200, 16000 / max(1, fragmentCount)))
         for (i, source) in sources.enumerated() {
             input += "### 来源 S\(i + 1) · \(source.id) · 修订 \(source.revision)\n"
             for fragment in ActivityFragment.fragments(in: source) {
-                input += "#### 活动 S\(i + 1).A\(fragment.number)\n\(fragment.text.prefix(fragmentBudget))\n"
+                input += "#### 活动 S\(i + 1).A\(fragment.number)\n\(fragment.text.prefix(client.usesFullInput ? Int.max : fragmentBudget))\n"
             }
         }
         if let previous = prior.first {
@@ -119,7 +121,10 @@ extension NarrativeGenerator {
         }
         input += "## 可关联的已有任务\n"
         for (i, task) in tasks.enumerated() {
-            input += "### T\(i + 1)\n\(task.taskTitle ?? task.title)\n\(task.summary.prefix(1000))\n"
+            input += "### T\(i + 1)\n\(task.taskTitle ?? task.title)\n\(task.summary.prefix(client.usesFullInput ? Int.max : 1000))\n"
+        }
+        if let newStart = input.range(of: "## 新来源\n"), let historyStart = input.range(of: "## 紧邻且可续接的 P1\n") ?? input.range(of: "## 可关联的已有任务\n") {
+            input = String(input[historyStart.lowerBound...]) + "\n" + String(input[newStart.lowerBound..<historyStart.lowerBound])
         }
         let file = ActivityGroupingWork.file(root: rootDirectory, day: day, batch: sources[0].id)
         var work = (try? Data(contentsOf: file)).flatMap { try? EventStreamJSON.makeDecoder().decode(ActivityGroupingWork.self, from: $0) }
@@ -132,21 +137,22 @@ extension NarrativeGenerator {
                 usage!.totalTokens += value.totalTokens; usage!.reasoningTokens += value.reasoningTokens
             }
         }
-        if work?.input != input || work?.model != client.generationIdentity || work?.ownershipPrompt != ActivityGrouping.prompt {
-            let response = try client.complete(system: ActivityGrouping.prompt, user: input,
-                maxTokens: 3000, recordingAt: recordingDirectory, task: "narrative-grouping", sources: sources.map(\.id))
+        if work?.input != input || work?.model != client.requestIdentity(task: "narrative-grouping") || work?.ownershipPrompt != ActivityGrouping.prompt {
+            let response = try client.complete(system: ActivityGrouping.prompt, user: input, requiresJSONObject: true,
+                recordingAt: recordingDirectory, task: "narrative-grouping", sources: sources.map(\.id))
             guard response.finishReason != "length", let data = response.text.data(using: .utf8),
                   let plan = try? JSONDecoder().decode(ActivityGrouping.self, from: data) else {
                 throw GenerateError.modelFailed("活动归属不是完整 JSON；已保留原总结。")
             }
             let items = try plan.items(sources: sources, prior: prior, tasks: tasks)
-            work = ActivityGroupingWork(input: input, writingPrompt: writingPrompt, model: client.generationIdentity,
+            work = ActivityGroupingWork(input: input, writingPrompt: writingPrompt, model: client.requestIdentity(task: "narrative-grouping"),
                                         ownershipPrompt: ActivityGrouping.prompt, plan: plan, items: items)
             try work!.save(root: rootDirectory, day: day, batch: sources[0].id)
             addUsage(response.usage)
         }
-        if work!.writingPrompt != writingPrompt {
-            work!.writingPrompt = writingPrompt; work!.summaries = [:]
+        let summaryModel = client.requestIdentity(task: "narrative")
+        if work!.writingPrompt != writingPrompt || work!.summaryModel != summaryModel || !reuseSummaries {
+            work!.writingPrompt = writingPrompt; work!.summaryModel = summaryModel; work!.summaries = [:]
         }
         for i in work!.items.indices {
             let key = String(i)
@@ -163,15 +169,28 @@ extension NarrativeGenerator {
                         material += fragment.text + "\n"
                     }
                 }
-                let response = try client.complete(system: writingPrompt + "\n本次归属已确定，只输出 JSON：{\"title\":\"具体目标\",\"summary\":\"动作、对象和有证据的结果\"}。不要输出 Markdown 编号。",
-                    user: material, maxTokens: 1800, recordingAt: recordingDirectory, task: "narrative", sources: item.sourceMemories)
+                let system = writingPrompt + "\n本次归属已确定，只输出 JSON：{\"title\":\"具体目标\",\"summary\":\"动作、对象和有证据的结果\"}。不要输出 Markdown 编号。"
+                let cacheInput = [summaryModel, system, material, item.sourceMemories.joined(separator: "\n")].joined(separator: "\u{0}")
+                let cacheKey = SHA256.hash(data: Data(cacheInput.utf8)).map { String(format: "%02x", $0) }.joined()
+                let cache = rootDirectory.appendingPathComponent("narrative-work/\(day)/summaries/\(cacheKey).json")
+                if reuseSummaries, let data = try? Data(contentsOf: cache), let summary = try? JSONDecoder().decode(ActivityGroupingWork.Summary.self, from: data),
+                   !summary.title.isEmpty, !summary.summary.isEmpty {
+                    work!.summaries[String(i)] = summary
+                    work!.apply(summary, at: i, continuationTitle: work!.plan.groups[i].continuesPrevious ? prior[0].title : nil)
+                    try work!.save(root: rootDirectory, day: day, batch: sources[0].id)
+                    continue
+                }
+                let response = try client.complete(system: system,
+                    user: material, requiresJSONObject: true, recordingAt: recordingDirectory, task: "narrative", sources: item.sourceMemories)
                 guard response.finishReason != "length", let data = response.text.data(using: .utf8),
                       let summary = try? JSONDecoder().decode(ActivityGroupingWork.Summary.self, from: data),
                       !summary.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                       !summary.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     throw GenerateError.modelFailed("活动概览为空或格式无效；已保留原总结。")
                 }
-                work!.summaries[key] = summary
+                try FileManager.default.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try JSONEncoder().encode(summary).write(to: cache, options: .atomic)
+                work!.summaries[String(i)] = summary
                 try work!.save(root: rootDirectory, day: day, batch: sources[0].id)
                 addUsage(response.usage)
             }

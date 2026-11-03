@@ -67,9 +67,13 @@ public struct ModelSettingsDraft: Sendable {
     public var monthlyBudget: String
     public var requestStyle: ChatRequestStyle
     public var timeoutSeconds: String
+    public var outputTokenBudget: String
+    public var fullInput: Bool
     public var fallbackRequiresAPIKey: Bool
     public var fallbackRequestStyle: ChatRequestStyle
     public var fallbackTimeoutSeconds: String
+    public var fallbackOutputTokenBudget: String
+    public var fallbackFullInput: Bool
     public var hasFallback: Bool
     public var fallbackURL: String
     public var fallbackModel: String
@@ -88,15 +92,26 @@ public struct ModelSettingsDraft: Sendable {
         dailyBudget = settings?.dailyBudget.map(String.init(describing:)) ?? ""
         monthlyBudget = settings?.monthlyBudget.map(String.init(describing:)) ?? ""
         requestStyle = settings?.requestStyle ?? .standard
-        timeoutSeconds = String(settings?.timeoutSeconds ?? 60)
+        timeoutSeconds = String(settings?.timeoutSeconds ?? ModelSettings.defaultTimeoutSeconds)
+        outputTokenBudget = String(settings?.outputTokenBudget ?? ModelSettings.defaultOutputTokenBudget)
+        fullInput = settings?.fullInput == true
         fallbackRequiresAPIKey = settings?.fallback?.requiresAPIKey != false
         fallbackRequestStyle = settings?.fallback?.requestStyle ?? .standard
-        fallbackTimeoutSeconds = String(settings?.fallback?.timeoutSeconds ?? 45)
+        fallbackTimeoutSeconds = String(settings?.fallback?.timeoutSeconds ?? ModelSettings.defaultTimeoutSeconds)
+        fallbackOutputTokenBudget = String(settings?.fallback?.outputTokenBudget ?? ModelSettings.defaultOutputTokenBudget)
+        fallbackFullInput = settings?.fallback?.fullInput == true
         hasFallback = settings?.fallback != nil
         fallbackURL = settings?.fallback?.baseURL.absoluteString ?? DeepSeekClient.defaultBaseURL.absoluteString
         fallbackModel = settings?.fallback?.model ?? ""
         fallbackReasoning = settings?.fallback?.reasoningEffort ?? ""
         fallbackPricing = PricingDraft(settings?.fallback?.pricing)
+    }
+
+    private func outputBudget(_ text: String) throws -> Int? {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { return nil }
+        guard let value = Int(text), value > 0 else { throw ConfigurationInputError.invalid("输出额度应为正整数 token。") }
+        return value
     }
 
     private func requestTimeout(_ text: String) throws -> Double {
@@ -120,7 +135,7 @@ public struct ModelSettingsDraft: Sendable {
             fallback = try FallbackModelSettings(baseURL: serviceURL(fallbackURL, label: "降级服务地址"),
                 model: secondary, reasoningEffort: fallbackReasoning.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty, pricing: fallbackPricing.value(),
                 requiresAPIKey: fallbackRequiresAPIKey, requestStyle: fallbackRequestStyle,
-                timeoutSeconds: requestTimeout(fallbackTimeoutSeconds), allowInsecureHTTP: fallbackAllowInsecureHTTP)
+                timeoutSeconds: requestTimeout(fallbackTimeoutSeconds), allowInsecureHTTP: fallbackAllowInsecureHTTP, outputTokenBudget: outputBudget(fallbackOutputTokenBudget), fullInput: fallbackFullInput)
         }
         let daily = try number(dailyBudget, label: "每日预算", optional: true)
         let monthly = try number(monthlyBudget, label: "每月预算", optional: true)
@@ -130,7 +145,7 @@ public struct ModelSettingsDraft: Sendable {
         let result = try ModelSettings(baseURL: serviceURL(baseURL, label: "服务地址"), model: name,
             requiresAPIKey: requiresAPIKey, reasoningEffort: reasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             pricing: hasPricing ? pricing.value() : nil, dailyBudget: daily, monthlyBudget: monthly,
-            fallback: fallback, requestStyle: requestStyle, timeoutSeconds: requestTimeout(timeoutSeconds), allowInsecureHTTP: allowInsecureHTTP)
+            fallback: fallback, requestStyle: requestStyle, timeoutSeconds: requestTimeout(timeoutSeconds), allowInsecureHTTP: allowInsecureHTTP, outputTokenBudget: outputBudget(outputTokenBudget), fullInput: fullInput)
         try result.validate()
         return result
     }

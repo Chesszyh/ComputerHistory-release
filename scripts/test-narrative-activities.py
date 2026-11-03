@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise ownership, isolated prose, task returns, and resumable failures locally."""
 import http.server
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -121,7 +122,45 @@ def main():
             assert not (preview/'model.json').exists() and not (preview/'requests').exists(), 'preview must reuse source credentials and budget ledger'
             assert (root/'narrative.json').read_bytes()==original_cache
             assert all((root/'memories'/name).read_bytes()==data for name,data in originals.items())
-            print('PASS: isolated ownership/prose, cached retry, adjacent continuation, task return, revisions, fixed mode, unchanged originals')
+            with tempfile.TemporaryDirectory(prefix='narrative-failed-memory-') as failed_directory:
+                root = Path(failed_directory); (root/'memories').mkdir()
+                (root/'model.json').write_text(json.dumps(dict(baseURL=f'http://127.0.0.1:{server.server_port}', model='synthetic',requiresAPIKey=False)))
+                failed = memory(0, '- **统计占位**：SYNTHETIC_FAILED_COUNTS。')
+                failed.write_text(failed.read_text().replace('description: Counts', 'description: SYNTHETIC_FAILED_COUNTS\ngeneration: failed'))
+                before = len(requests)
+                generate(success=False)
+                assert len(requests) == before, 'failed memory was sent to the timeline model'
+                assert not (root/'narrative.json').exists(), 'failed memory became a formal timeline item'
+                healthy = memory(10, '- **核对材料**：SYNTHETIC_HEALTHY。')
+                partial = generate(success=False)
+                assert len(partial['items']) == 1 and partial['items'][0]['sourceMemories'] == [healthy.name]
+                assert all('SYNTHETIC_FAILED_COUNTS' not in user for _, user in requests[before:]), 'failed memory contaminated grouping or prose'
+                partial['items'].append(dict(id='legacy-failed', timestamp='2020-01-01T00:00:00Z', title='Cached statistics', summary='SYNTHETIC_FAILED_COUNTS',
+                    apps=[], sourceMemories=[failed.name], sourceRevisions={failed.name:hashlib.sha256(failed.read_bytes()).hexdigest()}))
+                (root/'narrative.json').write_text(json.dumps(partial))
+                saved = (root/'narrative.json').read_bytes()
+                before = len(requests)
+                generate(success=False)
+                assert len(requests) == before and (root/'narrative.json').read_bytes() == saved
+                failed.write_text(failed.read_text().replace('generation: failed', 'generation: model').replace('SYNTHETIC_FAILED_COUNTS', 'SYNTHETIC_RECOVERED'))
+                recovered = generate()
+                assert {name for item in recovered['items'] for name in item['sourceMemories']} == {failed.name, healthy.name}
+                healthy.write_text(healthy.read_text().replace('description: Counts', 'description: Counts\ngeneration: failed'))
+                third = memory(20, '- **继续核对材料**：SYNTHETIC_LATER。')
+                mode = 'continue'; before = len(requests)
+                interrupted = generate(success=False)
+                latest = next(item for item in interrupted['items'] if third.name in item['sourceMemories'])
+                assert latest['sourceMemories'] == [third.name], 'continuation bridged a failed source'
+                assert all('SYNTHETIC_HEALTHY' not in user for _, user in requests[before:]), 'failed task was offered as history'
+            with tempfile.TemporaryDirectory(prefix='narrative-full-input-') as full_directory:
+                root=Path(full_directory);(root/'memories').mkdir()
+                (root/'model.json').write_text(json.dumps(dict(baseURL=f'http://127.0.0.1:{server.server_port}', model='synthetic',requiresAPIKey=False,fullInput=True)))
+                mode='separate'
+                memory(0,'- **核对长材料**：'+('SYNTHETIC_LONG ' * 400)+'SOURCE_TAIL。')
+                before=len(requests);generate()
+                assert len(requests)==before+2
+                assert all('SOURCE_TAIL' in user for _,user in requests[before:]), 'full source was clipped during grouping or prose generation'
+            print('PASS: isolated ownership/prose, cached retry, continuation, revisions, failed-source isolation, recovery and full-input grouping')
     finally:
         server.shutdown(); server.server_close()
 

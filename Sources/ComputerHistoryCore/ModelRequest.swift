@@ -19,6 +19,8 @@ public struct ModelRequest: Codable, Sendable, Equatable, Identifiable {
     public var estimatedCost: Double?
     public var comparisonOf: String? = nil
     public var fallbackOf: String? = nil
+    public var retryOf: String? = nil
+    public var outputTokenBudget: Int? = nil
     public var worker: CollectorProcessIdentity? = nil
     public var durationSeconds: Double? = nil
 
@@ -41,6 +43,7 @@ public struct ModelRequest: Codable, Sendable, Equatable, Identifiable {
         case "daily": label = "日报"; case "weekly": label = "周报"
         case "narrative-grouping": label = "活动归属"
         case "narrative": label = "活动整理"; default: label = task }
+        if retryOf != nil { return "加长重试 · " + label }
         return fallbackOf != nil ? "降级 · " + label : (comparisonOf == nil ? label : "历史对照 · " + label)
     }
     public var statusLabel: String {
@@ -49,6 +52,8 @@ public struct ModelRequest: Codable, Sendable, Equatable, Identifiable {
             return worker.matchesLiveProcess ? "请求中" : "已中断"
         }
         switch status { case "running": return "请求中"; case "success": return "已返回"
+        case "invalid": return "输出格式无效"
+        case "deferred": return "休眠中断，等待继续"
         case "empty": return "空输出"; case "truncated": return "输出截断"; default: return "失败" }
     }
     public var costLabel: String {

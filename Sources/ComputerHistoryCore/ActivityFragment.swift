@@ -35,6 +35,7 @@ public struct ActivityFragment: Sendable, Equatable {
     }
 
     public static func fragments(in entry: MemoryIndex.Entry) -> [Self] {
+        guard !entry.generationFailed else { return [] }
         let content = entry.sections.filter { ["本次活动", "整体走向", "延续的工作线"].contains($0.heading) }
             .map(\.content).joined(separator: "\n\n")
         guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

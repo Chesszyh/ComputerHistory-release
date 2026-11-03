@@ -1634,6 +1634,13 @@ struct ModelUsagePane: View {
             }
             if let error = request.error { textBlock("错误", error) }
             textBlock("模型输出", request.output ?? "尚无输出")
+            if let tokens = request.outputTokenBudget { Text("本次输出额度：\(tokens) token").font(.system(size: 10)).foregroundStyle(.secondary) }
+            if let parent = request.retryOf, let previous = model.modelRequests.first(where: { $0.id == parent }) {
+                Button("查看加长重试前的请求") { model.openRequest(previous) }.buttonStyle(.plain).foregroundStyle(Color.accentColor)
+            }
+            ForEach(model.modelRequests.filter { $0.retryOf == request.id }) { retry in
+                Button("查看加长重试结果") { model.openRequest(retry) }.buttonStyle(.plain).foregroundStyle(Color.accentColor)
+            }
             if let parent = request.fallbackOf, let primary = model.modelRequests.first(where: { $0.id == parent }) {
                 Button("查看失败的主模型请求") { model.openRequest(primary) }.buttonStyle(.plain).foregroundStyle(Color.accentColor)
             }
@@ -1740,7 +1747,7 @@ struct ModelRequestGroup: View {
                         Button { model.openRequest(request) } label: {
                             VStack(alignment: .leading, spacing: 5) {
                                 HStack(spacing: 6) {
-                                    Text(request.fallbackOf != nil ? "降级" : (request.comparisonOf == nil ? "主模型" : "历史对照"))
+                                    Text(request.retryOf != nil ? "加长重试" : (request.fallbackOf != nil ? "降级" : (request.comparisonOf == nil ? "主模型" : "历史对照")))
                                         .font(.system(size: 9, weight: .semibold))
                                         .padding(.horizontal, 5)
                                         .padding(.vertical, 1.5)

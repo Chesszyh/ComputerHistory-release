@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.3 - 2026-11-03
+
+### Model efficiency and configuration
+- Deduplicate repeated long text in complete event material with reusable text fragments, preserve changed interface text and source references, and avoid sending the same body again in application statistics.
+- Reuse unchanged group summaries across batch revisions, with cache invalidation for material, prompt, model and generation settings. Explicit recalculation generates fresh results.
+- Add per-task model groups, reasoning effort and output budgets in settings. Keep credentials independent and preserve the existing primary/fallback behavior when no task overrides are configured.
+- Put existing task context before new grouping material to improve stable request prefixes without requiring provider-specific cache parameters.
+- Support complete-material input and configurable output budgets, retry length-truncated requests once with a larger budget, and record top-level or nested reasoning usage.
+
+### Sleep and failure handling
+- Defer generation during system sleep or while the laptop lid is closed; interrupt affected requests without starting fallback calls or reporting a model outage, and resume queued work after wake.
+- Reject malformed JSON locally in ownership and group-summary requests and try the configured fallback while retaining per-attempt usage.
+- Keep failed memories out of grouping, continuation and overview material. Preserve usable summaries when replacement generation fails.
+
+### Validation
+- Add synthetic regressions for sleep transitions, in-flight cancellation, independent task routing, cache reuse, malformed-output fallback and complete-text evidence.
+- Add an explicit-input model comparison tool that records outputs and usage separately from formal memories and timelines.
+
 ## 0.3.2 - 2026-10-28
 
 ### Collection responsiveness

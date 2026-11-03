@@ -3,6 +3,39 @@ import XCTest
 @testable import ComputerHistoryCore
 
 final class TraySnapshotLoaderTests: XCTestCase {
+    func testFailedMemoryHidesCachedNarrativeAndRecoversAfterSourceRetry() async throws {
+        let root = try root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("memories")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("2020-01-01T00-00-00Z-ABCD-10min-memory-summary.md")
+        let failed = "---\ntitle: Synthetic\ndescription: SYNTHETIC_COUNTS\ngeneration: failed\n---\n## Memory summary\nGeneration failed."
+        try failed.write(to: file, atomically: true, encoding: .utf8)
+        var cached = ActivityNarrative.Item(id: "cached", timestamp: SegmentClock.date(fromSegmentID: "2020-01-01T00-00-00Z")!,
+            title: "Cached statistics", summary: "SYNTHETIC_COUNTS", apps: [], sourceMemories: [file.lastPathComponent])
+        cached.sourceRevisions = [file.lastPathComponent: MemoryIndex.parse(fileURL: file)!.revision]
+        try ActivityNarrative(items: [cached]).save(root: root)
+        let original = try Data(contentsOf: ActivityNarrative.fileURL(root: root))
+        let loader = TraySnapshotLoader()
+        let snapshot = await loader.load(root: root)
+        let items = snapshot.groups.flatMap(\.items).flatMap(\.leafItems)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items.first?.title, "总结生成失败")
+        XCTAssertTrue(items.first?.summary.contains("等待重试") == true)
+        XCTAssertFalse(items.first?.summary.contains("SYNTHETIC_COUNTS") == true)
+        XCTAssertFalse(items.first?.isNarrative == true)
+        let saved = try Data(contentsOf: ActivityNarrative.fileURL(root: root))
+        XCTAssertEqual(saved, original)
+        try "---\ntitle: Recovered\ndescription: Counts\ngeneration: model\n---\n### 本次活动\n- **核对合成材料**：SYNTHETIC_RECOVERED。".write(to: file, atomically: true, encoding: .utf8)
+        cached.title = "核对合成材料"
+        cached.summary = "SYNTHETIC_RECOVERED"
+        cached.sourceRevisions = [file.lastPathComponent: MemoryIndex.parse(fileURL: file)!.revision]
+        try ActivityNarrative(items: [cached]).save(root: root)
+        let recovered = await loader.load(root: root)
+        XCTAssertEqual(recovered.groups.flatMap(\.items).flatMap(\.leafItems).first?.summary, "SYNTHETIC_RECOVERED")
+        XCTAssertNotEqual(try Data(contentsOf: ActivityNarrative.fileURL(root: root)), saved)
+    }
+
     private func root() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

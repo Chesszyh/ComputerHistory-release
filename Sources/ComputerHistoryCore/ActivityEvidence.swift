@@ -35,7 +35,7 @@ public enum ActivityEvidence {
         return text + "记录首末时间是观测范围，不代表持续操作时长；不能由缺少交互推断用户离开、看手机或没有阅读。\n"
     }
     public static func material(events: [EventStreamRecord], segmentID: String,
-                                characterBudget: Int = 16000) -> String {
+                                characterBudget: Int? = 16000) -> String {
         var observations: [(reference: String, context: String, facts: [String], nodes: [String], hasContent: Bool)] = []
         var lastContext: String?
         let replaced = Set(events.flatMap { $0.keyboard?.textReplaces ?? [] })
@@ -58,7 +58,7 @@ public enum ActivityEvidence {
                    !(keyboard.target?.placeholder == text && keyboard.textEvidence != .editedValue),
                    !replaced.contains("\(segmentID)#\(event.id)") {
                     let label = keyboard.textEvidence == .editedValue ? "编辑片段" : "控件变化"
-                    facts.append("\(label)：\(MemoryWriter.truncate(text, 2400))")
+                    facts.append("\(label)：\(MemoryWriter.truncate(text, characterBudget == nil ? Int.max : 2400))")
                     hasContent = true
                 }
             }
@@ -66,7 +66,7 @@ public enum ActivityEvidence {
                 if let label = [target.title, target.description].compactMap({ $0 }).first,
                    !isChatChrome(label, app: app) {
                     let action = event.kind == .mouseScroll ? "浏览滚动" : "点击"
-                    facts.append("\(action)：\(MemoryWriter.truncate(label, 100))")
+                    facts.append("\(action)：\(MemoryWriter.truncate(label, characterBudget == nil ? Int.max : 100))")
                     hasContent = true
                 }
             } else if event.kind == .mouseScroll {
@@ -75,8 +75,10 @@ public enum ActivityEvidence {
             }
             if let ax = event.ax {
                 // 按渲染节点切分，续行仍属于该节点；不能把旧差分的 ~ 续行误作新增内容。
-                let nodes = screenNodes(ax).filter { !isChatChrome($0, app: app) }.map {
-                    ax.source == "window_ocr" && $0.hasPrefix("Value: ") ? String($0.dropFirst(7)) : $0
+                let values = screenNodes(ax, limit: characterBudget == nil ? Int.max : 1400,
+                    includeChanges: characterBudget == nil).filter { !isChatChrome($0, app: app) }
+                let nodes = values.map { value in
+                    ax.source == "window_ocr" && value.hasPrefix("Value: ") ? String(value.dropFirst(7)) : value
                 }
                 selectedNodes = nodes
                 if !selectedNodes.isEmpty { hasContent = true }
@@ -91,6 +93,31 @@ public enum ActivityEvidence {
             if !facts.isEmpty || !selectedNodes.isEmpty {
                 observations.append((reference, context, facts, selectedNodes, hasContent))
             }
+        }
+        guard let characterBudget else {
+            var seenScreen = Set<String>()
+            var contexts: [String: Int] = [:]
+            var encoder = EvidenceTextEncoder()
+            return observations.compactMap { item in
+                let fresh = item.nodes.enumerated().filter { seenScreen.insert(item.context + "\n" + $0.element).inserted }.map { _, node in
+                    encoder.encode(node)
+                }
+                guard !fresh.isEmpty || !item.facts.isEmpty else { return nil }
+                let reference: String
+                if let number = contexts[item.context] {
+                    reference = String(item.reference.dropLast(item.context.count)) + "上下文 C\(number)"
+                } else {
+                    let number = contexts.count + 1
+                    contexts[item.context] = number
+                    reference = String(item.reference.dropLast(item.context.count)) + "上下文 C\(number)：" + item.context
+                }
+                let facts = item.facts.map { fact in
+                    encoder.encode(fact)
+                }
+                var text = reference + "\n" + facts.joined(separator: "\n")
+                if !fresh.isEmpty { text += "\n界面显示：" + fresh.joined(separator: "；") }
+                return text + "\n\n"
+            }.joined()
         }
         // 有正文时先覆盖正文的时序，重复的窗口与空闲元数据不能挤掉已采集内容。
         let content = observations.filter(\.hasContent)
@@ -127,25 +154,25 @@ public enum ActivityEvidence {
         return (0..<limit).map { values[$0 * (values.count - 1) / (limit - 1)] }
     }
 
-    static func screenNodes(_ ax: EventStreamAXTree) -> [String] {
+    static func screenNodes(_ ax: EventStreamAXTree, limit: Int = 1400, includeChanges: Bool = false) -> [String] {
         var result: [String] = [], buffer = ""
         var include = false
         func appendNode() {
             let text = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty { result.append(MemoryWriter.truncate(text, 1400)) }
+            if !text.isEmpty { result.append(MemoryWriter.truncate(text, limit)) }
         }
         for raw in ax.text.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = AXTextParser.parseLine(String(raw), mode: ax.mode)
             switch line {
             case .element(_, _, nil, _, _):
-                if include, buffer.count < 1600 { buffer += " " + String(raw.prefix(1600 - buffer.count)) }
+                if include, buffer.count < limit { buffer += " " + String(raw.prefix(limit - buffer.count)) }
             case .element(let marker, _, _, _, let detail):
                 appendNode()
-                include = ax.mode == .fullTree || marker == "+"
+                include = ax.mode == .fullTree || marker == "+" || (includeChanges && marker == "~")
                 // 元素编号和 role 是树结构，不能解释为窗口数量或活动内容。
                 buffer = include ? readableDetail(detail ?? "") : ""
             case .continuation(let text) where include:
-                if buffer.count < 1600 { buffer += " " + String(text.prefix(1600 - buffer.count)) }
+                if buffer.count < limit { buffer += " " + String(text.prefix(limit - buffer.count)) }
             default: break
             }
         }
@@ -175,5 +202,33 @@ public enum ActivityEvidence {
             ["本次活动", "整体走向", "延续的工作线"].contains($0.heading)
         }.map(\.content).joined(separator: "\n")
         return String((narrative.isEmpty ? MemoryWriter.parseFrontmatter(text).description : narrative).prefix(limit))
+    }
+}
+
+/// 每条观察保留独立来源；相同正文片段只定义一次，后续仅引用其内容。
+struct EvidenceTextEncoder {
+    private var references: [String: String] = [:]
+    private var sequence = 0
+    mutating func encode(_ text: String) -> String {
+        guard text.count >= 512 else { return text }
+        var chunks: [String] = [], buffer = "", count = 0
+        for character in text {
+            buffer.append(character); count += 1
+            if count >= 768 || (count >= 384 && "。；！？\n ".contains(character)) {
+                chunks.append(buffer); buffer = ""; count = 0
+            }
+        }
+        if !buffer.isEmpty { chunks.append(buffer) }
+        var definitions: [String] = [], parts: [String] = []
+        for chunk in chunks {
+            if let reference = references[chunk] { parts.append(reference) }
+            else {
+                sequence += 1
+                let reference = "T\(sequence)"
+                references[chunk] = reference; parts.append(reference)
+                definitions.append("文本片段 \(reference)：" + chunk)
+            }
+        }
+        return (definitions + ["本次文本按顺序拼接片段：" + parts.joined(separator: " + ")]).joined(separator: "\n")
     }
 }

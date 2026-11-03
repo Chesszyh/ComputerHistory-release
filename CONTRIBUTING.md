@@ -34,6 +34,8 @@ python3 scripts/test-model-fallback.py .build/debug/computer-history
 python3 scripts/test-model-fallback.py .build/release/computer-history
 python3 scripts/test-scheduling.py .build/debug/computer-history
 python3 scripts/test-scheduling.py .build/release/computer-history
+python3 scripts/test-token-optimization.py .build/debug/computer-history
+python3 scripts/test-token-optimization.py .build/release/computer-history
 ```
 
 大数据基准为显式入口，创建并回收约 1.5 GiB 的合成事件；比较完整状态读取与托盘首次、重复加载的耗时，并断言事件读取字节和记忆解析次数。
@@ -148,3 +150,15 @@ python3 scripts/test-app-upgrade.py /你的合成测试应用.app --adhoc
 日常运行使用固定安装位置的应用。源码输出目录通过 `swift build --show-bin-path` 查询，不依赖特定 Swift 构建后端的路径；`scripts/menubar.sh` 默认打开已安装应用，源码调试可通过 `COMPUTER_HISTORY_MENUBAR_BIN` 指定程序。
 
 构建后通过 `scripts/bundle-app.py` 封装，再使用应用资源中的安装器更新。安装器保留已授权密钥助手；直接用构建目录中的助手覆盖安装版会绕过此流程。清理旧构建前先确认运行进程与登录服务已指向安装版，保留当前验收包、可回退的安装基线及必要的验证日志。源码、个人数据和发布台账不属于构建清理范围。
+
+## 模型用量对照
+
+`scripts/evaluate-model-tokens.py` 对显式指定的请求材料逐个调用所选服务，保存各模型的输出、推理强度、用量、格式检查和耗时，不改写正式记忆或时间线。它使用所选模型组的独立密钥助手，不自动发现活动样本。真实材料和结果放在仓库外；这些调用使用真实额度，不属于常规测试。
+
+```bash
+python3 scripts/evaluate-model-tokens.py --root "$data_root" --group-id "$group_id" \
+  --helper "$installed_helper" --requests "$request_file" \
+  --profile example-model:none:8192 --out "$comparison_directory"
+```
+
+模型名、推理强度和输出额度按服务支持的值填写。比较时固定材料，分别核对动作、对象、关键内容、归属和时段；格式通过不代表事实正确。服务端缓存和分词方式会影响用量，报告实际缓存用量与未缓存价格下的估算，不能直接比较两天总额或只凭输出长度判定质量。

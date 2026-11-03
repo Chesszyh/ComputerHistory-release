@@ -3,6 +3,44 @@ import XCTest
 @testable import ComputerHistoryCore
 
 final class InteractionEvidenceTests: XCTestCase {
+    func testRepeatedLongTextUsesImmutableChunksAndKeepsChangedTail() {
+        var encoder = EvidenceTextEncoder()
+        let text = String(repeating: "合成👨‍👩‍👧‍👦内容。", count: 300)
+        let first = encoder.encode(text)
+        let repeated = encoder.encode(text)
+        XCTAssertTrue(first.contains("文本片段 T1："))
+        XCTAssertTrue(first.contains("👨‍👩‍👧‍👦"))
+        XCTAssertLessThan(repeated.count, text.count / 4)
+        XCTAssertFalse(repeated.contains("文本片段 T1："))
+        let changed = encoder.encode(text + "新增的合成结果。")
+        XCTAssertTrue(changed.contains("新增的合成结果。"))
+        XCTAssertTrue(changed.contains("T1"))
+    }
+
+    func testFullMaterialRetainsChangedNodeText() {
+        let ax = EventStreamAXTree(mode: .diffFromPrevious, text: "~1 staticText Value: Synthetic updated result")
+        XCTAssertTrue(ActivityEvidence.screenNodes(ax).isEmpty)
+        XCTAssertEqual(ActivityEvidence.screenNodes(ax, includeChanges: true), ["Value: Synthetic updated result"])
+    }
+
+    func testFullMaterialReusesContextWithoutDroppingEvidenceOrReferences() {
+        let start = Date(timeIntervalSince1970: 1_600_000_000)
+        let app = EventStreamApp(name: "Synthetic", bundleIdentifier: "example.synthetic")
+        let events: [EventStreamRecord] = (0..<3).map { n in
+            .init(id: n, timestamp: start.addingTimeInterval(Double(n)), kind: .mouseClick, app: app,
+                  window: .init(title: n == 2 ? "Second window" : "First window"),
+                  mouse: .init(button: "left", clickCount: 1, modifiers: [], target: .init(title: "Action \(n)")))
+        }
+        let text = ActivityEvidence.material(events: events, segmentID: "synthetic", characterBudget: nil)
+        XCTAssertEqual(text.components(separatedBy: "First window").count - 1, 1)
+        XCTAssertTrue(text.contains("上下文 C1：Synthetic | First window"))
+        XCTAssertTrue(text.contains("上下文 C2：Synthetic | Second window"))
+        for n in 0..<3 {
+            XCTAssertTrue(text.contains("synthetic#\(n)]"))
+            XCTAssertTrue(text.contains("Action \(n)"))
+        }
+    }
+
     func testRepeatedInterfaceChangesAndUncertainValuesDoNotEstablishUserInteraction() {
         let start = Date(timeIntervalSince1970: 1_600_000_000)
         let app = EventStreamApp(name: "Synthetic status", bundleIdentifier: "example.status")

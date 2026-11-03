@@ -93,6 +93,13 @@ public actor TraySnapshotLoader {
     public init() {}
 
     private static func activityPresentation(_ entry: MemoryIndex.Entry) -> MemoryIndex.Entry {
+        if entry.generationFailed {
+            var result = entry
+            result.title = entry.activityTitle
+            result.summary = entry.activitySummary
+            result.activityFragmentCount = 0
+            return result
+        }
         if entry.inputListeningDegraded {
             var result = entry
             result.title = ActivityEvidence.inputDegradedTitle
@@ -326,7 +333,9 @@ public actor TraySnapshotLoader {
     private static func timeline(index: MemoryIndex, narrative: ActivityNarrative, away: AwayPeriods, restored: [TrayTimelineItem],
                                  timeZone: TimeZone, mode: SummarySettings.TimelineMode) -> [TrayTimelineGroup] {
         let lookup = Dictionary(uniqueKeysWithValues: index.entries.map { ($0.id, $0) })
-        var covered = Set(restored.filter(\.isNarrative).flatMap { $0.memoryFiles.map(\.lastPathComponent) })
+        var covered = Set(restored.filter { item in
+            item.isNarrative && !item.memoryFiles.contains { lookup[$0.lastPathComponent]?.generationFailed == true }
+        }.flatMap { $0.memoryFiles.map(\.lastPathComponent) })
         var byDay: [String: [TrayTimelineItem]] = [:]
         let date = DateFormatter()
         date.locale = Locale(identifier: "en_US_POSIX")
@@ -338,6 +347,7 @@ public actor TraySnapshotLoader {
         stamp.dateFormat = "yyyy-MM-dd'T'HH-mm-ss'Z'"
         var narrativeIDs: Set<String> = []
         func appendNarrative(_ item: ActivityNarrative.Item) {
+            guard !item.sourceMemories.contains(where: { lookup[$0]?.generationFailed == true }) else { return }
             guard item.apps != ["com.apple.loginwindow"], narrativeIDs.insert(item.id).inserted else { return }
             let noClearActivity = !item.sourceMemories.isEmpty && item.sourceMemories.allSatisfy { lookup[$0]?.noClearActivity == true }
             var title = noClearActivity ? ActivityEvidence.noActivityTitle : ActivityFragment.title(item.title)
@@ -367,6 +377,7 @@ public actor TraySnapshotLoader {
                 taskID: item.taskID, taskTitle: item.taskTitle))
         }
         for item in narrative.items {
+            guard !item.sourceMemories.contains(where: { lookup[$0]?.generationFailed == true }) else { continue }
             covered.formUnion(item.sourceMemories)
             appendNarrative(item)
         }
