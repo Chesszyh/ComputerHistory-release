@@ -1,0 +1,77 @@
+AGENTS.md
+  s_cfdf89bb180816::t_697b6b38ad65ee 56
+CHANGELOG.md
+  s_cfdf89bb180816::t_90af0dbda89b18 3-15
+CHANGELOG.zh.md
+  s_cfdf89bb180816::t_8b448e6bb9b8cc 3-15
+README.md
+  s_cfdf89bb180816::t_e195ad88b4f9b8 35,64
+Sources/ComputerHistoryCore/ActivityEvidence.swift
+  s_cfdf89bb180816::t_05387c7d1e26ff 7-8,16-17,30,37,42-46,51-57,59-61,65,67-81
+Sources/ComputerHistoryCore/ActivityNarrative.swift
+  s_cfdf89bb180816::t_de189b08af11ca 28,49-96
+Sources/ComputerHistoryCore/AwayPeriods.swift
+  s_cfdf89bb180816::t_bcbdbcad02a6f0 11-51
+Sources/ComputerHistoryCore/GitHubBackup.swift
+  s_cfdf89bb180816::t_02fdb1daa8b90c 49-50,64-73
+Sources/ComputerHistoryCore/MemoryIndex.swift
+  s_cfdf89bb180816::t_46d0a50449cf6a 29-42,100-103,111-112
+Sources/ComputerHistoryCore/ModelAPIKey.swift
+  s_cfdf89bb180816::t_b56fda3c1521b8 7-12,69-74
+Sources/ComputerHistoryCore/NarrativeGenerator.swift
+  s_cfdf89bb180816::t_68be243f19e789 51-52,54-55,57-61,96-105,110-112,123-126,132-139,142-160,163,165,170-172,176,189,265-266,270,285-286,288-294,304,306-310,313-314,317-318,320-321,348-354,372,390-391,393-400,407-409,411
+Sources/ComputerHistoryCore/SummarySettings.swift
+  s_cfdf89bb180816::t_cc9c5594a94dbd 4-13,22-34,81-82,88
+Sources/ComputerHistoryCore/TimelineEdits.swift
+  s_cfdf89bb180816::t_56e2037d830f7d 1-23
+Sources/ComputerHistoryCore/TraySnapshotLoader.swift
+  s_cfdf89bb180816::t_fd408d2cbb7655 15,31,54,62-63,71-72,80-93,196-199,201,204-206,216,220-222,224-239,241,243,247-255,258,263,272,276-277,288-290,293,295-297,299-306,308,313-319,324,328-338
+Sources/computer-history-menubar/SettingsPane.swift
+  s_cfdf89bb180816::t_3e5d3e5372d2eb 29,41-88
+Sources/computer-history-menubar/StatusModel.swift
+  s_cfdf89bb180816::t_503271502cf515 49-67,75-81,122,131,133,196,205,234,282,622,800-854,869,890-899,901-936
+Sources/computer-history-menubar/StatusPanel.swift
+  s_cfdf89bb180816::t_d4f6e448c3a53b 11-13,118-123,229-232,401-411,497-502,510-511,611-617,623-629,1775-1818
+Sources/computer-history/main.swift
+  s_cfdf89bb180816::t_2bfe8e214a83c6 26,35-36,100-103,114,117,183-196,270-278,280,282
+Tests/ComputerHistoryCoreTests/ModelAPIKeyTests.swift
+  s_cfdf89bb180816::t_e7e8c454fa98ec 1-26
+Tests/ComputerHistoryCoreTests/NarrativeTests.swift
+  s_cfdf89bb180816::t_cc7509f0181767 43-98,296
+Tests/ComputerHistoryCoreTests/SummaryQualityTests.swift
+  s_cfdf89bb180816::t_14e35ac4e8c394 7-44
+Tests/ComputerHistoryCoreTests/SummarySettingsTests.swift
+  s_cfdf89bb180816::t_bc22809eb2e842 27-43
+Tests/ComputerHistoryCoreTests/TraySnapshotLoaderTests.swift
+  s_cfdf89bb180816::t_2bfa09aad0566e 91-240,292-333
+VERSION
+  s_cfdf89bb180816::t_f8f5fc96d85634 1
+docs/collector.md
+  s_cfdf89bb180816::t_434584cf422daa 89,100,136-137,140-148,189-196,210,212,259-260
+docs/privacy.md
+  s_cfdf89bb180816::t_cf8ad05ca70e62 23-24,36
+scripts/build-menubar-tests.py
+  s_cfdf89bb180816::t_0e959cdd68cfd3 14,16
+scripts/test-menubar-panel.swift
+  s_cfdf89bb180816::t_37f42c00018e93 58-71
+scripts/test-menubar-settings.swift
+  s_cfdf89bb180816::t_fa1d992bf614a8 36-39,75-85,168-238,266
+scripts/test-text-summary.py
+  s_cfdf89bb180816::t_4eed645cafdb86 3-4,36-37,81-87,252-385,392
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ae6c6d6378cfefd37de9d1096da303389ef3145c",
+  "prompts": {},
+  "sessions": {
+    "s_cfdf89bb180816": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a16437-5dd0-76f3-9fc9-fc35521cd569",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
