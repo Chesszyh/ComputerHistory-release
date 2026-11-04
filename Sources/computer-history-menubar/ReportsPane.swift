@@ -20,12 +20,64 @@ struct ReportsPane: View {
                     .disabled(model.reportBusy)
             }
             Divider()
-            HStack {
+            HStack(spacing: DesignTokens.Spacing.sm) {
                 Picker("报告", selection: Binding(get: { model.reportKind }, set: { model.reportKind = $0; model.loadReports() })) {
                     ForEach(ReportKind.allCases, id: \.self) { Text($0.label).tag($0) }
                 }.labelsHidden().pickerStyle(.segmented)
-                DatePicker("日期", selection: Binding(get: { model.reportDate }, set: { model.reportDate = $0; model.loadReports() }), in: ...Date(), displayedComponents: .date)
-                    .labelsHidden()
+
+                HStack(spacing: 3) {
+                    Button {
+                        if let prev = Calendar.current.date(byAdding: .day, value: -1, to: model.reportDate) {
+                            model.reportDate = prev
+                            model.loadReports()
+                        }
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 20, height: 20)
+                            .background(
+                                RoundedRectangle(cornerRadius: DesignTokens.Radius.xs, style: .continuous)
+                                    .fill(Color.primary.opacity(0.04))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .help("前一天")
+
+                    DatePicker("日期", selection: Binding(get: { model.reportDate }, set: { model.reportDate = $0; model.loadReports() }), in: ...Date(), displayedComponents: .date)
+                        .labelsHidden()
+
+                    Button {
+                        if let next = Calendar.current.date(byAdding: .day, value: 1, to: model.reportDate), next <= Date() {
+                            model.reportDate = next
+                            model.loadReports()
+                        }
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Calendar.current.isDateInToday(model.reportDate) ? .tertiary : .secondary)
+                            .frame(width: 20, height: 20)
+                            .background(
+                                RoundedRectangle(cornerRadius: DesignTokens.Radius.xs, style: .continuous)
+                                    .fill(Color.primary.opacity(0.04))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(Calendar.current.isDateInToday(model.reportDate))
+                    .help("后一天")
+
+                    if !Calendar.current.isDateInToday(model.reportDate) {
+                        Button("今天") {
+                            model.reportDate = Date()
+                            model.loadReports()
+                        }
+                        .buttonStyle(.plain)
+                        .font(DesignTokens.Typography.captionMedium)
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 2)
+                        .help("回到今天")
+                    }
+                }
             }
             .disabled(model.reportBusy)
             HStack {

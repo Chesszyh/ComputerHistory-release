@@ -22,7 +22,7 @@ def build():
         modules = binary_dir / 'Modules'
         objects = sorted((binary_dir / 'ComputerHistoryCore.build').glob('*.o'))
     sources = [ROOT / 'Sources/computer-history-menubar' / name for name in
-               ['StatusModel.swift', 'StatusPanel.swift', 'SettingsPane.swift', 'ReportsPane.swift', 'PermissionSetupPane.swift']]
+               ['DesignTokens.swift', 'StatusModel.swift', 'StatusPanel.swift', 'SettingsPane.swift', 'ReportsPane.swift', 'PermissionSetupPane.swift']]
     sources += [ROOT / 'scripts' / f'test-menubar-{name}.swift' for name in
                 ['input', 'panel', 'usage', 'settings', 'catalog', 'reports', 'permissions', 'main']]
     inputs = [Path(__file__).resolve(), modules / 'ComputerHistoryCore.swiftmodule'] + sources + objects

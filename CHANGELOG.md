@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.4 - 2026-11-04
+
+### Menubar visual and interaction refinements
+- Introduce a unified 8pt grid design token system (DesignTokens) with structured typography scales and semantic color hierarchies for light and dark modes.
+- Restructure timeline entries into discrete continuous-corner cards with subtle borders, clearer away-period delineation, and an upgraded live activity container.
+- Add hover action bars to timeline cards for quick summary copying and in-place editing, with responsive feedback badges.
+- Add previous day, next day, and "Today" shortcut navigation to report date pickers.
+- Standardize settings panel layouts with unified card styling, monospaced prompt editing, and native application icons in list selectors.
+- Reuse static date formatters to eliminate hot-path memory allocation jitter during scroll rendering.
+
 ## 0.3.3 - 2026-11-03
 
 ### Model efficiency and configuration

@@ -26,7 +26,7 @@ struct StatusPanel: View {
                 listBody
             }
         }
-        .frame(width: 380, height: 640)
+        .frame(width: DesignTokens.Dimensions.panelWidth, height: DesignTokens.Dimensions.panelHeight)
     }
 
     private var listBody: some View {
@@ -83,16 +83,16 @@ struct StatusPanel: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: DesignTokens.Spacing.sm) {
             Circle()
                 .fill(model.stateColor.swatch)
                 .frame(width: 8, height: 8)
                 .shadow(color: model.stateColor.swatch.opacity(0.4), radius: 2)
             Text("计算机历史")
-                .font(.system(size: 13, weight: .semibold))
+                .font(DesignTokens.Typography.headline)
             Spacer()
             Text(model.stateLabel)
-                .font(.system(size: 10, weight: .medium))
+                .font(DesignTokens.Typography.captionMedium)
                 .foregroundStyle(model.stateColor.swatch)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
@@ -136,43 +136,43 @@ struct LiveActivityCard: View {
     @ObservedObject var model: StatusModel
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: DesignTokens.Spacing.md10) {
             appIconView
-                .frame(width: 30, height: 30)
+                .frame(width: DesignTokens.Dimensions.liveAppIconSize, height: DesignTokens.Dimensions.liveAppIconSize)
 
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xxs) {
+                HStack(spacing: DesignTokens.Spacing.sm6) {
                     Text(model.frontApp)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(DesignTokens.Typography.bodySemibold)
                         .lineLimit(1)
                     Spacer()
                     TimelineView(.periodic(from: .now, by: 1)) { _ in
                         Text(model.frontDurationLabel)
-                            .font(.system(size: 10, design: .monospaced))
+                            .font(DesignTokens.Typography.monoSub)
                             .foregroundStyle(.tertiary)
                     }
                 }
 
                 if let window = model.frontWindow, !window.isEmpty {
                     Text(window)
-                        .font(.system(size: 11))
+                        .font(DesignTokens.Typography.footnote)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 } else {
                     Text("当前前台窗口")
-                        .font(.system(size: 11))
+                        .font(DesignTokens.Typography.footnote)
                         .foregroundStyle(.tertiary)
                 }
             }
         }
-        .padding(10)
+        .padding(DesignTokens.Spacing.md10)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.primary.opacity(0.035))
+            RoundedRectangle(cornerRadius: DesignTokens.Radius.lg, style: .continuous)
+                .fill(DesignTokens.Colors.cardBackground)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.lg, style: .continuous)
+                        .strokeBorder(DesignTokens.Colors.cardBorder, lineWidth: 0.5)
                 )
         )
     }
@@ -399,67 +399,91 @@ struct TimelineSection: View {
 
     var body: some View {
         // 分页已限制行数；天分组延迟布局会使追加后的滚动高度在 macOS 15 上停滞。
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
             HStack {
                 Text("历史活动")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(DesignTokens.Typography.footnoteSemibold)
                     .foregroundStyle(.secondary)
                 Spacer()
             }
 
             if model.isSelectingSummaries {
-                HStack(spacing: 8) {
-                    Text(model.selectionMessage ?? "已选 \(model.selectedSummaryIDs.count) 条")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("复制所选") { model.copySelectedSummaries() }
-                        .disabled(model.selectedSummaryIDs.isEmpty)
-                        .accessibilityIdentifier("copy-selected")
-                    if model.effectiveTimelineMode == .continuous {
-                        Menu("归属") {
-                            Button("关联为同一任务") { model.correctActivities(.sameTask) }
-                            Button("标记为不同任务") { model.correctActivities(.differentTask) }
-                            Button("按来源片段拆分") { model.correctActivities(.split) }
-                            Divider()
-                            Button("撤销上次归属修改") { model.undoActivityCorrection() }
-                        }.accessibilityIdentifier("activity-corrections")
-                    }
-                    Button("完成") { model.toggleSummarySelection() }
-                }.controlSize(.small)
+                selectionBar
             }
             if model.invalidCorrections > 0 {
                 Text("\(model.invalidCorrections) 项归属修改的来源已变化，请撤销后重新确认。")
-                    .font(.system(size: 10)).foregroundStyle(.orange)
+                    .font(DesignTokens.Typography.caption).foregroundStyle(.orange)
             }
             if model.timelineCount == 0 {
-                HStack(spacing: 8) {
-                    Image(systemName: "clock")
-                        .foregroundStyle(.tertiary)
-                    Text("暂无历史活动")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 16)
-                .frame(maxWidth: .infinity, alignment: .center)
+                emptyStateView
             } else {
-                ForEach(model.timelineGroups, id: \.day) { group in
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 6) {
-                            Text(model.dayLabel(group.day))
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.primary)
-                            Rectangle()
-                                .fill(Color.primary.opacity(0.08))
-                                .frame(height: 1)
-                        }
-                        .padding(.top, 4)
+                dayGroupsView
+            }
+        }
+    }
 
-                        VStack(spacing: 6) {
-                            ForEach(group.items) { item in
-                                TimelineRow(item: item, model: model)
+    @ViewBuilder
+    private var selectionBar: some View {
+        HStack(spacing: DesignTokens.Spacing.sm) {
+            Text(model.selectionMessage ?? "已选 \(model.selectedSummaryIDs.count) 条")
+                .font(DesignTokens.Typography.caption).foregroundStyle(.secondary)
+            Spacer()
+            Button("复制所选") { model.copySelectedSummaries() }
+                .disabled(model.selectedSummaryIDs.isEmpty)
+                .accessibilityIdentifier("copy-selected")
+            if model.effectiveTimelineMode == .continuous {
+                Menu("归属") {
+                    Button("关联为同一任务") { model.correctActivities(.sameTask) }
+                    Button("标记为不同任务") { model.correctActivities(.differentTask) }
+                    Button("按来源片段拆分") { model.correctActivities(.split) }
+                    Divider()
+                    Button("撤销上次归属修改") { model.undoActivityCorrection() }
+                }.accessibilityIdentifier("activity-corrections")
+            }
+            Button("完成") { model.toggleSummarySelection() }
+        }.controlSize(.small)
+    }
 
-                            }
-                        }
+    private var emptyStateView: some View {
+        VStack(spacing: DesignTokens.Spacing.sm) {
+            Image(systemName: "clock.badge.questionmark")
+                .font(.system(size: 26))
+                .foregroundStyle(.tertiary)
+            Text("暂无历史活动")
+                .font(DesignTokens.Typography.footnoteSemibold)
+                .foregroundStyle(.secondary)
+            Text("采集到的操作将按时段自动归纳为活动记忆")
+                .font(DesignTokens.Typography.caption)
+                .foregroundStyle(DesignTokens.Colors.mutedText)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.vertical, DesignTokens.Spacing.xl20)
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    @ViewBuilder
+    private var dayGroupsView: some View {
+        ForEach(model.timelineGroups, id: \.day) { group in
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                HStack(spacing: DesignTokens.Spacing.sm) {
+                    Text(model.dayLabel(group.day))
+                        .font(DesignTokens.Typography.footnoteSemibold)
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule()
+                                .fill(DesignTokens.Colors.sectionHeaderFill)
+                        )
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.08))
+                        .frame(height: 0.5)
+                }
+                .padding(.top, DesignTokens.Spacing.xs)
+
+                VStack(spacing: DesignTokens.Spacing.sm) {
+                    ForEach(group.items) { item in
+                        TimelineRow(item: item, model: model)
                     }
                 }
             }
@@ -476,10 +500,6 @@ struct TimelineRow: View {
     private var timeLabel: String { model.timeLabel(item.timestamp) }
 
     /// 合并条目横跨多段时显示起止两行，中间用竖线连起来。
-    ///
-    /// 只显示起始时刻会让覆盖到的时段看起来像丢了：实测一条 17:20 的条目覆盖到
-    /// 17:40，而下一条显示 17:50，使用者会以为 17:30 与 17:40 没有被总结。
-    /// 一行放不下 `17:20–17:40`（时间列只有 36pt），故分两行。
     private var isMerged: Bool {
         (item.sharesSourcePeriod != true || item.coveredCount > 1)
             && (item.isAway || item.endTimestamp.timeIntervalSince(item.timestamp) > 300)
@@ -488,18 +508,18 @@ struct TimelineRow: View {
     private var endTimeLabel: String { model.timeLabel(item.endTimestamp) }
 
     private var timeColumn: some View {
-        VStack(alignment: .trailing, spacing: 1) {
+        VStack(alignment: .trailing, spacing: DesignTokens.Spacing.xxs) {
             Text(timeLabel)
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .font(DesignTokens.Typography.monoCaption)
+                .foregroundStyle(item.isAway ? Color.secondary.opacity(0.7) : Color.secondary)
             if isMerged {
                 Rectangle()
-                    .fill(Color.primary.opacity(0.15))
+                    .fill(Color.primary.opacity(0.18))
                     .frame(width: 1, height: 9)
                     .padding(.trailing, 3)
                 Text(endTimeLabel)
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .font(DesignTokens.Typography.monoSub)
+                    .foregroundStyle(Color.secondary.opacity(0.65))
             }
         }
     }
@@ -512,68 +532,100 @@ struct TimelineRow: View {
         }
     }
 
+    private var cardBackground: Color {
+        if model.copiedItemID == item.id {
+            return DesignTokens.Colors.copyBackground
+        }
+        if isHovered {
+            return DesignTokens.Colors.cardHoverBackground
+        }
+        if model.isExpanded(item.id) {
+            return DesignTokens.Colors.cardExpandedBackground
+        }
+        if item.isAway {
+            return DesignTokens.Colors.awayBackground
+        }
+        return DesignTokens.Colors.cardBackground
+    }
+
+    private var cardBorder: Color {
+        if model.copiedItemID == item.id {
+            return DesignTokens.Colors.copyBorder
+        }
+        if isHovered {
+            return DesignTokens.Colors.cardHoverBorder
+        }
+        if item.isAway {
+            return DesignTokens.Colors.awayBorder
+        }
+        return DesignTokens.Colors.cardBorder
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .top, spacing: DesignTokens.Spacing.md10) {
                 if model.isSelectingSummaries && !item.isAway {
                     Button { model.selectSummary(item) } label: {
                         Image(systemName: model.selectedSummaryIDs.contains(item.id) ? "checkmark.circle.fill" : "circle")
-                    }.buttonStyle(.plain).foregroundStyle(Color.accentColor)
-                        .help("选择摘要")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                    .help("选择摘要")
                 }
+
                 timeColumn
-                    .frame(width: 36, alignment: .trailing)
+                    .frame(width: DesignTokens.Dimensions.timeColumnWidth, alignment: .trailing)
                     .padding(.top, 2)
 
                 // 摘要本体：点击即复制。这是最高频的操作——把一段记录贴给别人
                 // 或别处——所以给它最大的落点。
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 6) {
-                            if item.isAway {
-                                Image(systemName: awayIcon)
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Text(item.title)
-                                .font(.system(size: 12, weight: item.isAway ? .regular : .medium))
-                                .foregroundStyle(item.isAway ? Color.secondary : Color.primary)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.leading)
-                        }
-
-                        if !item.summary.isEmpty {
-                            Text(item.summary)
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                    HStack(spacing: DesignTokens.Spacing.sm6) {
+                        if item.isAway {
+                            Image(systemName: awayIcon)
                                 .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                                .lineSpacing(2)
-                                .lineLimit(3)
-                                .multilineTextAlignment(.leading)
-                                .fixedSize(horizontal: false, vertical: true)
+                                .foregroundStyle(DesignTokens.Colors.subtleText)
                         }
-
-                        if !item.isAway && (!item.apps.isEmpty || !item.isNarrative) {
-                            HStack(spacing: 6) {
-                                if !item.apps.isEmpty {
-                                    ApplicationBadges(bundleIDs: item.apps)
-                                }
-                                // 这一条还在记忆层、尚未被归纳进叙述层。标出来，
-                                // 否则「还没总结」与「根本没采到」看着一样。
-                                if !item.isNarrative {
-                                    Text("待归纳")
-                                        .font(.system(size: 9, weight: .medium))
-                                        .foregroundStyle(.tertiary)
-                                        .padding(.horizontal, 4)
-                                        .padding(.vertical, 1)
-                                        .background(Color.primary.opacity(0.06))
-                                        .clipShape(RoundedRectangle(
-                                            cornerRadius: 3.5, style: .continuous))
-                                }
-                            }
-                            .padding(.top, 2)
-                        }
+                        Text(item.title)
+                            .font(item.isAway ? DesignTokens.Typography.body : DesignTokens.Typography.bodyMedium)
+                            .foregroundStyle(item.isAway ? DesignTokens.Colors.subtleText : Color.primary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
+
+                    if !item.summary.isEmpty {
+                        Text(item.summary)
+                            .font(DesignTokens.Typography.footnote)
+                            .foregroundStyle(item.isAway ? DesignTokens.Colors.mutedText : DesignTokens.Colors.subtleText)
+                            .lineSpacing(2)
+                            .lineLimit(3)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    if !item.isAway && (!item.apps.isEmpty || !item.isNarrative) {
+                        HStack(spacing: DesignTokens.Spacing.sm6) {
+                            if !item.apps.isEmpty {
+                                ApplicationBadges(bundleIDs: item.apps)
+                            }
+                            // 这一条还在记忆层、尚未被归纳进叙述层。标出来，
+                            // 否则「还没总结」与「根本没采到」看着一样。
+                            if !item.isNarrative {
+                                Text("待归纳")
+                                    .font(DesignTokens.Typography.caption2Medium)
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(Color.primary.opacity(0.06))
+                                    .clipShape(RoundedRectangle(
+                                        cornerRadius: DesignTokens.Radius.iconBadge, style: .continuous))
+                            }
+                        }
+                        .padding(.top, 1)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
                 .gesture(TapGesture(count: 2).exclusively(before: TapGesture(count: 1)).onEnded { value in
                     if model.isSelectingSummaries { model.selectSummary(item); return }
                     switch value {
@@ -607,36 +659,77 @@ struct TimelineRow: View {
                     .help(model.isExpanded(item.id) ? "收起概要" : "展开概要详情")
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 7)
+            .padding(.horizontal, DesignTokens.Spacing.md10)
+            .padding(.vertical, DesignTokens.Spacing.sm)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(model.copiedItemID == item.id
-                          ? Color.green.opacity(0.10)
-                          : (isHovered ? Color.primary.opacity(0.05)
-                             : (model.isExpanded(item.id) ? Color.primary.opacity(0.03)
-                                : (item.isAway ? Color.primary.opacity(0.02) : Color.clear))))
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.md, style: .continuous)
+                    .fill(cardBackground)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: DesignTokens.Radius.md, style: .continuous)
+                            .strokeBorder(cardBorder, lineWidth: 0.5)
+                    )
             )
             .overlay(alignment: .topTrailing) {
-                // 复制反馈贴在行右上角，不占布局位置。
+                // 右上角浮层：复制成功反馈 与 悬停快捷操作栏 优雅互斥
                 if model.copiedItemID == item.id {
                     HStack(spacing: 3) {
                         Image(systemName: "checkmark").font(.system(size: 8, weight: .bold))
-                        Text("已复制").font(.system(size: 9, weight: .semibold))
+                        Text("已复制").font(DesignTokens.Typography.caption2Bold)
                     }
                     .foregroundStyle(Color.green)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2.5)
                     .background(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .fill(Color.green.opacity(0.15)))
+                        Capsule()
+                            .fill(Color.green.opacity(0.18))
+                    )
                     .padding(.top, 4)
                     .padding(.trailing, 6)
                     .transition(.opacity)
                     .allowsHitTesting(false)
+                } else if isHovered && !model.isSelectingSummaries {
+                    HStack(spacing: 2) {
+                        Button {
+                            model.copySummary(of: item)
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20, height: 20)
+                                .background(
+                                    RoundedRectangle(cornerRadius: DesignTokens.Radius.xs, style: .continuous)
+                                        .fill(Color.primary.opacity(0.06))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .help("复制摘要")
+                        .accessibilityLabel("复制摘要")
+
+                        if !item.isAway && model.canEditSummary(item) {
+                            Button {
+                                model.editSummary(item)
+                            } label: {
+                                Image(systemName: "pencil")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 20, height: 20)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: DesignTokens.Radius.xs, style: .continuous)
+                                            .fill(Color.primary.opacity(0.06))
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                            .help("编辑摘要")
+                            .accessibilityLabel("编辑摘要")
+                        }
+                    }
+                    .padding(.top, 3)
+                    .padding(.trailing, !item.isAway ? 26 : 6)
+                    .transition(.opacity)
                 }
             }
             .animation(.easeOut(duration: 0.12), value: model.copiedItemID)
+            .animation(.easeOut(duration: 0.12), value: isHovered)
             .contentShape(Rectangle())
             .onHover { isHovered = $0 }
             .contextMenu {
@@ -659,7 +752,7 @@ struct TimelineRow: View {
                 if model.canEditSummary(item) {
                     Button { model.editSummary(item) } label: {
                         Label(item.manualEdit == true ? "编辑摘要 · 已手动修改" : "编辑摘要", systemImage: "pencil")
-                            .font(.system(size: 10))
+                            .font(DesignTokens.Typography.caption)
                     }.buttonStyle(.plain).padding(.leading, 46).padding(.vertical, 5)
                         .accessibilityIdentifier("edit-summary")
                 }
@@ -670,13 +763,10 @@ struct TimelineRow: View {
                         SummaryDetails(item: item, model: model)
                     }
                 }
-                    .padding(.leading, 46)
-                    .padding(.trailing, 8)
-                    .padding(.bottom, 6)
-                    // 只用淡入。此前用 `.move(edge: .top)`：插入时视图先向上偏移
-                    // 一整个自身高度（约 250pt），再滑到位——看上去像是从很上方的
-                    // 分割线掉下来，而不是从本行展开。位移交给布局动画即可。
-                    .transition(.opacity)
+                .padding(.leading, 46)
+                .padding(.trailing, 8)
+                .padding(.bottom, 6)
+                .transition(.opacity)
             }
         }
     }
@@ -897,11 +987,15 @@ struct SummaryDetails: View {
         }
     }
 
-    private var fullTime: String {
+    private static let fullTimeFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "M-d HH:mm:ss"
         f.locale = Locale(identifier: "en_US_POSIX")
-        return f.string(from: item.timestamp)
+        return f
+    }()
+
+    private var fullTime: String {
+        Self.fullTimeFormatter.string(from: item.timestamp)
     }
 }
 
@@ -974,27 +1068,27 @@ struct ApplicationBadges: View {
                 if let icon = Self.icon(for: bundleID) {
                     Image(nsImage: icon)
                         .resizable()
-                        .frame(width: 15, height: 15)
-                        .clipShape(RoundedRectangle(cornerRadius: 3.5))
+                        .frame(width: DesignTokens.Dimensions.appIconBadgeSize, height: DesignTokens.Dimensions.appIconBadgeSize)
+                        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.iconBadge))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 3.5)
+                            RoundedRectangle(cornerRadius: DesignTokens.Radius.iconBadge)
                                 .stroke(Color(NSColor.windowBackgroundColor), lineWidth: 1)
                         )
                 } else {
                     Text(Self.initial(bundleID))
                         .font(.system(size: 8, weight: .bold))
-                        .frame(width: 15, height: 15)
+                        .frame(width: DesignTokens.Dimensions.appIconBadgeSize, height: DesignTokens.Dimensions.appIconBadgeSize)
                         .background(Color.secondary.opacity(0.18))
-                        .clipShape(RoundedRectangle(cornerRadius: 3.5))
+                        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.iconBadge))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 3.5)
+                            RoundedRectangle(cornerRadius: DesignTokens.Radius.iconBadge)
                                 .stroke(Color(NSColor.windowBackgroundColor), lineWidth: 1)
                         )
                 }
             }
             if bundleIDs.count > 7 {
                 Text("+\(bundleIDs.count - 7)")
-                    .font(.system(size: 9, weight: .medium))
+                    .font(DesignTokens.Typography.caption2Medium)
                     .foregroundStyle(.tertiary)
                     .padding(.leading, 5)
             }
@@ -1132,7 +1226,7 @@ struct DetailPane: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
         }
-        .frame(width: 380, height: 640)
+        .frame(width: DesignTokens.Dimensions.panelWidth, height: DesignTokens.Dimensions.panelHeight)
     }
 
     private var header: some View {
@@ -1222,11 +1316,15 @@ struct DetailPane: View {
         }
     }
 
-    private var timeLabel: String {
+    private static let timeLabelFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "M-d HH:mm:ss"
         f.locale = Locale(identifier: "en_US_POSIX")
-        return f.string(from: content.timestamp)
+        return f
+    }()
+
+    private var timeLabel: String {
+        Self.timeLabelFormatter.string(from: content.timestamp)
     }
 
     @ViewBuilder
@@ -1548,10 +1646,13 @@ struct ModelUsagePane: View {
     }
 
     private var filteredRequests: [ModelRequest] { filter.apply(model.modelRequests) }
-    private func day(_ date: Date) -> String {
+    private static let dayFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: date)
+        return formatter
+    }()
+    private func day(_ date: Date) -> String {
+        Self.dayFormatter.string(from: date)
     }
     private var requestDays: [String] { Set(filteredRequests.map { day($0.startedAt) }).sorted(by: >) }
     private func tasks(on date: String) -> [String] {

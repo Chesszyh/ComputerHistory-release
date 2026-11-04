@@ -23,6 +23,7 @@ else
     objects=("$bin_dir/ComputerHistoryCore.build/"*.o)
 fi
 swiftc -parse-as-library -I "$modules" \
+    Sources/computer-history-menubar/DesignTokens.swift \
     Sources/computer-history-menubar/StatusModel.swift \
     Sources/computer-history-menubar/StatusPanel.swift \
     Sources/computer-history-menubar/SettingsPane.swift \

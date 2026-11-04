@@ -36,12 +36,12 @@ struct SummarySettingsPane: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 380, height: 640)
+        .frame(width: DesignTokens.Dimensions.panelWidth, height: DesignTokens.Dimensions.panelHeight)
     }
 
     private var timelineEditor: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("总结模式").font(.system(size: 12, weight: .semibold))
+            Text("总结模式").font(DesignTokens.Typography.bodySemibold)
             Picker("总结模式", selection: $model.timelineMode) {
                 ForEach(SummarySettings.TimelineMode.allCases, id: \.self) { Text($0.label).tag($0) }
             }
@@ -50,15 +50,15 @@ struct SummarySettingsPane: View {
             .accessibilityIdentifier("timeline-mode")
             .disabled(!model.timelineSettingsLoaded || model.timelineRebuilding)
             Text(model.timelineMode.explanation)
-                .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .font(DesignTokens.Typography.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Text("时间线按先后顺序排列，活动时段互不重叠。")
-                .font(.system(size: 10)).foregroundStyle(.tertiary)
+                .font(DesignTokens.Typography.caption).foregroundStyle(.tertiary)
             feedback(error: model.timelineSettingsError, message: model.timelineSettingsMessage)
             if model.showsTimelineRecalculation {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("如何处理已有总结？").font(.system(size: 11, weight: .semibold))
+                    Text("如何处理已有总结？").font(DesignTokens.Typography.footnoteSemibold)
                     Text("重算使用当前模型，保留原始记录和十分钟记忆。")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .font(DesignTokens.Typography.caption).foregroundStyle(.secondary)
                     HStack {
                         Button("重算当天总结") { model.recalculateTimeline(.today) }.accessibilityIdentifier("timeline-recalculate-today")
                         Button("重算所有总结") { model.recalculateTimeline(.all) }.accessibilityIdentifier("timeline-recalculate-all")
@@ -130,26 +130,26 @@ struct SummarySettingsPane: View {
             .pickerStyle(.menu)
 
             Text(model.summaryStage.explanation)
-                .font(.system(size: 10)).foregroundStyle(.secondary)
+                .font(DesignTokens.Typography.caption).foregroundStyle(.secondary)
 
             Text("系统提示词")
-                .font(.system(size: 11, weight: .semibold))
+                .font(DesignTokens.Typography.footnoteSemibold)
                 .foregroundStyle(.secondary)
 
             TextEditor(text: $model.summaryDraft)
-                .font(.system(size: 11, design: .monospaced))
+                .font(DesignTokens.Typography.monoBody)
                 .padding(4)
                 .frame(maxHeight: .infinity)
                 .background(Color.primary.opacity(0.02))
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.md, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.md, style: .continuous)
                         .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
                 )
                 .accessibilityIdentifier("summary-prompt")
 
             Text("保留提示词中的输出格式。保存后影响新请求，已有总结需重算。自定义提示词不会随内置版本更新；可恢复默认后保存。")
-                .font(.system(size: 10))
+                .font(DesignTokens.Typography.caption)
                 .foregroundStyle(.tertiary)
 
             feedback(error: model.summarySettingsError, message: model.summaryMessage)
@@ -163,7 +163,7 @@ struct SummarySettingsPane: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .font(.system(size: 11))
+                .font(DesignTokens.Typography.footnote)
                 .accessibilityIdentifier("summary-default")
 
                 Spacer()
@@ -500,10 +500,10 @@ private struct SettingsField: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+            Text(title).font(DesignTokens.Typography.footnoteMedium).foregroundStyle(.secondary)
             TextField(placeholder, text: $text)
                 .textFieldStyle(.roundedBorder)
-                .font(.system(size: 11))
+                .font(DesignTokens.Typography.footnote)
                 .accessibilityLabel(title)
                 .accessibilityIdentifier(id)
         }
@@ -571,7 +571,14 @@ struct ApplicationListEditor: View {
                             .toggleStyle(.checkbox)
                             .accessibilityIdentifier("ocr-application-\(id)")
                     } else {
-                        Image(systemName: "app.fill").foregroundStyle(.secondary)
+                        if let icon = ApplicationBadges.icon(for: id) {
+                            Image(nsImage: icon)
+                                .resizable()
+                                .frame(width: 14, height: 14)
+                                .clipShape(RoundedRectangle(cornerRadius: 3))
+                        } else {
+                            Image(systemName: "app.fill").foregroundStyle(.secondary)
+                        }
                         Text(applicationName(id)).lineLimit(1)
                     }
                     Spacer()
@@ -637,18 +644,18 @@ private struct SettingsCard<Content: View>: View {
     @ViewBuilder let content: Content
     init(_ title: String, @ViewBuilder content: () -> Content) { self.title = title; self.content = content() }
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(.primary)
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md10) {
+            Text(title).font(DesignTokens.Typography.footnoteSemibold).foregroundStyle(.primary)
             content
         }
-        .padding(10)
+        .padding(DesignTokens.Spacing.md10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.primary.opacity(0.03))
+            RoundedRectangle(cornerRadius: DesignTokens.Radius.md, style: .continuous)
+                .fill(DesignTokens.Colors.cardBackground)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.md, style: .continuous)
+                        .strokeBorder(DesignTokens.Colors.cardBorder, lineWidth: 0.5)
                 )
         )
     }
@@ -657,10 +664,11 @@ private struct SettingsCard<Content: View>: View {
 struct SettingsDisclosure<Content: View>: View {
     let title: String
     @State private var expanded = false
+    @State private var isHovered = false
     @ViewBuilder let content: Content
     init(_ title: String, @ViewBuilder content: () -> Content) { self.title = title; self.content = content() }
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
             Button {
                 withAnimation(.easeInOut(duration: 0.16)) {
                     expanded.toggle()
@@ -672,7 +680,7 @@ struct SettingsDisclosure<Content: View>: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 10)
                     Text(title)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(DesignTokens.Typography.footnoteSemibold)
                         .foregroundStyle(.primary)
                     Spacer(minLength: 0)
                 }
@@ -680,14 +688,15 @@ struct SettingsDisclosure<Content: View>: View {
                 .padding(.vertical, 6)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.primary.opacity(0.02))
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.sm, style: .continuous)
+                        .fill(isHovered ? DesignTokens.Colors.cardHoverBackground : Color.primary.opacity(0.02))
                 )
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(title)
             .accessibilityValue(expanded ? "已展开" : "已收起")
+            .onHover { isHovered = $0 }
 
             if expanded {
                 VStack(alignment: .leading, spacing: 8) {
