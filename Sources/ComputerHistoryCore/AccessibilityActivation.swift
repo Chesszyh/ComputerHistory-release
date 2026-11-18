@@ -20,19 +20,22 @@ public struct AccessibilityActivation {
     }
 
     public mutating func prepare(pid: Int32, now: Date = Date()) {
+        prepare(pid: pid, now: now, access: .init())
+    }
+
+    mutating func prepare(pid: Int32, now: Date, access: AccessibilityRead) {
         let running = NSRunningApplication(processIdentifier: pid)
         prepare(pid: pid, launchedAt: running?.launchDate, now: now) {
             let app = AXUIElementCreateApplication(pid)
-            AXUIElementSetMessagingTimeout(app, 1)
-            let role = AXTreeReader.copyString(app, kAXRoleAttribute as String)
+            let role = AXTreeReader.copyString(app, kAXRoleAttribute, access: access)
             // Chrome can report unsupported for the enhanced setter after scheduling activation.
             // Keep requests apart: its full-document mode is enabled after a two-second debounce.
             for attribute in ["AXEnhancedUserInterface", "AXManualAccessibility"] {
-                if AXTreeReader.copyBool(app, attribute) != true {
-                    _ = AXUIElementSetAttributeValue(app, attribute as CFString, kCFBooleanTrue)
+                if AXTreeReader.copyBool(app, attribute, access: access) != true {
+                    _ = access.perform { AXUIElementSetAttributeValue(app, attribute as CFString, kCFBooleanTrue) }
                 }
             }
-            return role != nil
+            return role != nil && access.canRead
         }
         connections = connections.filter { NSRunningApplication(processIdentifier: $0.key) != nil }
     }

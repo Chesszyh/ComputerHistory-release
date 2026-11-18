@@ -12,11 +12,13 @@ public enum ActivityEvidence {
     }
 
     public static func hasMeaningfulInteraction(events: [EventStreamRecord]) -> Bool {
-        events.contains { event in
-            if [.mouseClick, .mouseContextMenu, .mouseDrag, .mouseScroll, .keyboardShortcut, .keyboardSubmit].contains(event.kind) { return true }
-            return event.kind == .keyboardTextInput && event.keyboard?.textEvidence == .editedValue
-                && event.keyboard?.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        }
+        events.contains(where: isMeaningfulInteraction)
+    }
+
+    static func isMeaningfulInteraction(_ event: EventStreamRecord) -> Bool {
+        if [.mouseClick, .mouseContextMenu, .mouseDrag, .mouseScroll, .keyboardShortcut, .keyboardSubmit].contains(event.kind) { return true }
+        return event.kind == .keyboardTextInput && event.keyboard?.textEvidence == .editedValue
+            && event.keyboard?.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 
     public static func interactionSummary(events: [EventStreamRecord], inputDegraded: Bool = false) -> String {

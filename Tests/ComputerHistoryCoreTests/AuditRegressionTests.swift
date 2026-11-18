@@ -253,34 +253,6 @@ final class AuditRegressionTests: XCTestCase {
         XCTAssertEqual(all.count, 3, "不得有来源被重复计入")
     }
 
-    // MARK: - 六小时依赖
-
-    /// 十分钟记忆未齐时不得生成六小时汇总——否则会永久缺段
-    /// （写出后仅凭文件存在就跳过，新增来源也不会更新）。
-    func testSixHourWaitsForDependencies() throws {
-        let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
-        let base = Date(timeIntervalSince1970: 1_800_000_000)
-        // 同一 6 小时桶内的两段
-        try writeSegment(root, id: "2026-10-14T00-00-00Z", firstEvent: base)
-        try writeSegment(root, id: "2026-10-14T00-10-00Z",
-                         firstEvent: base.addingTimeInterval(600))
-        let memDir = root.appendingPathComponent("memories")
-        try FileManager.default.createDirectory(at: memDir, withIntermediateDirectories: true)
-        // 只为其中一段写记忆
-        try writeMemory(root, segmentID: "2026-10-14T00-00-00Z", title: "A")
-
-        let gen = generator(root)
-        // 桶按**段时间**（段 ID 解析出的对齐时刻）划分，不是事件时间。
-        let segmentStart = try XCTUnwrap(
-            SegmentClock.date(fromSegmentID: "2026-10-14T00-00-00Z"))
-        let bucket = MemoryGenerator.sixHourBucket(for: segmentStart)
-        XCTAssertThrowsError(try gen.generateSixHour(bucket: bucket)) { error in
-            guard case MemoryGenerator.GenerateError.dependenciesMissing(_, let missing) = error
-            else { return XCTFail("应报依赖缺失，实际 \(error)") }
-            XCTAssertEqual(missing, ["2026-10-14T00-10-00Z"])
-        }
-    }
-
     // MARK: - 统计准确性
 
     /// 大文件也必须计入事件数——按大小跳过会静默漏计。
@@ -358,6 +330,16 @@ final class AuditRegressionTests: XCTestCase {
         let text = try String(contentsOf: log, encoding: .utf8)
         XCTAssertTrue(text.hasSuffix("\n"), "尾部应是完整行")
         XCTAssertTrue(text.contains("line 4999"), "应保留最近的内容")
+    }
+
+    func testLogBoundDropsAnInterruptedLineAtTheEnd() throws {
+        let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let log = root.appendingPathComponent("collector.log")
+        let prefix = String(repeating: "discarded\n", count: 50)
+        try (prefix + "complete\nunfinished").write(to: log, atomically: true, encoding: .utf8)
+        XCTAssertTrue(CollectorSupervisor.enforceLogBound(at: log, maxBytes: 32, keepBytes: 19))
+        try CollectorLog(url: log).append(Data("following\n".utf8))
+        XCTAssertEqual(try String(contentsOf: log, encoding: .utf8), "complete\nfollowing\n")
     }
 
     /// 未超限时不动作。

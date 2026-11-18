@@ -525,7 +525,7 @@ struct TimelineRow: View {
     }
 
     private var awayIcon: String {
-        if item.title == "用户离开电脑" || item.summary.contains("无操作") {
+        if item.title == "用户离开电脑" {
             return "moon.zzz"
         } else {
             return "lock.display"
@@ -1748,17 +1748,6 @@ struct ModelUsagePane: View {
             ForEach(model.modelRequests.filter { $0.fallbackOf == request.id }) { fallback in
                 Button("查看降级结果 · " + fallback.model) { model.openRequest(fallback) }.buttonStyle(.plain).foregroundStyle(Color.accentColor)
             }
-            if let parent = request.comparisonOf {
-                if let primary = model.modelRequests.first(where: { $0.id == parent }) {
-                    Button("查看主模型请求") { model.openRequest(primary) }
-                        .buttonStyle(.plain).foregroundStyle(Color.accentColor)
-                }
-            } else {
-                ForEach(model.modelRequests.filter { $0.comparisonOf == request.id }) { secondary in
-                    Button("查看对照结果 · " + secondary.model) { model.openRequest(secondary) }
-                        .buttonStyle(.plain).foregroundStyle(Color.accentColor)
-                }
-            }
             if let usage = request.usage {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("输入 \(usage.promptTokens) · 输出 \(usage.completionTokens) token")
@@ -1848,12 +1837,12 @@ struct ModelRequestGroup: View {
                         Button { model.openRequest(request) } label: {
                             VStack(alignment: .leading, spacing: 5) {
                                 HStack(spacing: 6) {
-                                    Text(request.retryOf != nil ? "加长重试" : (request.fallbackOf != nil ? "降级" : (request.comparisonOf == nil ? "主模型" : "历史对照")))
+                                    Text(request.retryOf != nil ? "加长重试" : (request.fallbackOf != nil ? "降级" : "主模型"))
                                         .font(.system(size: 9, weight: .semibold))
                                         .padding(.horizontal, 5)
                                         .padding(.vertical, 1.5)
-                                        .background(request.comparisonOf == nil ? Color.accentColor.opacity(0.12) : Color.purple.opacity(0.12))
-                                        .foregroundStyle(request.comparisonOf == nil ? Color.accentColor : Color.purple)
+                                        .background(Color.accentColor.opacity(0.12))
+                                        .foregroundStyle(Color.accentColor)
                                         .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
 
                                     Text(request.model)

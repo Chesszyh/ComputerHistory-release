@@ -44,7 +44,7 @@ final class TextQualityTests: XCTestCase {
         let id = try XCTUnwrap(session.currentSegmentID)
         let app = EventStreamApp(processIdentifier: 42, bundleIdentifier: "com.example.editor")
         func sample(_ text: String, _ tick: Double) {
-            session.sampleTextInput(app: app, window: nil, readFocused: {
+            session.sampleTextInput(context: .init(app: app, window: .init(windowID: 1)), readFocused: {
                 (.init(value: text, focusIdentity: 1, hasInputActivity: true), nil)
             }, now: t0.addingTimeInterval(tick))
         }
@@ -128,7 +128,7 @@ final class TextQualityTests: XCTestCase {
         let window = EventStreamWindow(title: "Synthetic", windowID: 1)
         let placeholder = "询问ChatGPT"
         func sample(_ value: String, at second: Double, editable: Bool = true, activity: Bool? = nil) {
-            session.sampleTextInput(app: app, window: window, readFocused: {
+            session.sampleTextInput(context: .init(app: app, window: window), readFocused: {
                 (.init(value: value, isEditableBuffer: editable, focusIdentity: 7,
                        placeholder: placeholder, hasInputActivity: activity),
                  .init(role: "AXTextArea", value: value, placeholder: placeholder))
@@ -138,14 +138,14 @@ final class TextQualityTests: XCTestCase {
         sample(placeholder, at: 0.2)
         sample("", at: 0.3)
         sample("ni", at: 0.4)
-        session.noteInputActivity(processIdentifier: 42, at: t0.addingTimeInterval(0.5))
+        session.noteInputActivity(in: .init(app: app, window: window), at: t0.addingTimeInterval(0.5))
         sample("你", at: 0.6)
         sample("你", at: 4)
         sample("你程序更新", at: 8)
         sample("你程序更新", at: 12)
         // 输入同一提示字有交互证据时仍保留。
         sample("", at: 13)
-        session.noteInputActivity(processIdentifier: 42, at: t0.addingTimeInterval(14))
+        session.noteInputActivity(in: .init(app: app, window: window), at: t0.addingTimeInterval(14))
         sample(placeholder, at: 14.1)
         try session.stop(now: t0.addingTimeInterval(15))
         let events = try MemoryGenerator.readEvents(at: root.appendingPathComponent("segments/\(id)/events.jsonl"))
@@ -182,17 +182,17 @@ final class TextQualityTests: XCTestCase {
         let id = try XCTUnwrap(session.currentSegmentID)
         let app = EventStreamApp(processIdentifier: 42, bundleIdentifier: "com.example.editor")
         func sample(_ value: String, _ tick: Double, windowID: UInt32) {
-            session.sampleTextInput(app: app, window: .init(windowID: windowID), readFocused: {
+            session.sampleTextInput(context: .init(app: app, window: .init(windowID: windowID)), readFocused: {
                 (.init(value: value, focusIdentity: 1), nil)
             }, now: t0.addingTimeInterval(tick))
         }
         sample("", 0.1, windowID: 1)
-        session.noteInputActivity(processIdentifier: 42, at: t0.addingTimeInterval(0.2))
+        session.noteInputActivity(in: .init(app: app, window: .init(windowID: 1)), at: t0.addingTimeInterval(0.2))
         sample("", 0.3, windowID: 2)
         sample("programmatic", 0.4, windowID: 2)
         sample("programmatic", 4, windowID: 2)
         session.isPaused = true
-        session.noteInputActivity(processIdentifier: 42, at: t0.addingTimeInterval(5))
+        session.noteInputActivity(in: .init(app: app, window: .init(windowID: 2)), at: t0.addingTimeInterval(5))
         session.isPaused = false
         sample("", 5.1, windowID: 2)
         sample("after-pause", 5.2, windowID: 2)

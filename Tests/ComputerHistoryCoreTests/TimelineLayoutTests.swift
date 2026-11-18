@@ -28,14 +28,17 @@ final class TimelineLayoutTests: XCTestCase {
         XCTAssertEqual(cards[1].id, "B")
     }
 
-    func testAdjacentPassivePeriodsCoalesceWithoutBecomingMultipleActivities() {
-        var first = item("passive-1", 0, 600); first.noClearActivity = true
-        var second = item("passive-2", 600, 1200); second.noClearActivity = true
-        let cards = TimelineLayout.cards([first, second, item("active", 1200, 1800)])
-        XCTAssertEqual(cards.count, 2)
-        XCTAssertEqual(cards.last?.title, "无明显活动")
-        XCTAssertEqual(cards.last?.endTimestamp, Date(timeIntervalSince1970: 1200))
-        XCTAssertEqual(cards.last?.children?.count, 2)
+    func testPassivePeriodsAreHiddenWithoutHidingActiveOrDegradedEvidence() {
+        var passive = item("passive", 0, 90)
+        passive.noClearActivity = true
+        var legacy = item("legacy", 90, 95)
+        legacy.title = ActivityEvidence.noActivityTitle
+        var degraded = item("degraded", 100, 110)
+        degraded.title = ActivityEvidence.inputDegradedTitle
+        let active = item("active", 105, 120)
+        let cards = TimelineLayout.cards([passive, legacy, degraded, active])
+        XCTAssertEqual(cards.flatMap(\.leafItems).map(\.id), ["degraded", "active"])
+        XCTAssertEqual(cards.first?.children?.count, 2)
     }
 
     func testContainerIdentitySurvivesAnAdditionalOverlappingActivity() {

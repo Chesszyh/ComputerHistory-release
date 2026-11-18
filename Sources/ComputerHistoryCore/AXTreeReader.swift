@@ -20,23 +20,39 @@ public enum AXTreeReader {
     public static func read(
         pid: pid_t,
         maxNodes: Int = 4000,
-        maxDepth: Int = 40
+        maxDepth: Int = 40,
+        isAllowed: @escaping () -> Bool = { !FrontmostApplication.secureInputState() }
     ) -> [UIElementRender] {
+        snapshot(pid: pid, maxNodes: maxNodes, maxDepth: maxDepth, isAllowed: isAllowed) ?? []
+    }
+
+    static func snapshot(pid: pid_t, maxNodes: Int, maxDepth: Int = 40,
+                         isAllowed: @escaping () -> Bool) -> [UIElementRender]? {
+        let access = AccessibilityRead(isAllowed: isAllowed)
+        guard access.canRead else { return nil }
         let app = AXUIElementCreateApplication(pid)
+        let windows: [AXUIElement]
+        if let focused = copyElement(app, kAXFocusedWindowAttribute, access: access) {
+            windows = [focused]
+        } else {
+            guard access.canRead else { return nil }
+            windows = copyElements(app, kAXWindowsAttribute, access: access) ?? []
+        }
+        return snapshot(windows: windows, maxNodes: maxNodes, maxDepth: maxDepth, access: access)
+    }
+
+    static func snapshot(window: AXWindowReference, maxNodes: Int,
+                         isAllowed: @escaping () -> Bool) -> [UIElementRender]? {
+        snapshot(windows: [window.element], maxNodes: maxNodes, maxDepth: 40, access: .init(isAllowed: isAllowed))
+    }
+
+    private static func snapshot(windows: [AXUIElement], maxNodes: Int, maxDepth: Int,
+                                 access: AccessibilityRead) -> [UIElementRender]? {
         var budget = maxNodes
-        guard let focused = copyElement(app, kAXFocusedWindowAttribute as String) else {
-            // 无聚焦窗口时退回窗口列表，仍可能抓到有用的树。
-            let windows = copyElements(app, kAXWindowsAttribute as String) ?? []
-            return windows.compactMap {
-                convert($0, budget: &budget,
-                        depth: 0, maxDepth: maxDepth)
-            }
+        let roots = windows.compactMap {
+            convert($0, budget: &budget, depth: 0, maxDepth: maxDepth, access: access)
         }
-        if let node = convert(focused, budget: &budget,
-                              depth: 0, maxDepth: maxDepth) {
-            return [node]
-        }
-        return []
+        return access.canRead ? roots : nil
     }
 
     static func hasReadableContent(_ roots: [UIElementRender]) -> Bool {
@@ -58,11 +74,12 @@ public enum AXTreeReader {
         _ element: AXUIElement,
         budget: inout Int,
         depth: Int,
-        maxDepth: Int
+        maxDepth: Int,
+        access: AccessibilityRead = .init()
     ) -> UIElementRender? {
         var seenHashes: [UInt: Int] = [:]
         return convert(element, budget: &budget,
-                       depth: depth, maxDepth: maxDepth, seenHashes: &seenHashes)
+                       depth: depth, maxDepth: maxDepth, seenHashes: &seenHashes, access: access)
     }
 
     /// 身份 = `CFHash` + 该哈希在本次快照中第几次出现。
@@ -81,15 +98,16 @@ public enum AXTreeReader {
         depth: Int,
         maxDepth: Int,
         seenHashes: inout [UInt: Int],
-        ancestors: [AXUIElement] = []
+        ancestors: [AXUIElement] = [],
+        access: AccessibilityRead
     ) -> UIElementRender? {
-        guard budget > 0, depth <= maxDepth,
+        guard budget > 0, depth <= maxDepth, access.canRead,
               !ancestors.contains(where: { CFEqual($0, element) }) else { return nil }
         budget -= 1
 
-        let role = copyString(element, kAXRoleAttribute as String) ?? ""
-        let description = describeRole(element, role: role)
-        let detail = buildDetail(element)
+        let role = copyString(element, kAXRoleAttribute as String, access: access) ?? ""
+        let description = describeRole(element, role: role, access: access)
+        let detail = buildDetail(element, access: access)
 
         let h = CFHash(element)
         let occurrence = seenHashes[h, default: 0]
@@ -98,16 +116,19 @@ public enum AXTreeReader {
 
         var children: [UIElementRender] = []
         // WeChat scrolls when AXChildren is queried on static text, even though it returns no children.
-        if role != kAXStaticTextRole as String,
-           let kids = copyElements(element, kAXChildrenAttribute as String) {
+        if role != kAXStaticTextRole as String, access.canRead,
+           let kids = copyElements(element, kAXChildrenAttribute as String, access: access) {
             for kid in kids {
+                guard access.canRead else { return nil }
                 if let c = convert(kid, budget: &budget,
                                    depth: depth + 1, maxDepth: maxDepth,
-                                   seenHashes: &seenHashes, ancestors: ancestors + [element]) {
+                                   seenHashes: &seenHashes, ancestors: ancestors + [element],
+                                   access: access) {
                     children.append(c)
                 }
             }
         }
+        guard access.canRead else { return nil }
         return UIElementRender(id: id, identityPath: "cfhash:\(h)#\(occurrence)",
                                text: description, detailText: detail, children: children, accessibilityRole: role)
     }
@@ -124,8 +145,9 @@ public enum AXTreeReader {
     ///
     /// 实测样本里出现的是人类可读词（`按钮`、`文本`、`滚动区`、`container`），
     /// 而非 `AXButton` 这类原始 role，故此处优先取 `kAXRoleDescriptionAttribute`。
-    static func describeRole(_ element: AXUIElement, role: String) -> String {
-        if let d = copyString(element, kAXRoleDescriptionAttribute as String), !d.isEmpty {
+    static func describeRole(_ element: AXUIElement, role: String,
+                             access: AccessibilityRead = .init()) -> String {
+        if let d = copyString(element, kAXRoleDescriptionAttribute as String, access: access), !d.isEmpty {
             return d
         }
         // 退回原始 role，去掉 AX 前缀以贴近样本形态。
@@ -133,36 +155,39 @@ public enum AXTreeReader {
     }
 
     /// 属性串保留标题、描述、帮助、值与定位信息。
-    static func buildDetail(_ element: AXUIElement) -> String? {
+    static func buildDetail(_ element: AXUIElement, attributes: Attributes? = nil,
+                            access: AccessibilityRead = .init()) -> String? {
+        let attributes = attributes ?? Attributes(element, access: access)
+        guard !attributes.isSecure else { return nil }
         var parts: [String] = []
-        if let v = copyString(element, kAXTitleAttribute as String), !v.isEmpty {
+        if let v = attributes.readString(kAXTitleAttribute), !v.isEmpty {
             parts.append("Title: \(v)")
         }
-        if let v = copyString(element, kAXDescriptionAttribute as String), !v.isEmpty {
+        if let v = attributes.readString(kAXDescriptionAttribute), !v.isEmpty {
             parts.append("Description: \(v)")
         }
         // Help 在 AX 中是 kAXHelpAttribute；样本里出现过 `Help: ...`。
-        if let v = copyString(element, kAXHelpAttribute as String), !v.isEmpty {
+        if let v = attributes.readString(kAXHelpAttribute), !v.isEmpty {
             parts.append("Help: \(v)")
         }
-        if let v = valueString(element), !v.isEmpty {
+        if let v = attributes.value, !v.isEmpty {
             parts.append("Value: \(v)")
         }
-        if let v = copyString(element, kAXIdentifierAttribute as String), !v.isEmpty {
+        if let v = attributes.readString(kAXIdentifierAttribute), !v.isEmpty {
             parts.append("ID: \(v)")
         }
-        if let v = copyString(element, kAXURLAttribute as String), !v.isEmpty {
+        if let v = attributes.readString(kAXURLAttribute), !v.isEmpty {
             parts.append("URL: \(v)")
         }
-        if let v = copyString(element, kAXPlaceholderValueAttribute as String), !v.isEmpty {
+        if let v = attributes.readString(kAXPlaceholderValueAttribute), !v.isEmpty {
             parts.append("Placeholder: \(v)")
         }
         // 可设置性与子角色以括号前缀形式出现（实测 `(disabled)`、`(settable, float)`）
         var flags: [String] = []
-        if let enabled = copyBool(element, kAXEnabledAttribute as String), !enabled {
+        if let enabled = copyBool(element, kAXEnabledAttribute as String, access: access), !enabled {
             flags.append("disabled")
         }
-        if isValueSettable(element) {
+        if isValueSettable(element, access: access) {
             flags.append("settable")
         }
         var head = flags.isEmpty ? "" : "(\(flags.joined(separator: ", "))) "
@@ -173,41 +198,49 @@ public enum AXTreeReader {
 
     // MARK: - AX 取值助手
 
-    static func copyValue(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
+    static func copyValue(_ element: AXUIElement, _ attribute: String,
+                          access: AccessibilityRead = .init()) -> CFTypeRef? {
         var out: CFTypeRef?
-        let err = AXUIElementCopyAttributeValue(element, attribute as CFString, &out)
+        let err = access.perform {
+            AXUIElementCopyAttributeValue(element, attribute as CFString, &out)
+        }
         return err == .success ? out : nil
     }
 
-    static func copyString(_ element: AXUIElement, _ attribute: String) -> String? {
-        guard let v = copyValue(element, attribute) else { return nil }
+    static func copyString(_ element: AXUIElement, _ attribute: String,
+                           access: AccessibilityRead = .init()) -> String? {
+        guard let v = copyValue(element, attribute, access: access) else { return nil }
         if let s = v as? String { return s }
         if let n = v as? NSNumber { return n.stringValue }
         return nil
     }
 
     /// `kAXValueAttribute` 是否可写。实测样本以 `(settable)` 标注。
-    static func isValueSettable(_ element: AXUIElement) -> Bool {
+    static func isValueSettable(_ element: AXUIElement, access: AccessibilityRead = .init()) -> Bool {
         var settable: DarwinBoolean = false
-        let err = AXUIElementIsAttributeSettable(
-            element, kAXValueAttribute as CFString, &settable)
+        let err = access.perform {
+            AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable)
+        }
         return err == .success && settable.boolValue
     }
 
-    static func copyBool(_ element: AXUIElement, _ attribute: String) -> Bool? {
-        guard let v = copyValue(element, attribute) else { return nil }
+    static func copyBool(_ element: AXUIElement, _ attribute: String,
+                           access: AccessibilityRead = .init()) -> Bool? {
+        guard let v = copyValue(element, attribute, access: access) else { return nil }
         if let n = v as? NSNumber { return n.boolValue }
         return nil
     }
 
-    static func copyElement(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {
-        guard let v = copyValue(element, attribute) else { return nil }
+    static func copyElement(_ element: AXUIElement, _ attribute: String,
+                           access: AccessibilityRead = .init()) -> AXUIElement? {
+        guard let v = copyValue(element, attribute, access: access) else { return nil }
         guard CFGetTypeID(v) == AXUIElementGetTypeID() else { return nil }
         return (v as! AXUIElement)
     }
 
-    static func copyElements(_ element: AXUIElement, _ attribute: String) -> [AXUIElement]? {
-        guard let v = copyValue(element, attribute) else { return nil }
+    static func copyElements(_ element: AXUIElement, _ attribute: String,
+                           access: AccessibilityRead = .init()) -> [AXUIElement]? {
+        guard let v = copyValue(element, attribute, access: access) else { return nil }
         guard let arr = v as? [Any] else { return nil }
         return arr.compactMap {
             guard CFGetTypeID($0 as CFTypeRef) == AXUIElementGetTypeID() else { return nil }
@@ -221,13 +254,32 @@ public enum AXTreeReader {
     /// 在应用层不暴露该属性，此时回退到聚焦窗口的 `kAXFocusedUIElementAttribute`——
     /// Chromium 系通常在窗口这一层提供。
     public static func focusedElement(ofApplication pid: pid_t) -> AXUIElement? {
+        focusedElement(ofApplication: pid, access: .init())
+    }
+
+    static func focusedElement(ofApplication pid: pid_t, access: AccessibilityRead) -> AXUIElement? {
         let app = AXUIElementCreateApplication(pid)
-        if let el = copyElement(app, kAXFocusedUIElementAttribute as String) { return el }
-        if let win = copyElement(app, kAXFocusedWindowAttribute as String),
-           let el = copyElement(win, kAXFocusedUIElementAttribute as String) {
+        if let el = copyElement(app, kAXFocusedUIElementAttribute, access: access) { return el }
+        if let win = copyElement(app, kAXFocusedWindowAttribute, access: access),
+           let el = copyElement(win, kAXFocusedUIElementAttribute, access: access) {
             return el
         }
         return nil
+    }
+
+    static func focusedElement(ofApplication pid: pid_t, within window: ObservedWindow,
+                               access: AccessibilityRead) -> AXUIElement? {
+        guard let reference = window.reference else { return nil }
+        let app = AXUIElementCreateApplication(pid)
+        if let element = copyElement(app, kAXFocusedUIElementAttribute, access: access),
+           let owner = copyElement(element, kAXWindowAttribute, access: access), window.owns(owner, access: access) {
+            return element
+        }
+        guard let element = copyElement(reference.element, kAXFocusedUIElementAttribute, access: access) else { return nil }
+        if let owner = copyElement(element, kAXWindowAttribute, access: access), !window.owns(owner, access: access) {
+            return nil
+        }
+        return access.canRead ? element : nil
     }
 
     /// 聚焦元素的值是否**可以**作为编辑缓冲看待。
@@ -257,13 +309,20 @@ public enum AXTreeReader {
         return range.location
     }
 
-    /// `kAXValueAttribute` 可能返回任意类型，统一转成字符串。
-    static func valueString(_ element: AXUIElement) -> String? {
-        guard let v = copyValue(element, kAXValueAttribute as String) else { return nil }
-        switch v {
-        case let s as String: return s
-        case let n as NSNumber: return n.stringValue
-        default: return nil
+    struct Attributes {
+        let readString: (String) -> String?
+        let subrole: String?
+
+        init(readString: @escaping (String) -> String?) {
+            self.readString = readString
+            subrole = readString(kAXSubroleAttribute)
         }
+
+        init(_ element: AXUIElement, access: AccessibilityRead = .init()) {
+            self.init { copyString(element, $0, access: access) }
+        }
+
+        var isSecure: Bool { subrole == kAXSecureTextFieldSubrole }
+        var value: String? { isSecure ? nil : readString(kAXValueAttribute) }
     }
 }

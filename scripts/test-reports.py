@@ -35,9 +35,10 @@ class Model(http.server.BaseHTTPRequestHandler):
 with tempfile.TemporaryDirectory(prefix='report-test-') as directory:
     base = Path(directory); root = base/'data'; root.mkdir(); mem = root/'memories'; mem.mkdir()
     env = dict(os.environ)
-    for key in ['DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL','DEEPSEEK_MODEL']: env.pop(key, None)
-    def run(*args, ok=True):
-        p = subprocess.run([binary, *args, '--out', str(root)], env=env, capture_output=True, text=True, timeout=60)
+    for key in ['DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'DEEPSEEK_MODEL', 'COMPUTER_HISTORY_FALLBACK_API_KEY']:
+        env.pop(key, None)
+    def run(*args, ok=True, program=binary):
+        p = subprocess.run([program, *args, '--out', str(root)], env=env, capture_output=True, text=True, timeout=60)
         assert (p.returncode == 0) == ok, (args,p.returncode,p.stdout,p.stderr)
         return p
     def memory(day, content='合成活动。', generation='model'):
@@ -45,6 +46,51 @@ with tempfile.TemporaryDirectory(prefix='report-test-') as directory:
         file.write_text(f'---\ntitle: Synthetic\ndescription: summary\ngeneration: {generation}\napplications: []\n---\n## Memory summary\n### 本次活动\n{content}\n## Recording summary\n### 时序证据\nRAW PRIVATE\n## Citations\n/private/synthetic/events.jsonl\n')
         return file
     first=memory('2020-01-01')
+    settings = root / 'model.json'
+    report = root / 'reports/daily/2020-01-01.json'
+    daily = ('--kind', 'daily', '--day', '2020-01-01')
+    missing = run('report', *daily, ok=False)
+    assert missing.returncode == 1 and 'computer-history report --no-model' in missing.stderr
+    assert '--day' in missing.stderr and '--kind' in missing.stderr and not report.exists()
+    offline = run('report', *daily, '--no-model', '--print')
+    assert '活动材料' in offline.stdout and '合成活动' in offline.stdout
+    original_offline = report.read_bytes()
+    assert json.loads(original_offline)['usedModel'] is False
+
+    fake_bin = base / 'missing-credential'
+    fake_bin.mkdir()
+    fake_program = fake_bin / 'computer-history'
+    shutil.copy2(binary, fake_program)
+    fake_helper = fake_bin / 'computer-history-credentials'
+    fake_helper.write_text('#!/usr/bin/env python3\nimport json, sys\n'
+                           'assert json.load(sys.stdin)["operation"] == "load"\n'
+                           'print(json.dumps({"ok": True}))\n')
+    fake_helper.chmod(0o700)
+    configured = {'baseURL': 'http://127.0.0.1:9/v1', 'model': 'synthetic-auth', 'requiresAPIKey': True}
+    settings.write_text(json.dumps(configured))
+    no_key = run('report', *daily, '--overwrite', ok=False, program=fake_program)
+    assert no_key.returncode == 1 and '未找到模型密钥' in no_key.stderr and '--no-model' in no_key.stderr
+    assert report.read_bytes() == original_offline
+
+    settings.write_text(json.dumps({
+        'groups': [dict(configured, id='local', name='Local', requiresAPIKey=False),
+                   dict(configured, id='auth', name='Auth')],
+        'primaryGroupID': 'local', 'tasks': {'daily': {'groupID': 'auth'}},
+    }))
+    late_no_key = run('report', ok=False, program=fake_program)
+    assert late_no_key.returncode == 1 and '未找到模型密钥' in late_no_key.stderr, late_no_key.stderr
+    assert late_no_key.stderr.count('computer-history report --no-model') == 1
+    assert report.read_bytes() == original_offline
+
+    settings.write_text('{invalid json')
+    invalid_config = run('report', *daily, '--overwrite', ok=False)
+    assert invalid_config.returncode == 1 and invalid_config.stderr and '--no-model' not in invalid_config.stderr
+    exported = run('export', *daily)
+    assert '活动材料' in exported.stdout and '合成活动' in exported.stdout
+    assert report.read_bytes() == original_offline
+    settings.unlink()
+    print('PASS: report points to explicit offline generation for missing models; export preserves existing reports')
+
     server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Model)
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     (root/'model.json').write_text(json.dumps({'baseURL':f'http://127.0.0.1:{server.server_port}/v1','model':'synthetic-model','requiresAPIKey':False,'reasoningEffort':'none'}))
@@ -62,8 +108,8 @@ with tempfile.TemporaryDirectory(prefix='report-test-') as directory:
         assert '## ' not in (base/'report.txt').read_text()
         for failure in ['fail','empty','truncated']:
             mode=failure
-            run('report','--day','2020-01-01','--overwrite',ok=False)
-            assert report.read_bytes()==original
+            failed = run('report','--day','2020-01-01','--overwrite',ok=False)
+            assert '--no-model' not in failed.stderr and report.read_bytes()==original
         mode='ok'
         first.write_text(first.read_text().replace('合成活动。','新增来源结果。'))
         run('report','--day','2020-01-01');assert report.read_bytes()!=original

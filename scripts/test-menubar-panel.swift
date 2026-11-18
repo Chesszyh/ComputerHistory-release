@@ -106,11 +106,25 @@ struct HistoryRegression {
         activity.sourceIncidental = [memory.lastPathComponent: [3]]
         var paper = ActivityNarrative.Item(id: "paper", timestamp: activity.timestamp, title: "阅读示例论文", summary: "核对研究方法与实验结果。", apps: [], sourceMemories: [memory.lastPathComponent])
         paper.sourceActivities = [memory.lastPathComponent: [4]]
-        try! ActivityNarrative(items: [activity, paper]).save(root: root)
+        let sourceStart = SegmentClock.date(fromSegmentID: "2020-01-01T10-00-00Z")!
+        let passive = ActivityNarrative.Item(id: "passive", timestamp: sourceStart.addingTimeInterval(-80),
+            title: ActivityEvidence.noActivityTitle, summary: ActivityEvidence.noActivitySummary, apps: [], sourceMemories: [])
+        try! ActivityNarrative(items: [activity, paper, passive]).save(root: root)
+        func time(_ offset: TimeInterval) -> String {
+            EventStreamJSON.timestampString(from: sourceStart.addingTimeInterval(offset))
+        }
+        let away = ["periods": [
+            ["start": time(-320), "end": time(-236), "reason": "idle"],
+            ["start": time(-225), "end": time(-120), "reason": "locked"],
+        ]]
+        try! JSONSerialization.data(withJSONObject: away).write(to: root.appendingPathComponent("away.json"))
         let detailsModel = StatusModel(root: root)
         defer { detailsModel.shutdown() }
         RunLoop.main.run(until: Date().addingTimeInterval(1))
-        let row = detailsModel.timelineGroups.flatMap(\.items).first!
+        let detailRows = detailsModel.timelineGroups.flatMap(\.items)
+        precondition(detailRows.map(\.isAway) == [false, true], "One activity row and one coalesced away row are expected")
+        precondition(detailRows.last?.summary == "长时间无操作、锁屏或休眠")
+        let row = detailRows.first!
         precondition(row.children?.count == 2, "Same-time activities must share one container")
         detailsModel.copySummary(of: row)
         let groupCopy = NSPasteboard.general.string(forType: .string)!
@@ -141,6 +155,6 @@ struct HistoryRegression {
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         precondition(disclosure.fittingSize.height > collapsedHeight + 20, "The incidental row must expand when clicking beyond its text")
         window.orderOut(nil)
-        print("PASS: bounded initial page, no loading near the top, incremental loading through 120 records, stable end, and selected copy across pages")
+        print("PASS: bounded initial page, no loading near the top, incremental loading through 120 records, stable end, selected copy across pages, and passive and away presentation")
     }
 }

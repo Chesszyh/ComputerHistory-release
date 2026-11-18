@@ -54,6 +54,73 @@ final class ControlTests: XCTestCase {
         XCTAssertFalse(CollectorControl.load(root: root).summarizing)
     }
 
+    func testConcurrentFieldUpdatesAcrossProcesses() throws {
+        let environment = ProcessInfo.processInfo.environment
+        if let operation = environment["COMPUTER_HISTORY_TEST_CONTROL_OPERATION"],
+           let path = environment["COMPUTER_HISTORY_TEST_CONTROL_ROOT"] {
+            let root = URL(fileURLWithPath: path)
+            try Data().write(to: root.appendingPathComponent(operation + ".ready"))
+            if operation == "pause" { try CollectorControl.update(root: root, recording: false) }
+            else { try CollectorControl.update(root: root, flushRequested: false) }
+            return
+        }
+
+        let root = try tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let initial = CollectorControl(recording: true, summarizing: false, flushRequested: true)
+        try initial.save(root: root)
+        let lockDirectory = root.appendingPathComponent(".locks")
+        try FileManager.default.createDirectory(at: lockDirectory, withIntermediateDirectories: true)
+        let lock = open(lockDirectory.appendingPathComponent("control.lock").path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        guard lock >= 0 else { return XCTFail("Cannot open control lock") }
+        defer { close(lock) }
+        guard flock(lock, LOCK_EX | LOCK_NB) == 0 else { return XCTFail("Cannot hold control lock") }
+
+        var children: [Process] = []
+        defer {
+            for child in children where child.isRunning {
+                kill(child.processIdentifier, SIGKILL)
+                child.waitUntilExit()
+            }
+        }
+        for operation in ["pause", "consume"] {
+            let child = Process()
+            child.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+            child.arguments = ["xctest", "-XCTest",
+                               "ComputerHistoryCoreTests.ControlTests/testConcurrentFieldUpdatesAcrossProcesses",
+                               Bundle(for: ControlTests.self).bundleURL.path]
+            child.environment = environment.merging([
+                "COMPUTER_HISTORY_TEST_CONTROL_OPERATION": operation,
+                "COMPUTER_HISTORY_TEST_CONTROL_ROOT": root.path
+            ], uniquingKeysWith: { _, replacement in replacement })
+            child.standardOutput = FileHandle.nullDevice
+            child.standardError = FileHandle.nullDevice
+            try child.run()
+            children.append(child)
+        }
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
+        while !["pause", "consume"].allSatisfy({
+            FileManager.default.fileExists(atPath: root.appendingPathComponent($0 + ".ready").path)
+        }) {
+            guard ProcessInfo.processInfo.systemUptime < deadline else { return XCTFail("Control workers did not start") }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        Thread.sleep(forTimeInterval: 0.15)
+        XCTAssertEqual(CollectorControl.load(root: root), initial, "An update ran while another process held the lock")
+        XCTAssertEqual(flock(lock, LOCK_UN), 0)
+
+        let completed = ProcessInfo.processInfo.systemUptime + 5
+        for child in children {
+            while child.isRunning {
+                guard ProcessInfo.processInfo.systemUptime < completed else { return XCTFail("Control writer did not exit") }
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            XCTAssertEqual(child.terminationStatus, 0)
+        }
+        XCTAssertEqual(CollectorControl.load(root: root),
+                       CollectorControl(recording: false, summarizing: false, flushRequested: false))
+    }
+
     /// 暂停时采集会话不写入任何事件，恢复后继续。
     func testPausedSessionWritesNothing() throws {
         let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }

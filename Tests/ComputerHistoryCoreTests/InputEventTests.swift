@@ -109,11 +109,11 @@ final class InputEventTests: XCTestCase {
         let win = EventStreamWindow(title: "Test Window", windowID: 999)
 
         // 第一次滚动
-        session.recordScroll(deltaX: 0, deltaY: -5, modifiers: [], app: app, window: win, readTarget: { nil }, at: now)
+        session.recordScroll(deltaX: 0, deltaY: -5, modifiers: [], context: .init(app: app, window: win), readTarget: { nil }, at: now)
         // 0.2 秒后第二次滚动（同应用同窗口，在 1.0s 内，应被节流）
-        session.recordScroll(deltaX: 0, deltaY: -5, modifiers: [], app: app, window: win, readTarget: { nil }, at: now.addingTimeInterval(0.2))
+        session.recordScroll(deltaX: 0, deltaY: -5, modifiers: [], context: .init(app: app, window: win), readTarget: { nil }, at: now.addingTimeInterval(0.2))
         // 1.5 秒后第三次滚动（超过 1.0s，应落盘）
-        session.recordScroll(deltaX: 0, deltaY: -5, modifiers: [], app: app, window: win, readTarget: { nil }, at: now.addingTimeInterval(1.5))
+        session.recordScroll(deltaX: 0, deltaY: -5, modifiers: [], context: .init(app: app, window: win), readTarget: { nil }, at: now.addingTimeInterval(1.5))
 
         try session.stop(now: now.addingTimeInterval(2.0))
         let events = try EventArchive.readEvents(at: root.appendingPathComponent("segments/\(id)/events.jsonl"))

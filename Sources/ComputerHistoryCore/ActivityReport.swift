@@ -51,6 +51,8 @@ public struct ReportPeriod: Sendable {
 }
 
 public enum ReportError: Error, CustomStringConvertible {
+    public static let offlineModelHint = "可运行 computer-history report --no-model 生成材料版，按需保留 --day 和 --kind 参数。"
+
     case invalid(String)
     case pending(String)
     public var description: String { switch self { case .invalid(let message), .pending(let message): return message } }
@@ -275,6 +277,7 @@ public struct ReportGenerator {
             .orderedSegments().map(\.firstEventAt)
         var generated = 0
         var failures: [String] = []
+        var missingModelKey = false
         for kind in ReportKind.allCases {
             let periods = Dictionary(grouping: dates, by: { ReportPeriod(kind: kind, date: $0).key }).keys.sorted()
             var count = 0
@@ -288,6 +291,10 @@ public struct ReportGenerator {
                     if before != report.generatedAt { count += 1; generated += 1 }
                 } catch ReportError.pending(let message) {
                     failures.append(message)
+                } catch DeepSeekClient.ClientError.missingAPIKey {
+                    failures.append(DeepSeekClient.ClientError.missingAPIKey.description)
+                    missingModelKey = true
+                    count += 1
                 } catch {
                     failures.append(String(describing: error))
                     count += 1
@@ -295,6 +302,7 @@ public struct ReportGenerator {
             }
         }
         try ActivityExport.refresh(root: root)
+        if missingModelKey { failures.append(ReportError.offlineModelHint) }
         if !failures.isEmpty { throw ReportError.invalid(failures.joined(separator: "\n")) }
         return generated
     }

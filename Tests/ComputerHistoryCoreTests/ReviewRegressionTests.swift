@@ -1,3 +1,4 @@
+import ApplicationServices
 import Foundation
 import XCTest
 @testable import ComputerHistoryCore
@@ -87,8 +88,7 @@ final class ReviewRegressionTests: XCTestCase {
         var blockedReads = 0
         func sample(_ bundle: String, _ window: EventStreamWindow, _ focus: Int, _ value: String) {
             tick += 0.1
-            session.sampleTextInput(app: .init(processIdentifier: 123, bundleIdentifier: bundle),
-                window: window, readFocused: {
+            session.sampleTextInput(context: .init(app: .init(processIdentifier: 123, bundleIdentifier: bundle), window: window), readFocused: {
                     if bundle == "blocked.app" || window.url?.contains("secret.test") == true { blockedReads += 1 }
                     return (.init(value: value, caret: nil, focusIdentity: focus),
                             .init(identifier: "field\(focus)"))
@@ -127,7 +127,7 @@ final class ReviewRegressionTests: XCTestCase {
             tracksSuppression: false, policy: .init(blocklist: [.application("blocked.app")])))
         try session.start(now: now)
         let id = try XCTUnwrap(session.currentSegmentID)
-        session.sampleTextInput(app: .init(bundleIdentifier: "blocked.app"), window: nil,
+        session.sampleTextInput(context: .init(app: .init(bundleIdentifier: "blocked.app"), window: .init(windowID: 1)),
             readFocused: { XCTFail("blocked text must not be read"); return (.init(value: "secret", caret: nil), nil) },
             now: now.addingTimeInterval(1))
         try session.stop(now: now.addingTimeInterval(2))
@@ -166,8 +166,10 @@ final class ReviewRegressionTests: XCTestCase {
             let id = try XCTUnwrap(session.currentSegmentID)
             let app = EventStreamApp(processIdentifier: 123, bundleIdentifier: "editor.app")
             for (index, value) in ["", "My first line", "My first line more text"].enumerated() {
-                session.sampleTextInput(app: app,
-                    window: .init(title: index == 0 ? "Untitled" : "My first line", windowID: windowID),
+                let window = EventStreamWindow(title: index == 0 ? "Untitled" : "My first line", windowID: windowID)
+                let owner = CollectionSession.FrontmostSnapshotContext(app: app, observedWindow: .init(
+                    details: window, reference: .init(element: AXUIElementCreateApplication(123))))
+                session.sampleTextInput(context: owner,
                     readFocused: { (.init(value: value, caret: nil, focusIdentity: 1), .init(identifier: "field")) },
                     now: now.addingTimeInterval(Double(index) * 0.1))
             }
@@ -192,7 +194,7 @@ final class ReviewRegressionTests: XCTestCase {
             let samples: [(EventStreamWindow, String)] = [(first, ""), (first, "first input"),
                 (nextWindow, "preexisting"), (nextWindow, "preexisting more text")]
             for (index, sample) in samples.enumerated() {
-                session.sampleTextInput(app: app, window: sample.0,
+                session.sampleTextInput(context: .init(app: app, window: sample.0),
                     readFocused: { (.init(value: sample.1, caret: nil, focusIdentity: 1), nil) },
                     now: now.addingTimeInterval(Double(index) * 0.1))
             }
@@ -213,14 +215,14 @@ final class ReviewRegressionTests: XCTestCase {
         let id = try XCTUnwrap(session.currentSegmentID)
         let app = EventStreamApp(processIdentifier: 123, bundleIdentifier: "editor.app")
         func sample(_ value: String, _ tick: Double) {
-            session.sampleTextInput(app: app, window: nil,
+            session.sampleTextInput(context: .init(app: app, window: .init(windowID: 1)),
                 readFocused: { (.init(value: value, caret: nil, focusIdentity: 1), nil) },
                 now: now.addingTimeInterval(tick))
         }
         sample("baseline", 0.1)
         sample("baseline pending", 0.2)
         session.isPaused = true
-        session.sampleTextInput(app: app, window: nil, readFocused: {
+        session.sampleTextInput(context: .init(app: app, window: .init(windowID: 1)), readFocused: {
             XCTFail("paused session must not read focused text")
             return (.init(value: "baseline pending SECRET", caret: nil, focusIdentity: 1), nil)
         }, now: now.addingTimeInterval(0.3))

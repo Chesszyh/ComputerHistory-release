@@ -30,7 +30,7 @@ public struct NarrativeGenerator: Sendable {
             switch self {
             case .noSourceMemories: return "没有可用于归纳的记忆文件"
             case .modelFailed(let detail): return "模型调用失败：\(detail)"
-            case .sourceMemoriesFailed(let names): return "\(names.count) 份来源记忆生成失败，等待重试；未用于活动归纳：\(names.joined(separator: "、"))"
+            case .sourceMemoriesFailed(let names): return "活动归纳跳过了 \(names.count) 份生成失败的来源记忆（\(names.joined(separator: "、"))）。"
             }
         }
     }

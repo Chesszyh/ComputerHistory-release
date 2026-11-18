@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon
 import ComputerHistoryCore
 
 @main struct CollectorInputTest {
@@ -24,15 +25,21 @@ import ComputerHistoryCore
             let button = NSButton(title: "SYNTHETIC HIT BUTTON", target: nil, action: nil)
             button.frame = NSRect(x: 100, y: 60, width: 260, height: 40)
             button.setAccessibilityIdentifier("synthetic-hit")
+            let password = NSSecureTextField(frame: NSRect(x: 30, y: 105, width: 400, height: 24))
+            password.stringValue = "SYNTHETIC PASSWORD CONTENT"
+            password.setAccessibilityIdentifier("synthetic-password")
             window.contentView!.addSubview(field)
+            window.contentView!.addSubview(password)
             window.contentView!.addSubview(button)
             window.makeKeyAndOrderFront(nil)
             window.orderFrontRegardless()
             app.activate(ignoringOtherApps: true)
             window.makeFirstResponder(field)
             let point = window.convertPoint(toScreen: NSPoint(x: button.frame.midX, y: button.frame.midY))
+            let passwordPoint = window.convertPoint(toScreen: NSPoint(x: password.frame.midX, y: password.frame.midY))
+            let screenTop = NSScreen.screens[0].frame.maxY
             let data = try JSONSerialization.data(withJSONObject: ["x": point.x,
-                "y": NSScreen.screens[0].frame.maxY - point.y])
+                "y": screenTop - point.y, "passwordX": passwordPoint.x, "passwordY": screenTop - passwordPoint.y])
             try data.write(to: URL(fileURLWithPath: CommandLine.arguments[2]))
             let observed = URL(fileURLWithPath: CommandLine.arguments[2]).appendingPathExtension("observed")
             let monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -96,6 +103,38 @@ import ComputerHistoryCore
         try require(focused?.value == "SYNTHETIC FOCUSED FIELD", "Synthetic field did not receive keyboard focus")
         let point = try JSONSerialization.jsonObject(with: Data(contentsOf: geometry)) as! [String: Double]
         let location = CGPoint(x: point["x"]!, y: point["y"]!)
+        let secureSession = CollectionSession(configuration: .init(rootDirectory: root.appendingPathComponent("secure")))
+        try secureSession.start()
+        let secureSegment = secureSession.currentSegmentID!
+        let passwordLocation = CGPoint(x: point["passwordX"]!, y: point["passwordY"]!)
+        secureSession.recordClick(button: "left", clickCount: 1, modifiers: [], location: passwordLocation)
+        func checkSystemSecureInput() throws {
+            try require(EnableSecureEventInput() == noErr, "Cannot enable macOS secure input in the test process")
+            defer { _ = DisableSecureEventInput() }
+            try require(FrontmostApplication.secureInputState(), "macOS secure input did not become active")
+            let count = secureSession.totalEventsWritten
+            let foreground = FrontmostApplication.current()
+            try require(FrontmostApplication.frontWindow(for: foreground) == nil, "Window read escaped secure input")
+            try require(FrontmostApplication.focusedElement() == nil, "Focus metadata escaped secure input")
+            secureSession.sampleFrontmost(force: true)
+            secureSession.sampleTextInput()
+            secureSession.recordClick(button: "left", clickCount: 1, modifiers: [], location: location)
+            try require(secureSession.debugTextObservation() == nil, "Debug read escaped secure input")
+            try require(secureSession.totalEventsWritten == count, "Content was written during secure input")
+        }
+        try checkSystemSecureInput()
+        try require(!FrontmostApplication.secureInputState(), "macOS secure input remained active after cleanup")
+        secureSession.sampleFrontmost(force: true)
+        try secureSession.stop()
+        let sensitiveEvents = try EventArchive.readEvents(
+            at: root.appendingPathComponent("secure/segments/\(secureSegment)/events.jsonl"))
+        let passwordTarget = sensitiveEvents.first(where: { $0.kind == .mouseClick })?.mouse?.target
+        try require(passwordTarget?.subrole == kAXSecureTextFieldSubrole, "Click did not resolve the native password field")
+        try require(passwordTarget?.value == nil, "Native password field exposed a click value")
+        try require(sensitiveEvents.contains { $0.ax?.mode == .fullTree }, "Collection did not resume with a full AX tree")
+        try require(!sensitiveEvents.contains { $0.ax?.text.contains("SYNTHETIC PASSWORD CONTENT") == true },
+                    "Native password contents appeared in the AX tree")
+        print("PASS: macOS secure input blocks window and focus reads, and native password values are omitted")
         CGWarpMouseCursorPosition(location)
         pump(0.1)
         let passiveTap = InputTap { _ in }

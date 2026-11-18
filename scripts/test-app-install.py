@@ -40,6 +40,15 @@ class AppInstallTests(unittest.TestCase):
         self.manage()
         for path in self.agents.iterdir():
             args=plistlib.loads(path.read_bytes())['ProgramArguments'];self.assertIn(str(self.target),args[0]);self.assertEqual(args[1:],['--out','synthetic'])
+    def test_upgrade_preserves_crash_restarts_but_does_not_retry_handled_failures(self):
+        label = 'xyz.chesszyh.computerhistory.collector'
+        path = self.agents / (label + '.plist')
+        path.write_bytes(plistlib.dumps({
+            'Label': label, 'ProgramArguments': ['/old/collector', 'supervise'],
+            'KeepAlive': {'SuccessfulExit': False},
+        }))
+        self.manage()
+        self.assertEqual(plistlib.loads(path.read_bytes())['KeepAlive'], {'Crashed': True})
     def test_rejected_helper_keeps_old_app(self):
         self.make(self.target,'old');self.preserve.side_effect=ValueError('wrong signature')
         with self.assertRaises(ValueError):self.manage()

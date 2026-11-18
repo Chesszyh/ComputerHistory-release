@@ -215,6 +215,8 @@ def manage_app(source, target, root, launch_agents, uninstall=False):
                 arguments = value['ProgramArguments']
                 arguments[0] = str(app_program(target, 'computer-history-menubar' if label == LABEL else 'computer-history'))
                 value.pop('Program', None)
+                if label != LABEL and value.get('KeepAlive') == {'SuccessfulExit': False}:
+                    value['KeepAlive'] = {'Crashed': True}
                 path.write_bytes(plistlib.dumps(value))
                 if loaded and launchctl('bootstrap', domain, path).returncode:
                     raise RuntimeError('无法恢复登录服务：' + label)

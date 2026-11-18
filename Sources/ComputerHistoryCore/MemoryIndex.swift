@@ -36,7 +36,7 @@ public struct MemoryIndex: Sendable {
         public var generationFailed: Bool { generationStatus == "failed" }
 
         public var activitySummary: String {
-            if generationFailed { return "该时段的总结生成失败，等待重试。原始记录已保留。" }
+            if generationFailed { return "该时段的总结生成失败。原始记录已保留。" }
             if inputListeningDegraded { return ActivityEvidence.inputDegradedSummary }
             if noClearActivity { return ActivityEvidence.noActivitySummary }
             return String(ActivityExport.formatted(ActivityExport.text(for: self), format: "txt").prefix(1800))

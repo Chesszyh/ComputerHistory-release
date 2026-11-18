@@ -8,7 +8,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
-CASES = ['process-control', 'supervisor-memory', 'text-summary', 'narrative-activities', 'reports', 'model-fallback', 'scheduling', 'token-optimization']
+CASES = ['process-control', 'supervisor-memory', 'text-summary', 'narrative-activities', 'reports', 'model-fallback', 'context-limit', 'scheduling', 'token-optimization']
 
 
 def run_checks(binary, output, cases=CASES, jobs=5):

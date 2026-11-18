@@ -20,30 +20,30 @@ public enum WindowTextReader {
     }
 
     public static func read(pid: Int32, windowID: UInt32?,
-                            isAllowed: @Sendable () async -> Bool = { true }) async throws -> Result? {
-        guard await isAllowed() else { return nil }
+                            isAllowed: @escaping @Sendable () async -> Bool = { true }) async throws -> Result? {
+        guard let windowID, await isAllowed(), !FrontmostApplication.secureInputState() else { return nil }
         await MainActor.run { _ = NSApplication.shared }
         guard #available(macOS 14, *) else { throw ReadError.systemVersion }
         guard CGPreflightScreenCaptureAccess() else { throw ReadError.permission }
         let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
-        let windows = content.windows.filter {
-            $0.owningApplication?.processID == pid && $0.windowLayer == 0
+        guard let window = content.windows.first(where: {
+            $0.windowID == windowID && $0.owningApplication?.processID == pid && $0.windowLayer == 0
                 && $0.frame.width >= 200 && $0.frame.height >= 150
-        }
-        let selected: SCWindow?
-        if let windowID { selected = windows.first { $0.windowID == windowID } }
-        else { selected = windows.max { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height } }
-        guard let window = selected else { return nil }
+        }) else { return nil }
         let configuration = SCStreamConfiguration()
         configuration.width = min(2400, Int(window.frame.width * 2))
         configuration.height = Int(Double(configuration.width) * window.frame.height / window.frame.width)
         configuration.showsCursor = false
-        guard await isAllowed() else { return nil }
+        guard await isAllowed(), !FrontmostApplication.secureInputState() else { return nil }
         let image = try await SCScreenshotManager.captureImage(
             contentFilter: SCContentFilter(desktopIndependentWindow: window), configuration: configuration)
         try Task.checkCancellation()
-        guard await isAllowed() else { return nil }
-        let text = try await Task.detached(priority: .utility) { try recognize(image) }.value
+        guard await isAllowed(), !FrontmostApplication.secureInputState() else { return nil }
+        let text = try await Task.detached(priority: .utility) { () -> String? in
+            guard await isAllowed(), !FrontmostApplication.secureInputState() else { return nil }
+            return try recognize(image)
+        }.value
+        guard let text, await isAllowed(), !FrontmostApplication.secureInputState() else { return nil }
         return Result(text: text, windowID: window.windowID)
     }
 

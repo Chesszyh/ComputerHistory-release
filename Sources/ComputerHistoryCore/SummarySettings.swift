@@ -12,7 +12,6 @@ public struct SummarySettings: Codable, Sendable, Equatable {
     }
     public var timelineMode: TimelineMode = .continuous
     public var tenMinutePrompt: String?
-    public var sixHourPrompt: String?
     public var narrativePrompt: String?
     public var dailyPrompt: String?
     public var weeklyPrompt: String?
@@ -20,13 +19,12 @@ public struct SummarySettings: Codable, Sendable, Equatable {
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case timelineMode, tenMinutePrompt, sixHourPrompt, narrativePrompt, dailyPrompt, weeklyPrompt
+        case timelineMode, tenMinutePrompt, narrativePrompt, dailyPrompt, weeklyPrompt
     }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         timelineMode = try values.decodeIfPresent(TimelineMode.self, forKey: .timelineMode) ?? .continuous
         tenMinutePrompt = try values.decodeIfPresent(String.self, forKey: .tenMinutePrompt)
-        sixHourPrompt = try values.decodeIfPresent(String.self, forKey: .sixHourPrompt)
         narrativePrompt = try values.decodeIfPresent(String.self, forKey: .narrativePrompt)
         dailyPrompt = try values.decodeIfPresent(String.self, forKey: .dailyPrompt)
         weeklyPrompt = try values.decodeIfPresent(String.self, forKey: .weeklyPrompt)
@@ -34,7 +32,6 @@ public struct SummarySettings: Codable, Sendable, Equatable {
 
     public enum Stage: String, CaseIterable, Sendable {
         case tenMinute = "十分钟记忆"
-        case sixHour = "六小时汇总"
         case narrative = "活动整理"
         case daily = "日报"
         case weekly = "周报"
@@ -42,7 +39,6 @@ public struct SummarySettings: Codable, Sendable, Equatable {
         public var explanation: String {
             switch self {
             case .tenMinute: return "从事件中总结动作、对象与关键内容。无明显活动由程序判定，不调用模型。"
-            case .sixHour: return "用于命令行手动生成六小时汇总。"
             case .narrative: return "先确定活动归属，再逐组生成概览；该提示词用于概览写法，输出格式由程序追加。"
             case .daily: return "从当天十分钟记忆生成日报，生成前自动补齐缺失或失败的记忆。"
             case .weekly: return "从完整日报生成周报，生成前自动补齐所需记忆与日报。"
@@ -52,7 +48,6 @@ public struct SummarySettings: Codable, Sendable, Equatable {
         public var defaultPrompt: String {
             switch self {
             case .tenMinute: return MemoryGenerator.systemPrompt
-            case .sixHour: return MemoryGenerator.sixHourSystemPrompt
             case .narrative: return NarrativeGenerator.systemPrompt
             case .daily: return ReportKind.daily.prompt
             case .weekly: return ReportKind.weekly.prompt
@@ -64,7 +59,6 @@ public struct SummarySettings: Codable, Sendable, Equatable {
         get {
             switch stage {
             case .tenMinute: return tenMinutePrompt ?? stage.defaultPrompt
-            case .sixHour: return sixHourPrompt ?? stage.defaultPrompt
             case .narrative: return narrativePrompt ?? stage.defaultPrompt
             case .daily: return dailyPrompt ?? stage.defaultPrompt
             case .weekly: return weeklyPrompt ?? stage.defaultPrompt
@@ -74,7 +68,6 @@ public struct SummarySettings: Codable, Sendable, Equatable {
             let override = newValue == stage.defaultPrompt ? nil : newValue
             switch stage {
             case .tenMinute: tenMinutePrompt = override
-            case .sixHour: sixHourPrompt = override
             case .narrative: narrativePrompt = override
             case .daily: dailyPrompt = override
             case .weekly: weeklyPrompt = override
@@ -89,7 +82,7 @@ public struct SummarySettings: Codable, Sendable, Equatable {
             let data = try Data(contentsOf: file)
             guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   Set(object.keys).isSubset(of: ["timelineMode", "tenMinutePrompt", "sixHourPrompt", "narrativePrompt", "dailyPrompt", "weeklyPrompt"]) else {
-                throw SettingsError.invalid("只支持 timelineMode、tenMinutePrompt、sixHourPrompt、narrativePrompt、dailyPrompt、weeklyPrompt。")
+                throw SettingsError.invalid("只支持 timelineMode、tenMinutePrompt、narrativePrompt、dailyPrompt、weeklyPrompt。")
             }
             let value = try JSONDecoder().decode(Self.self, from: data)
             try value.validate()
@@ -108,7 +101,7 @@ public struct SummarySettings: Codable, Sendable, Equatable {
     }
 
     private func validate() throws {
-        for (name, prompt) in [("tenMinutePrompt", tenMinutePrompt), ("sixHourPrompt", sixHourPrompt),
+        for (name, prompt) in [("tenMinutePrompt", tenMinutePrompt),
                                ("narrativePrompt", narrativePrompt), ("dailyPrompt", dailyPrompt), ("weeklyPrompt", weeklyPrompt)] {
             if let prompt, prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 throw SettingsError.invalid("\(name) 不能为空；恢复默认请删除该字段。")

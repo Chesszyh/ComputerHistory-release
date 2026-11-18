@@ -16,10 +16,7 @@ public enum CollectorSupervisor {
     ///
     /// 参数里去掉 `--daemon`，避免子进程再次自我派生。
     public static func detach(executable: String,
-                              arguments: [String],
-                              logURL: URL,
-                              maxLogBytes: Int) throws {
-        rotateLog(at: logURL, maxBytes: maxLogBytes)
+                              arguments: [String]) throws -> pid_t {
 
         var fileActions: posix_spawn_file_actions_t?
         posix_spawn_file_actions_init(&fileActions)
@@ -28,13 +25,9 @@ public enum CollectorSupervisor {
         // stdin 接 /dev/null：脱离终端后不应再有输入。
         posix_spawn_file_actions_addopen(
             &fileActions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
-        let logPath = logURL.path
-        // stdout/stderr 追加到日志。可执行文件每次启动时轮转日志，
-        // 故此处始终以追加方式打开。
-        posix_spawn_file_actions_addopen(
-            &fileActions, STDOUT_FILENO, logPath, O_WRONLY | O_CREAT | O_APPEND, 0o600)
-        posix_spawn_file_actions_addopen(
-            &fileActions, STDERR_FILENO, logPath, O_WRONLY | O_CREAT | O_APPEND, 0o600)
+        // The detached supervisor connects both streams to its managed log after exec.
+        posix_spawn_file_actions_addopen(&fileActions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0)
+        posix_spawn_file_actions_addopen(&fileActions, STDERR_FILENO, "/dev/null", O_WRONLY, 0)
 
         var attr: posix_spawnattr_t?
         posix_spawnattr_init(&attr)
@@ -52,6 +45,7 @@ public enum CollectorSupervisor {
         guard rc == 0 else {
             throw SupervisorError.spawnFailed(code: rc)
         }
+        return pid
     }
 
     public enum SupervisorError: Error, CustomStringConvertible {
@@ -134,63 +128,62 @@ public enum CollectorSupervisor {
         return (status >> 8) & 0xFF
     }
 
-    /// 派生一个不等待的子进程，返回其 pid。
-    public static func spawnDetachedChild(executable: String,
-                                          arguments: [String]) -> pid_t? {
+    public final class Child {
+        public let pid: pid_t
+        private var lifetime: Int32
+
+        fileprivate init(pid: pid_t, lifetime: Int32) {
+            self.pid = pid
+            self.lifetime = lifetime
+        }
+
+        public func requestStop() {
+            guard lifetime >= 0 else { return }
+            Darwin.close(lifetime)
+            lifetime = -1
+        }
+
+        deinit { requestStop() }
+    }
+
+    public static func spawnChild(executable: String, arguments: [String]) throws -> Child {
+        var descriptors: [Int32] = [-1, -1]
+        guard pipe(&descriptors) == 0 else { throw SupervisorError.spawnFailed(code: errno) }
+        let readEnd = descriptors[0], writeEnd = descriptors[1]
+        defer { Darwin.close(readEnd) }
+        var spawned = false
+        defer { if !spawned { Darwin.close(writeEnd) } }
+        // Only the supervisor keeps a writer, including when another worker or helper is spawned.
+        guard fcntl(readEnd, F_SETFD, FD_CLOEXEC) == 0,
+              fcntl(writeEnd, F_SETFD, FD_CLOEXEC) == 0 else {
+            throw SupervisorError.spawnFailed(code: errno)
+        }
+        var actions: posix_spawn_file_actions_t?
+        let initialized = posix_spawn_file_actions_init(&actions)
+        guard initialized == 0 else { throw SupervisorError.spawnFailed(code: initialized) }
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        let added = posix_spawn_file_actions_adddup2(&actions, readEnd, SupervisedLifetime.descriptor)
+        guard added == 0 else { throw SupervisorError.spawnFailed(code: added) }
         var argv: [UnsafeMutablePointer<CChar>?] =
-            ([executable] + arguments).map { strdup($0) }
+            ([executable] + arguments + [SupervisedLifetime.argument]).map { strdup($0) }
         argv.append(nil)
         defer { for p in argv where p != nil { free(p) } }
         var pid: pid_t = 0
-        guard posix_spawn(&pid, executable, nil, nil, &argv, environ) == 0 else { return nil }
-        return pid
+        let code = posix_spawn(&pid, executable, &actions, nil, &argv, environ)
+        guard code == 0 else { throw SupervisorError.spawnFailed(code: code) }
+        spawned = true
+        return Child(pid: pid, lifetime: writeEnd)
     }
 
     /// 日志超过上限时轮转为 `.1`，保留一份便于排查上次运行。
-    ///
-    /// 只在启动时调用一次是不够的——长期运行期间日志会持续增长。
-    /// 运行期的有界化由 `enforceLogBound` 在每个监督 tick 里完成。
-    public static func rotateLog(at url: URL, maxBytes: Int) {
-        let fm = FileManager.default
-        guard let attrs = try? fm.attributesOfItem(atPath: url.path),
-              let size = attrs[.size] as? Int, size > maxBytes else { return }
-        let backup = URL(fileURLWithPath: url.path + ".1")
-        try? fm.removeItem(at: backup)
-        try? fm.moveItem(at: url, to: backup)
+    public static func rotateLog(at url: URL, maxBytes: Int) throws {
+        try CollectorLog(url: url).rotate(maxBytes: maxBytes)
     }
 
-    /// 运行期把日志截到上限内。
-    ///
-    /// 不能在运行中重命名——进程持有该文件的描述符，改名后写入仍进旧文件
-    /// （`.` 与 `.1` 的关系会错位）。因此改为**原地截断保留尾部**：
-    /// 丢掉最旧的字节，保留最近的若干行，日志文件始终是同一条。
-    ///
-    /// - Returns: 是否发生了截断。
+    /// 运行期保留上限内最近的完整日志行。
     @discardableResult
-    public static func enforceLogBound(at url: URL, maxBytes: Int,
-                                       keepBytes: Int? = nil) -> Bool {
-        let fm = FileManager.default
-        guard let attrs = try? fm.attributesOfItem(atPath: url.path),
-              let size = attrs[.size] as? Int, size > maxBytes else { return false }
-        let keep = keepBytes ?? maxBytes / 2
-
-        guard let handle = try? FileHandle(forUpdating: url) else { return false }
-        defer { try? handle.close() }
-        do {
-            try handle.seek(toOffset: UInt64(size - keep))
-            let tail = try handle.readToEnd() ?? Data()
-            // 从行边界开始，避免留下半行。
-            var trimmed = tail
-            if let newline = tail.firstIndex(of: 0x0A), newline + 1 < tail.count {
-                trimmed = tail.subdata(in: (newline + 1)..<tail.count)
-            }
-            try handle.seek(toOffset: 0)
-            try handle.write(contentsOf: trimmed)
-            try handle.truncate(atOffset: UInt64(trimmed.count))
-            return true
-        } catch {
-            return false
-        }
+    public static func enforceLogBound(at url: URL, maxBytes: Int, keepBytes: Int? = nil) -> Bool {
+        (try? CollectorLog(url: url).enforceBound(maxBytes: maxBytes, keepBytes: keepBytes)) ?? false
     }
 
     /// 当前可执行文件的绝对路径。

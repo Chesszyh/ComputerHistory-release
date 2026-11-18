@@ -28,14 +28,6 @@ struct ComputerHistoryMenuBarApp: App {
             }
             dataRoot = URL(fileURLWithPath: args[index + 1], isDirectory: true)
         } else { dataRoot = CollectorStatus.defaultRoot }
-        let statusModel = StatusModel(root: dataRoot)
-        _model = StateObject(wrappedValue: statusModel)
-        AppDelegate.onLaunch = {
-            if Bundle.main.bundleURL.pathExtension == "app",
-               !UserDefaults.standard.bool(forKey: "ComputerHistory.didCompleteSetup") {
-                statusModel.openPermissionSetup()
-            }
-        }
         let root = dataRoot.appendingPathComponent(".menubar")
         if CommandLine.arguments.contains("--stop") {
             guard let identity = CollectorProcessLease.runningIdentity(
@@ -60,6 +52,14 @@ struct ComputerHistoryMenuBarApp: App {
         } catch {
             FileHandle.standardError.write(Data("无法取得菜单栏实例锁：\(error)\n".utf8))
             exit(1)
+        }
+        let statusModel = StatusModel(root: dataRoot)
+        _model = StateObject(wrappedValue: statusModel)
+        AppDelegate.onLaunch = {
+            if Bundle.main.bundleURL.pathExtension == "app",
+               !UserDefaults.standard.bool(forKey: "ComputerHistory.didCompleteSetup") {
+                statusModel.openPermissionSetup()
+            }
         }
     }
 

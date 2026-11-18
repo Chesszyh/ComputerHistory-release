@@ -1,6 +1,36 @@
 import Foundation
 import AppKit
 import ApplicationServices
+import Carbon
+
+// Retain the immutable AX proxy so the worker can read the captured window itself.
+struct AXWindowReference: @unchecked Sendable {
+    let element: AXUIElement
+
+    func matches(_ element: AXUIElement) -> Bool { CFEqual(self.element, element) }
+}
+
+struct ObservedWindow: Sendable {
+    var details: EventStreamWindow
+    var reference: AXWindowReference? = nil
+
+    var hasIdentity: Bool { details.windowID != nil || reference != nil }
+
+    func matches(_ other: Self?) -> Bool {
+        guard let other, details.url == other.details.url else { return false }
+        if let number = details.windowID, let otherNumber = other.details.windowID {
+            return number == otherNumber
+        }
+        guard let reference, let otherReference = other.reference else { return false }
+        return reference.matches(otherReference.element)
+    }
+
+    func owns(_ element: AXUIElement, access: AccessibilityRead) -> Bool {
+        if reference?.matches(element) == true { return true }
+        guard let number = details.windowID else { return false }
+        return FrontmostApplication.windowID(of: element, access: access) == number
+    }
+}
 
 /// 前台应用与窗口信息。
 ///
@@ -31,43 +61,76 @@ public enum FrontmostApplication {
     }
 
     public static func window(pid: Int32?) -> EventStreamWindow? {
-        guard let pid else { return nil }
-        let axApp = AXUIElementCreateApplication(pid)
-        guard let win = AXTreeReader.copyElement(axApp, kAXFocusedWindowAttribute as String) else {
-            return nil
-        }
-        let title = AXTreeReader.copyString(win, kAXTitleAttribute as String)
-        var url = AXTreeReader.copyString(win, kAXURLAttribute as String)
-        if url == nil {
-            url = AXTreeReader.copyString(win, kAXDocumentAttribute as String)
-        }
-        return EventStreamWindow(title: title ?? "", url: url,
-                                 windowID: windowID(of: win))
+        observedWindow(pid: pid, access: .init())?.details
+    }
+
+    static func observedWindow(pid: Int32?, access: AccessibilityRead) -> ObservedWindow? {
+        guard let pid, access.canRead else { return nil }
+        guard let win = focusedWindow(pid: pid, access: access) else { return nil }
+        let title = AXTreeReader.copyString(win, kAXTitleAttribute, access: access)
+        let url = windowURL(of: win, access: access)
+        let id = windowID(of: win, access: access)
+        guard access.canRead else { return nil }
+        return ObservedWindow(details: .init(title: title ?? "", url: url, windowID: id),
+                              reference: .init(element: win))
+    }
+
+    static func focusedWindowMatches(_ app: EventStreamApp, window: ObservedWindow, access: AccessibilityRead) -> Bool {
+        guard let pid = app.processIdentifier else { return false }
+        return focusedWindowMatches(window, access: access,
+            readWindow: { focusedWindow(pid: pid, access: access) },
+            readURL: { windowURL(of: $0, access: access) })
+    }
+
+    static func focusedWindowMatches(_ window: ObservedWindow, access: AccessibilityRead,
+                                     readWindow: () -> AXUIElement?, readURL: (AXUIElement) -> String?) -> Bool {
+        guard access.canRead, let focused = readWindow(), window.owns(focused, access: access),
+              access.canRead else { return false }
+        return readURL(focused) == window.details.url && access.canRead
+    }
+
+    private static func focusedWindow(pid: Int32, access: AccessibilityRead) -> AXUIElement? {
+        AXTreeReader.copyElement(AXUIElementCreateApplication(pid), kAXFocusedWindowAttribute, access: access)
+    }
+
+    private static func windowURL(of window: AXUIElement, access: AccessibilityRead) -> String? {
+        AXTreeReader.copyString(window, kAXURLAttribute, access: access)
+            ?? AXTreeReader.copyString(window, kAXDocumentAttribute, access: access)
     }
 
     /// 聚焦的 UI 元素，用于键盘事件的 `target`。
     public static func focusedElement() -> EventStreamAXElement? {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
-        guard let el = AXTreeReader.focusedElement(ofApplication: app.processIdentifier)
-        else { return nil }
-        return element(el)
+        let access = AccessibilityRead()
+        guard let pid = current()?.processIdentifier,
+              let element = AXTreeReader.focusedElement(ofApplication: pid, access: access) else { return nil }
+        let target = self.element(attributes: .init(element, access: access))
+        return access.canRead ? target : nil
     }
 
-    static func clickedElement(at point: CGPoint, for app: EventStreamApp?, window: EventStreamWindow?) -> EventStreamAXElement? {
-        guard let pid = app?.processIdentifier, let window else { return nil }
+    static func focusedElement(for app: EventStreamApp?, window: ObservedWindow?,
+                               access: AccessibilityRead) -> EventStreamAXElement? {
+        guard let pid = app?.processIdentifier, let window,
+              let el = AXTreeReader.focusedElement(ofApplication: pid, within: window, access: access) else { return nil }
+        let target = element(attributes: .init(el, access: access))
+        return access.canRead ? target : nil
+    }
+
+    static func clickedElement(at point: CGPoint, for app: EventStreamApp?, window: ObservedWindow?,
+                               access: AccessibilityRead) -> EventStreamAXElement? {
+        guard let pid = app?.processIdentifier, let window, window.hasIdentity else { return nil }
         var hit: AXUIElement?
-        guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
-              let hit else { return nil }
+        let result = access.perform {
+            AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit)
+        }
+        guard result == .success, let hit else { return nil }
         var hitPID: pid_t = 0
-        guard AXUIElementGetPid(hit, &hitPID) == .success, hitPID == pid,
-              let hitWindow = AXTreeReader.copyElement(hit, kAXWindowAttribute as String),
-              let focusedWindow = AXTreeReader.copyElement(AXUIElementCreateApplication(pid), kAXFocusedWindowAttribute as String),
-              CFEqual(hitWindow, focusedWindow), windowID(of: hitWindow) == window.windowID else { return nil }
-        let url = AXTreeReader.copyString(hitWindow, kAXURLAttribute as String)
-            ?? AXTreeReader.copyString(hitWindow, kAXDocumentAttribute as String)
+        guard access.perform({ AXUIElementGetPid(hit, &hitPID) }) == .success, hitPID == pid,
+              let hitWindow = AXTreeReader.copyElement(hit, kAXWindowAttribute, access: access),
+              window.owns(hitWindow, access: access) else { return nil }
         // The policy was checked against this window's address before reading the target value.
-        guard url == window.url else { return nil }
-        return element(hit)
+        guard windowURL(of: hitWindow, access: access) == window.details.url, access.canRead else { return nil }
+        let target = element(attributes: .init(hit, access: access))
+        return access.canRead ? target : nil
     }
 
     /// 聚焦元素当前的可编辑文本。
@@ -76,10 +139,11 @@ public enum FrontmostApplication {
     /// 而输入法提交的结果会写进它，这正是 `keyboard.text` 要记的东西。
     /// 元素不可编辑或读不到时返回 nil，由跟踪器据此切块。
     public static func focusedElementValue() -> String? {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
-        guard let el = AXTreeReader.focusedElement(ofApplication: app.processIdentifier)
-        else { return nil }
-        return AXTreeReader.valueString(el)
+        let access = AccessibilityRead()
+        guard let pid = current()?.processIdentifier,
+              let el = AXTreeReader.focusedElement(ofApplication: pid, access: access) else { return nil }
+        let value = AXTreeReader.Attributes(el, access: access).value
+        return access.canRead ? value : nil
     }
 
     /// 聚焦元素的文本与光标位置。
@@ -91,22 +155,37 @@ public enum FrontmostApplication {
     }
 
     public static func focusedElementObservation(for app: EventStreamApp?) -> TextInputTracker.Observation {
-        focusedTextSnapshot(for: app).0
+        let access = AccessibilityRead()
+        guard let pid = app?.processIdentifier,
+              let element = AXTreeReader.focusedElement(ofApplication: pid, access: access) else {
+            return .init(value: nil, caret: nil)
+        }
+        return focusedTextSnapshot(of: element, attributes: .init(element, access: access), access: access).0
     }
 
-    static func focusedTextSnapshot(for app: EventStreamApp?)
+    static func focusedTextSnapshot(for app: EventStreamApp?, window: ObservedWindow?, access: AccessibilityRead)
         -> (TextInputTracker.Observation, EventStreamAXElement?) {
-        guard let pid = app?.processIdentifier,
-              let el = AXTreeReader.focusedElement(ofApplication: pid) else {
+        guard let pid = app?.processIdentifier, let window,
+              let el = AXTreeReader.focusedElement(ofApplication: pid, within: window, access: access) else {
             return (.init(value: nil, caret: nil), nil)
         }
-        let role = AXTreeReader.copyString(el, kAXRoleAttribute as String)
-        let subrole = AXTreeReader.copyString(el, kAXSubroleAttribute as String)
-        let placeholder = AXTreeReader.copyString(el, kAXPlaceholderValueAttribute as String)
+        return focusedTextSnapshot(of: el, attributes: .init(el, access: access), access: access)
+    }
+
+    static func focusedTextSnapshot(of el: AXUIElement, attributes: AXTreeReader.Attributes,
+                                    access: AccessibilityRead = .init())
+        -> (TextInputTracker.Observation, EventStreamAXElement?) {
+        guard !attributes.isSecure, access.canRead else {
+            return (.init(value: nil, caret: nil, subrole: attributes.subrole), nil)
+        }
+        let role = attributes.readString(kAXRoleAttribute)
+        let subrole = attributes.subrole
+        let placeholder = attributes.readString(kAXPlaceholderValueAttribute)
+        guard access.canRead else { return (.init(value: nil, caret: nil), nil) }
         var settable = DarwinBoolean(false)
-        let settableResult = AXUIElementIsAttributeSettable(el, kAXValueAttribute as CFString, &settable)
+        let settableResult = access.perform { AXUIElementIsAttributeSettable(el, kAXValueAttribute as CFString, &settable) }
         var selection: CFRange?
-        if let raw = AXTreeReader.copyValue(el, kAXSelectedTextRangeAttribute as String),
+        if let raw = AXTreeReader.copyValue(el, kAXSelectedTextRangeAttribute, access: access),
            CFGetTypeID(raw) == AXValueGetTypeID() {
             var range = CFRange()
             if AXValueGetValue(unsafeDowncast(raw, to: AXValue.self), .cfRange, &range) { selection = range }
@@ -117,13 +196,16 @@ public enum FrontmostApplication {
         let knownNonText = ["AXButton", "AXStaticText", "AXLink", "AXMenuItem", "AXImage"].contains(role ?? "")
         let editable = !knownNonText && (textRole || settableResult == .success && settable.boolValue
             || selection != nil)
-        let value = editable ? AXTreeReader.valueString(el) : nil
+        let value = editable ? attributes.value : nil
+        guard access.canRead else { return (.init(value: nil, caret: nil), nil) }
         var marked: Bool?
         var markedValue: CFTypeRef?
-        let markedResult = AXUIElementCopyAttributeValue(el, "AXTextInputMarkedTextMarkerRange" as CFString, &markedValue)
+        let markedResult = access.perform {
+            AXUIElementCopyAttributeValue(el, "AXTextInputMarkedTextMarkerRange" as CFString, &markedValue)
+        }
         if markedResult == .success { marked = markedValue != nil }
         else if markedResult == .noValue { marked = false }
-        if marked == nil, let raw = AXTreeReader.copyValue(el, "AXMarkedTextRange"), CFGetTypeID(raw) == AXValueGetTypeID() {
+        if marked == nil, let raw = AXTreeReader.copyValue(el, "AXMarkedTextRange", access: access), CFGetTypeID(raw) == AXValueGetTypeID() {
             var range = CFRange()
             if AXValueGetValue(unsafeDowncast(raw, to: AXValue.self), .cfRange, &range) {
                 marked = range.location != kCFNotFound && range.length > 0
@@ -138,34 +220,41 @@ public enum FrontmostApplication {
             placeholder: placeholder, selectionLength: selection?.length, hasMarkedText: marked)
         let target: EventStreamAXElement? = observation.isEditableBuffer ? .init(
             role: role, subrole: subrole,
-            title: AXTreeReader.copyString(el, kAXTitleAttribute as String),
-            description: AXTreeReader.copyString(el, kAXDescriptionAttribute as String),
+            title: attributes.readString(kAXTitleAttribute),
+            description: attributes.readString(kAXDescriptionAttribute),
             value: value, placeholder: placeholder,
-            identifier: AXTreeReader.copyString(el, kAXIdentifierAttribute as String)) : nil
-        return (observation, target)
+            identifier: attributes.readString(kAXIdentifierAttribute)) : nil
+        return access.canRead ? (observation, target) : (.init(value: nil, caret: nil), nil)
     }
 
     /// 把 AXUIElement 转成落盘的 `target`/`element` 结构。
     public static func element(_ el: AXUIElement) -> EventStreamAXElement {
-        EventStreamAXElement(
-            role: AXTreeReader.copyString(el, kAXRoleAttribute as String),
-            subrole: AXTreeReader.copyString(el, kAXSubroleAttribute as String),
-            title: AXTreeReader.copyString(el, kAXTitleAttribute as String),
-            description: AXTreeReader.copyString(el, kAXDescriptionAttribute as String),
-            value: AXTreeReader.valueString(el),
-            placeholder: AXTreeReader.copyString(el, kAXPlaceholderValueAttribute as String),
-            identifier: AXTreeReader.copyString(el, kAXIdentifierAttribute as String)
+        let access = AccessibilityRead()
+        let target = element(attributes: .init(el, access: access))
+        return access.canRead ? target : EventStreamAXElement()
+    }
+
+    static func element(attributes: AXTreeReader.Attributes) -> EventStreamAXElement {
+        let role = attributes.readString(kAXRoleAttribute)
+        guard !attributes.isSecure else { return EventStreamAXElement(role: role, subrole: attributes.subrole) }
+        return EventStreamAXElement(
+            role: role,
+            subrole: attributes.subrole,
+            title: attributes.readString(kAXTitleAttribute),
+            description: attributes.readString(kAXDescriptionAttribute),
+            value: attributes.value,
+            placeholder: attributes.readString(kAXPlaceholderValueAttribute),
+            identifier: attributes.readString(kAXIdentifierAttribute)
         )
     }
 
     /// 从窗口的 `kAXWindowNumberAttribute` 取窗口号；缺失时返回 nil。
-    static func windowID(of win: AXUIElement) -> UInt32? {
-        guard let v = AXTreeReader.copyValue(win, "AXWindowNumber") as? NSNumber else {
+    static func windowID(of win: AXUIElement, access: AccessibilityRead = .init()) -> UInt32? {
+        guard let v = AXTreeReader.copyValue(win, "AXWindowNumber", access: access) as? NSNumber else {
             return nil
         }
         return v.uint32Value
     }
 
-    /// 未实现安全输入模式检测；nil 表示未知，编码时省略该键。
-    public static func secureInputState() -> Bool? { nil }
+    public static func secureInputState() -> Bool { IsSecureEventInputEnabled() }
 }

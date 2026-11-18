@@ -21,7 +21,7 @@ final class TraySnapshotLoaderTests: XCTestCase {
         let items = snapshot.groups.flatMap(\.items).flatMap(\.leafItems)
         XCTAssertEqual(items.count, 1)
         XCTAssertEqual(items.first?.title, "总结生成失败")
-        XCTAssertTrue(items.first?.summary.contains("等待重试") == true)
+        XCTAssertTrue(items.first?.summary.contains("原始记录已保留") == true)
         XCTAssertFalse(items.first?.summary.contains("SYNTHETIC_COUNTS") == true)
         XCTAssertFalse(items.first?.isNarrative == true)
         let saved = try Data(contentsOf: ActivityNarrative.fileURL(root: root))
@@ -128,18 +128,24 @@ final class TraySnapshotLoaderTests: XCTestCase {
         XCTAssertFalse(row.isIncidentalOnly)
     }
 
-    func testOngoingAwayDoesNotInvalidateUnchangedHistory() async throws {
+    func testOngoingAwayMergesWithNearbyHistoryWithoutInvalidatingIt() async throws {
         let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
-        var away = AwayPeriods(startedAt: Date().addingTimeInterval(-120))
-        away.startedReason = .idle
+        let start = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970) - 150)
+        let earlier = start.addingTimeInterval(-110)
+        var away = AwayPeriods(startedAt: start)
+        away.startedReason = .locked
+        away.periods = [.init(start: earlier, end: start.addingTimeInterval(-11), reason: .idle)]
         try away.save(root: root)
         let loader = TraySnapshotLoader()
         let first = await loader.load(root: root)
         let second = await loader.load(root: root)
         XCTAssertEqual(first.contentVersion, second.contentVersion,
                        "Advancing an open period must not rebuild and publish unchanged historical content")
-        XCTAssertEqual(second.groups.first?.items.first?.title, "用户离开电脑")
-        XCTAssertTrue(second.groups.first?.items.first?.isAway == true)
+        let rows = second.groups.flatMap(\.items)
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?.timestamp, earlier, "The open and closed periods must share a row")
+        XCTAssertEqual(rows.first?.title, "离开电脑")
+        XCTAssertTrue(rows.first?.isAway == true)
     }
 
     func testOpenAwayUsesTheSameUniqueTimeLayoutAsHistoricalItems() async throws {
@@ -153,6 +159,54 @@ final class TraySnapshotLoaderTests: XCTestCase {
         XCTAssertEqual(Set(cards.map(\.timestamp)).count, cards.count)
         XCTAssertEqual(cards.count, 1)
         XCTAssertEqual(cards[0].leafItems.count, 2)
+    }
+
+    func testNearbyHistoricalAwayPeriodsMergeEvenWhenOneIsShort() async throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        var away = AwayPeriods()
+        away.periods = [
+            .init(start: start, end: start.addingTimeInterval(35), reason: .idle),
+            .init(start: start.addingTimeInterval(46), end: start.addingTimeInterval(140)),
+            .init(start: start.addingTimeInterval(220), end: start.addingTimeInterval(310)),
+        ]
+        try away.save(root: root)
+        let before = try Data(contentsOf: root.appendingPathComponent("away.json"))
+        let snapshot = await TraySnapshotLoader().load(root: root, timeZone: TimeZone(secondsFromGMT: 0)!)
+        let rows = snapshot.groups.flatMap(\.items).filter(\.isAway)
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows.last?.timestamp, start)
+        XCTAssertEqual(rows.last?.endTimestamp, start.addingTimeInterval(140))
+        XCTAssertEqual(rows.last?.title, "离开电脑")
+        XCTAssertTrue(rows.last?.summary.contains("无操作") == true)
+        XCTAssertTrue(rows.last?.summary.contains("锁屏") == true)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("away.json")), before)
+    }
+
+    func testAwayGapWithClickStaysSeparateEvenWithoutAMemory() async throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let start = SegmentClock.alignedStart(for: Date(timeIntervalSince1970: 1_800_000_000))
+        var away = AwayPeriods()
+        away.periods = [
+            .init(start: start, end: start.addingTimeInterval(80.7), reason: .idle),
+            .init(start: start.addingTimeInterval(91), end: start.addingTimeInterval(240), reason: .locked),
+        ]
+        try away.save(root: root)
+        let when = start.addingTimeInterval(80.8)
+        let sid = SegmentClock.segmentID(for: start)
+        let event = EventStreamRecord(id: 1, timestamp: when, kind: .mouseClick)
+        let line = String(decoding: try EventStreamJSON.makeEncoder().encode(event), as: UTF8.self)
+        let file = try segment(root, id: sid, text: line + "\n")
+        let loader = TraySnapshotLoader()
+        let withClick = await loader.load(root: root)
+        XCTAssertEqual(withClick.groups.flatMap(\.items).filter(\.isAway).count, 2)
+        let passive = EventStreamRecord(id: 1, timestamp: when, kind: .windowChanged)
+        try (EventStreamJSON.makeEncoder().encode(passive) + Data([10])).write(to: file, options: .atomic)
+        let passiveOnly = await loader.load(root: root)
+        XCTAssertEqual(passiveOnly.groups.flatMap(\.items).filter(\.isAway).count, 1)
+        let cached = await loader.load(root: root)
+        XCTAssertEqual(cached.groups, passiveOnly.groups)
+        XCTAssertEqual(cached.eventBytesRead, 0)
     }
 
     func testRefreshRequestsCoalesceAndCanBeCancelled() {

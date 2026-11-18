@@ -138,16 +138,16 @@ final class ConfigurationEditorTests: XCTestCase {
         let session = CollectionSession(configuration: .init(rootDirectory: root, windowTextApplications: ["example.editor"]))
         let start = Date()
         try session.start(now: start)
-        session.recordSnapshot(roots: [], app: app, window: nil, now: start)
-        session.updateWindowTextContext(roots: [], app: app, window: nil)
+        session.recordSnapshot(roots: [], context: .init(app: app, window: .init(windowID: 1)), now: start)
+        session.updateWindowTextContext(roots: [], app: app, window: .init(windowID: 1))
         let old = try XCTUnwrap(session.windowTextContext)
-        session.sampleTextInput(app: app, window: nil, readFocused: { (.init(value: "", caret: 0), nil) }, now: start)
-        session.sampleTextInput(app: app, window: nil, readFocused: { (.init(value: "sensitive pending", caret: 17,
+        session.sampleTextInput(context: .init(app: app, window: .init(windowID: 1)), readFocused: { (.init(value: "", caret: 0), nil) }, now: start)
+        session.sampleTextInput(context: .init(app: app, window: .init(windowID: 1)), readFocused: { (.init(value: "sensitive pending", caret: 17,
             hasInputActivity: true), nil) }, now: start.addingTimeInterval(0.1))
         session.applyConfiguration(.init(policy: .init(blocklist: [.application("example.editor")])))
         XCTAssertNil(session.windowTextContext)
         session.recordWindowText(.init(text: "stale OCR", windowID: 1), context: old)
-        session.recordSnapshot(roots: [.init(id: 1, text: "secret body")], app: app, window: nil, now: start.addingTimeInterval(1))
+        session.recordSnapshot(roots: [.init(id: 1, text: "secret body")], context: .init(app: app, window: nil), now: start.addingTimeInterval(1))
         try session.stop(now: start.addingTimeInterval(2))
         let dir = try FileManager.default.contentsOfDirectory(at: root.appendingPathComponent("segments"), includingPropertiesForKeys: nil)[0]
         let events = try EventArchive.readEvents(at: dir.appendingPathComponent("events.jsonl"))

@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 public struct BackupSettings: Codable, Sendable {
     public var repository: String
@@ -48,33 +49,50 @@ public enum LocalCommand {
     }
     @discardableResult public static func run(_ name: String, _ arguments: [String], directory: URL? = nil, timeout: TimeInterval = 120,
                                              cancelled: () -> Bool = { false }) throws -> String {
-        let output = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        FileManager.default.createFile(atPath: output.path, contents: nil)
-        let handle = try FileHandle(forWritingTo: output)
-        defer { try? handle.close(); try? FileManager.default.removeItem(at: output) }
         let process = Process(); process.executableURL = try executable(name); process.arguments = arguments
+        let handle = try SupervisedLifetime.prepareHelper { try temporaryOutput() }
+        defer { try? handle.close() }
         process.currentDirectoryURL = directory; process.standardOutput = handle; process.standardError = handle
         process.standardInput = FileHandle.nullDevice
         var environment = ProcessInfo.processInfo.environment
         environment["GIT_TERMINAL_PROMPT"] = "0"; environment["GH_PROMPT_DISABLED"] = "1"
         environment["PATH"] = (environment["PATH"] ?? "/usr/bin:/bin") + ":/opt/homebrew/bin:/usr/local/bin"
         process.environment = environment
-        try process.run()
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning && Date() < deadline && !cancelled() { Thread.sleep(forTimeInterval: 0.05) }
-        if process.isRunning {
-            process.terminate()
-            let grace = Date().addingTimeInterval(2)
-            while process.isRunning && Date() < grace { Thread.sleep(forTimeInterval: 0.05) }
-            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        return try SupervisedLifetime.withHelper(process) {
+            let deadline = Date().addingTimeInterval(timeout)
+            while process.isRunning && Date() < deadline && !cancelled() { Thread.sleep(forTimeInterval: 0.05) }
+            if process.isRunning {
+                process.terminate()
+                let grace = Date().addingTimeInterval(2)
+                while process.isRunning && Date() < grace { Thread.sleep(forTimeInterval: 0.05) }
+                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                process.waitUntilExit()
+                if cancelled() { throw CancellationError() }
+                throw ReportError.invalid("\(name)执行超时，请检查网络后重试。")
+            }
             process.waitUntilExit()
-            if cancelled() { throw CancellationError() }
-            throw ReportError.invalid("\(name)执行超时，请检查网络后重试。")
+            try handle.seek(toOffset: 0)
+            guard let text = String(data: try handle.readToEnd() ?? Data(), encoding: .utf8) else {
+                throw CocoaError(.fileReadInapplicableStringEncoding)
+            }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard process.terminationStatus == 0 else { throw ReportError.invalid("\(name)失败：\(trimmed)") }
+            return trimmed
         }
-        process.waitUntilExit()
-        let text = try String(contentsOf: output, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard process.terminationStatus == 0 else { throw ReportError.invalid("\(name)失败：\(text)") }
-        return text
+    }
+
+    private static func temporaryOutput() throws -> FileHandle {
+        let template = FileManager.default.temporaryDirectory.appendingPathComponent("computer-history-command.XXXXXX")
+        var path = Array(template.path.utf8CString)
+        let fd = mkostemp(&path, O_CLOEXEC)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        // The supervisor can end this worker before its stack unwinds.
+        guard unlink(&path) == 0 else {
+            let failure = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            close(fd)
+            throw failure
+        }
+        return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
     }
 }
 

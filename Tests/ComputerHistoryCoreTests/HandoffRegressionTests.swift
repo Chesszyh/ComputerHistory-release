@@ -57,7 +57,7 @@ final class HandoffRegressionTests: XCTestCase {
         try session.start(now: start)
         let id = try XCTUnwrap(session.currentSegmentID)
         for current in [EventStreamApp(name: "Unknown"), .init(bundleIdentifier: "com.apple.Safari")] {
-            session.sampleTextInput(app: current, window: nil, readFocused: {
+            session.sampleTextInput(context: .init(app: current, window: .init(windowID: 1)), readFocused: {
                 XCTFail("Disallowed context was read")
                 return (.init(value: "synthetic"), nil)
             }, now: start)
@@ -77,7 +77,7 @@ final class HandoffRegressionTests: XCTestCase {
             let url = root.appendingPathComponent("segments/\(id)/events.jsonl")
             func snapshot(_ text: String, _ tick: Double) {
                 session.recordSnapshot(roots: [.init(id: 1, text: "文本", detailText: "Value: " + text)],
-                    app: app, window: .init(windowID: 1), now: start.addingTimeInterval(tick))
+                    context: .init(app: app, window: .init(windowID: 1)), now: start.addingTimeInterval(tick))
             }
             snapshot("BASE", 1)
             try failingWrites(at: url) {
@@ -109,7 +109,7 @@ final class HandoffRegressionTests: XCTestCase {
         let id = try XCTUnwrap(session.currentSegmentID)
         func snapshot(_ value: String, _ second: Double) {
             session.recordSnapshot(roots: [.init(id: 1, text: "文本", detailText: "Value: " + value)],
-                app: app, window: .init(windowID: 1), now: start.addingTimeInterval(second))
+                context: .init(app: app, window: .init(windowID: 1)), now: start.addingTimeInterval(second))
         }
         snapshot("BASE", 1)
         let metadata = root.appendingPathComponent("segments/\(id)/metadata.json")
@@ -136,7 +136,7 @@ final class HandoffRegressionTests: XCTestCase {
         let id = try XCTUnwrap(session.currentSegmentID)
         let url = root.appendingPathComponent("segments/\(id)/events.jsonl")
         func sample(_ value: String, _ second: Double) {
-            session.sampleTextInput(app: app, window: nil, readFocused: {
+            session.sampleTextInput(context: .init(app: app, window: .init(windowID: 1)), readFocused: {
                 (.init(value: value, focusIdentity: 1), nil)
             }, now: start.addingTimeInterval(second))
         }
@@ -179,7 +179,7 @@ final class HandoffRegressionTests: XCTestCase {
         let id = try XCTUnwrap(session.currentSegmentID)
         let url = root.appendingPathComponent("segments/\(id)/events.jsonl")
         func sample(_ value: String, _ tick: Double) {
-            session.sampleTextInput(app: app, window: .init(windowID: 1), readFocused: {
+            session.sampleTextInput(context: .init(app: app, window: .init(windowID: 1)), readFocused: {
                 (.init(value: value, focusIdentity: 1, hasInputActivity: true), nil)
             }, now: start.addingTimeInterval(tick))
         }

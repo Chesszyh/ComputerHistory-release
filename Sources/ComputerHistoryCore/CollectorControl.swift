@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// 采集与总结的运行开关，以及登录自启动的登记。
 ///
@@ -52,22 +53,40 @@ public struct CollectorControl: Codable, Sendable, Equatable {
     }
 
     public func save(root: URL) throws {
+        try Self.withLock(root: root) { try write(root: root) }
+    }
+
+    private func write(root: URL) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try encoder.encode(self).write(to: Self.fileURL(root: root), options: .atomic)
     }
 
-    /// 只改一项并写回。托盘应用的开关各自独立，避免互相覆盖。
+    /// 只更新调用方指定的字段。
     public static func update(root: URL,
                               recording: Bool? = nil,
                               summarizing: Bool? = nil,
                               flushRequested: Bool? = nil) throws {
-        var control = load(root: root)
-        if let recording { control.recording = recording }
-        if let summarizing { control.summarizing = summarizing }
-        if let flushRequested { control.flushRequested = flushRequested }
-        try control.save(root: root)
+        try withLock(root: root) {
+            var control = load(root: root)
+            if let recording { control.recording = recording }
+            if let summarizing { control.summarizing = summarizing }
+            if let flushRequested { control.flushRequested = flushRequested }
+            try control.write(root: root)
+        }
+    }
+
+    private static func withLock(root: URL, operation: () throws -> Void) throws {
+        let directory = root.appendingPathComponent(".locks")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // The JSON file is replaced on each save, so all writers lock a separate, stable inode.
+        let fd = open(directory.appendingPathComponent("control.lock").path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { close(fd) }
+        while flock(fd, LOCK_EX) != 0 {
+            if errno != EINTR { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        }
+        try operation()
     }
 }
 
@@ -127,7 +146,8 @@ public enum CollectorService {
     public static let label = "xyz.chesszyh.computerhistory.collector"
 
     public static func start(executable: URL, root: URL) throws {
-        if CollectorProcessLease.runningIdentity(root: root) != nil { return }
+        if CollectorProcessLease.runningIdentity(root: root, role: .supervisor) != nil
+            || CollectorProcessLease.runningIdentity(root: root) != nil { return }
         let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -135,7 +155,7 @@ public enum CollectorService {
         let log = root.appendingPathComponent("collector.log").path
         let data = try PropertyListSerialization.data(fromPropertyList: [
             "Label": label, "ProgramArguments": [executable.path, "supervise", "--out", root.path],
-            "RunAtLoad": true, "KeepAlive": ["SuccessfulExit": false], "ProcessType": "Interactive",
+            "RunAtLoad": true, "KeepAlive": ["Crashed": true], "ProcessType": "Interactive",
             "StandardOutPath": log, "StandardErrorPath": log, "ThrottleInterval": 5
         ], format: .xml, options: 0)
         let previous = try? Data(contentsOf: file)

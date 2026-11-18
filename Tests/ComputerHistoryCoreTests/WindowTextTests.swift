@@ -64,7 +64,7 @@ final class WindowTextTests: XCTestCase {
         XCTAssertEqual(config.windowTextDisabledApplications, ["example.editor"])
         let session = CollectionSession(configuration: .init(rootDirectory: root, config: config))
         try session.start()
-        session.updateWindowTextContext(roots: [], app: .init(bundleIdentifier: "example.editor"), window: nil)
+        session.updateWindowTextContext(roots: [], app: .init(bundleIdentifier: "example.editor"), window: .init(windowID: 7))
         XCTAssertNil(session.windowTextContext)
         try session.stop()
     }
@@ -77,7 +77,7 @@ final class WindowTextTests: XCTestCase {
         let app = EventStreamApp(name: "Music", processIdentifier: 42, bundleIdentifier: "example.music")
         let window = EventStreamWindow(windowID: 7)
         try session.start(now: start)
-        session.recordSnapshot(roots: [], app: app, window: window, now: start)
+        session.recordSnapshot(roots: [], context: .init(app: app, window: window), now: start)
         session.updateWindowTextContext(roots: [], app: app, window: window)
         let first = try XCTUnwrap(session.windowTextContext)
         session.isPaused = true
@@ -90,7 +90,7 @@ final class WindowTextTests: XCTestCase {
         let result = WindowTextReader.Result(text: "Synthetic playlist\nExport complete", windowID: 7)
         session.recordWindowText(result, context: resumed, now: start)
         session.recordWindowText(result, context: resumed, now: start)
-        session.recordSnapshot(roots: [], app: .init(name: "Other", processIdentifier: 43, bundleIdentifier: "example.other"), window: nil, now: start)
+        session.recordSnapshot(roots: [], context: .init(app: .init(name: "Other", processIdentifier: 43, bundleIdentifier: "example.other"), window: nil), now: start)
         session.recordWindowText(.init(text: "stale after switch", windowID: 7), context: resumed, now: start)
         try session.stop(now: start)
         session.recordWindowText(.init(text: "after stop", windowID: 7), context: resumed, now: start)
@@ -111,22 +111,30 @@ final class WindowTextTests: XCTestCase {
         let session = CollectionSession(configuration: .init(rootDirectory: root,
             policy: .init(blocklist: [.application("example.music")]), windowTextApplications: ["example.music"]))
         try session.start()
-        session.updateWindowTextContext(roots: [], app: app, window: nil)
+        session.updateWindowTextContext(roots: [], app: app, window: .init(windowID: 7))
         XCTAssertNil(session.windowTextContext)
         try session.stop()
         let allowed = CollectionSession(configuration: .init(rootDirectory: root, windowTextApplications: ["example.music"]))
         try allowed.start()
-        allowed.updateWindowTextContext(roots: [], app: app, window: nil)
+        allowed.updateWindowTextContext(roots: [], app: app, window: .init(windowID: 7))
         XCTAssertNotNil(allowed.windowTextContext)
-        allowed.updateWindowTextContext(roots: [.init(id: 1, text: "文本", detailText: "Value: Visible body")], app: app, window: nil)
+        allowed.updateWindowTextContext(roots: [.init(id: 1, text: "文本", detailText: "Value: Visible body")], app: app, window: .init(windowID: 7))
         XCTAssertNil(allowed.windowTextContext)
-        allowed.updateWindowTextContext(roots: [], app: .init(bundleIdentifier: "example.other"), window: nil)
+        allowed.updateWindowTextContext(roots: [], app: .init(bundleIdentifier: "example.other"), window: .init(windowID: 7))
         XCTAssertNil(allowed.windowTextContext)
         try allowed.stop()
     }
 
     func testDisallowedReadDoesNotAccessTheScreen() async throws {
-        let result = try await WindowTextReader.read(pid: 1, windowID: nil, isAllowed: { false })
+        let result = try await WindowTextReader.read(pid: 1, windowID: 7, isAllowed: { false })
+        XCTAssertNil(result)
+    }
+
+    func testOCRRequiresExactWindowNumberBeforeScreenAccess() async throws {
+        let result = try await WindowTextReader.read(pid: 1, windowID: nil) {
+            XCTFail("A numberless window must not enter the screen-read path")
+            return false
+        }
         XCTAssertNil(result)
     }
 

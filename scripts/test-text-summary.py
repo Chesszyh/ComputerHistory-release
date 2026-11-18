@@ -174,10 +174,12 @@ with tempfile.TemporaryDirectory(prefix='text-summary-') as directory:
                                    env=local_env, capture_output=True, text=True, timeout=30)
         assert narrative.returncode == 0, narrative.stderr
         assert requests[-1]['messages'][0]['content'].startswith(summary_settings['narrativePrompt'])
+        before_retired = len(requests)
         six_hour = subprocess.run([binary, 'memorize', '--out', directory, '--granularity', '6h'],
                                   env=local_env, capture_output=True, text=True, timeout=30)
-        assert six_hour.returncode == 0, six_hour.stderr
-        assert requests[-1]['messages'][0]['content'] == summary_settings['sixHourPrompt']
+        assert six_hour.returncode != 0 and '10min' in six_hour.stderr
+        assert len(requests) == before_retired, 'retired task sent a model request'
+        assert not list((root / 'memories').glob('*-6h-memory-summary.md'))
         before = len(requests)
         (root / 'summary.json').write_text('{"tenMinutePrompt": " "}')
         invalid = regenerate()

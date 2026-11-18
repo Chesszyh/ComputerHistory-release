@@ -20,7 +20,7 @@ func usage() {
                                             采集活动并写入 segments/
       computer-history supervise --daemon   后台常驻（脱离终端会话，崩溃自动重启）
       computer-history memorize [--limit N] [--segment <id>] [--print] [--overwrite]
-                                [--granularity 10min|6h]
+                                [--granularity 10min]
                                             把已封口的段写成记忆文件
       computer-history segments             列出可生成记忆的段
       computer-history narrative [--limit N] [--day <yyyy-MM-dd>] [--print] [--overwrite] [--wait-lock]
@@ -39,7 +39,7 @@ func usage() {
       computer-history verify               校验记忆链完整性
       computer-history --check              检查权限与落盘目录
       computer-history --status             查看长期运行状态
-      computer-history --stop               停止后台采集
+      computer-history --stop               停止后台采集并等待当前段封口
       computer-history --schema-version     打印事件种类
       computer-history --help               显示本帮助
 
@@ -59,24 +59,15 @@ func warn(_ s: String) {
     FileHandle.standardError.write((s + "\n").data(using: .utf8)!)
 }
 
-/// 把进程输出接到指定日志文件。
-///
-/// 不能只靠 shell 的 `>>`：重定向在进程启动前就打开了文件描述符，
-/// 进程内重命名旧文件后 fd 仍指向已改名的旧文件，新写入不会进入新文件。
-/// 因此用 `dup2` 换成自己打开的句柄。
-///
-/// **以追加方式打开，且不在此轮转**：被监督时监督进程也在写同一个日志，
-/// 截断会抹掉它的记录。轮转在 `--daemon` 脱离会话时执行一次。
-func redirectOutput(to url: URL) {
-    let fd = open(url.path, O_WRONLY | O_CREAT | O_APPEND, 0o600)
-    guard fd >= 0 else { return }
-    dup2(fd, STDOUT_FILENO)
-    dup2(fd, STDERR_FILENO)
-    if fd > STDERR_FILENO { close(fd) }
-    // 重定向到文件后 stdout 默认全缓冲，日志要等缓冲满或进程退出才可见。
-    // 长期后台运行时这会让人误以为采集器没在工作。
-    setvbuf(stdout, nil, _IOLBF, 0)
-    setvbuf(stderr, nil, _IONBF, 0)
+@discardableResult
+func redirectOutput(to log: CollectorLog, streams: [Int32] = [STDOUT_FILENO, STDERR_FILENO]) -> Bool {
+    do {
+        try CollectorLogCapture.shared.redirect(to: log, streams: streams)
+        return true
+    } catch {
+        warn("无法接管采集日志：\(error)")
+        return false
+    }
 }
 
 /// 取 `--flag value` 形态的参数值。
@@ -103,6 +94,21 @@ func loadConfig(root: URL) -> CollectorConfig {
 if args.isEmpty || flags.contains("--help") || flags.contains("-h") {
     usage()
     exit(0)
+}
+
+let inheritedLogFlags = [STDOUT_FILENO: "--internal-log-stdout", STDERR_FILENO: "--internal-log-stderr"]
+let supervised = args.last == SupervisedLifetime.argument
+let managedChildStreams = supervised ? inheritedLogFlags.compactMap { flags.contains($0.value) ? $0.key : nil } : []
+if !managedChildStreams.isEmpty {
+    let log = CollectorLog(url: outputRoot().appendingPathComponent("collector.log"))
+    // The inherited supervisor stream remains available to diagnose a failed capture setup.
+    guard redirectOutput(to: log, streams: managedChildStreams) else { exit(1) }
+}
+do {
+    if supervised && !flags.contains("collect") { try SupervisedLifetime.monitorWorker() }
+} catch {
+    warn("无法监看监督进程：\(error)")
+    exit(1)
 }
 
 if flags.contains("permissions") {
@@ -270,6 +276,9 @@ if flags.contains("report") || flags.contains("export") {
             }
         }
         exit(0)
+    } catch DeepSeekClient.ClientError.missingAPIKey where flags.contains("report") {
+        warn("\(DeepSeekClient.ClientError.missingAPIKey)\n\(ReportError.offlineModelHint)")
+        exit(1)
     } catch { warn(String(describing: error)); exit(1) }
 }
 
@@ -380,6 +389,11 @@ if flags.contains("segments") {
 }
 
 if flags.contains("memorize") {
+    if let granularity = value(of: "--granularity"), granularity != "10min" {
+        warn("不支持的记忆粒度：\(granularity)。仅支持 10min。")
+        exit(1)
+    }
+
     let root = outputRoot()
     // 同一类生成任务不得并发：两个进程各自读到旧状态、各自追加结果，会写出
     // 重复条目——实测叙述缓存里出现过三条完全相同的内容。
@@ -411,41 +425,9 @@ if flags.contains("memorize") {
     do { try EventArchive.archiveCompleted(root: root) }
     catch { warn("事件归档失败，保留原始文件：\(error)") }
     let limit = value(of: "--limit").flatMap(Int.init)
-    let granularity = value(of: "--granularity") ?? "10min"
     let generator = MemoryGenerator(rootDirectory: root,
                                     memoriesDirectory: memories,
                                     client: client)
-
-    if granularity == "6h" {
-        let includeOpen = flags.contains("--include-open")
-        let buckets = generator.sixHourBuckets(includingOpenBuckets: includeOpen)
-        guard !buckets.isEmpty else {
-            print("没有可用于 6 小时汇总的段。")
-            exit(0)
-        }
-        let outcomes = generator.generateMissingSixHour(
-            limit: limit, overwrite: flags.contains("--overwrite"),
-            includingOpenBuckets: includeOpen)
-        if outcomes.isEmpty {
-            let scope = includeOpen ? "含未结束共" : "已结束共"
-            print("没有需要生成的 6 小时汇总（\(scope) \(buckets.count) 个时段）。")
-        } else {
-            var tokens = 0
-            for o in outcomes {
-                print("  \(o.segmentID)  [\(o.usedModel ? "模型" : "事实")]  "
-                      + "\(o.memoryURL.lastPathComponent)")
-                tokens += o.usage?.totalTokens ?? 0
-            }
-            print("共生成 \(outcomes.count) 份 6 小时汇总 → \(memories.path)")
-            if tokens > 0 { print("本次用量 \(tokens) tokens") }
-            if flags.contains("--print"), let last = outcomes.last,
-               let text = try? String(contentsOf: last.memoryURL, encoding: .utf8) {
-                print("\n" + String(repeating: "─", count: 60) + "\n")
-                print(text)
-            }
-        }
-        exit(0)
-    }
 
     // 指定单段时只处理该段，便于逐段核对效果。
     var outcomes: [MemoryGenerator.Outcome] = []
@@ -505,8 +487,12 @@ if flags.contains("supervise") {
     setvbuf(stderr, nil, _IONBF, 0)
     let root = outputRoot()
     try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    let cfg = loadConfig(root: root)
     let logURL = root.appendingPathComponent("collector.log")
+    let log = CollectorLog(url: logURL)
+    let detachedLog = "--internal-detached-log"
+    let detached = flags.contains(detachedLog)
+    let logStreams = detached ? [STDOUT_FILENO, STDERR_FILENO] : log.attachedStandardStreams()
+    guard redirectOutput(to: log, streams: logStreams) else { exit(1) }
 
     guard let exe = CollectorSupervisor.currentExecutablePath() else {
         warn("无法确定可执行文件路径，无法常驻。")
@@ -515,7 +501,8 @@ if flags.contains("supervise") {
 
     if flags.contains("--daemon") {
         // 已有实例在跑就不重复启动。
-        if CollectorProcessLease.runningIdentity(root: root) != nil {
+        if CollectorProcessLease.runningIdentity(root: root, role: .supervisor) != nil
+            || CollectorProcessLease.runningIdentity(root: root) != nil {
             print("已有采集实例在运行（\(root.path)）。")
             exit(0)
         }
@@ -545,10 +532,21 @@ if flags.contains("supervise") {
             if !forwarded.contains("supervise") {
                 forwarded.insert("supervise", at: 0)
             }
-            try CollectorSupervisor.detach(
-                executable: exe,
-                arguments: forwarded,
-                logURL: logURL, maxLogBytes: cfg.maxLogBytes)
+            _ = loadConfig(root: root)
+            let pid = try CollectorSupervisor.detach(executable: exe, arguments: forwarded + [detachedLog])
+            let deadline = ProcessInfo.processInfo.systemUptime + 5
+            while CollectorProcessLease.runningIdentity(root: root, role: .supervisor) == nil,
+                  CollectorProcessLease.runningIdentity(root: root) == nil {
+                if let code = CollectorSupervisor.reap(pid), code != 0 {
+                    warn("监督启动失败（退出码 \(code)），请检查日志。")
+                    exit(code)
+                }
+                guard ProcessInfo.processInfo.systemUptime < deadline else {
+                    warn("未能确认监督进程已就绪，请检查日志。")
+                    exit(1)
+                }
+                Thread.sleep(forTimeInterval: 0.02)
+            }
         } catch {
             warn("常驻启动失败：\(error)")
             exit(1)
@@ -559,12 +557,37 @@ if flags.contains("supervise") {
         exit(0)
     }
 
+    let stopRequest = SupervisorStopRequest()
+    let supervisorLease: CollectorProcessLease
+    let cfg: CollectorConfig
+    do {
+        supervisorLease = try CollectorProcessLease(root: root, role: .supervisor)
+        if CollectorProcessLease.runningIdentity(root: root) != nil {
+            supervisorLease.release()
+            print("已有采集实例，监督退出。")
+            exit(0)
+        }
+        cfg = loadConfig(root: root)
+        if detached {
+            do { try CollectorSupervisor.rotateLog(at: logURL, maxBytes: cfg.maxLogBytes) }
+            catch { warn("日志启动轮转失败：\(error)") }
+        }
+        try supervisorLease.publish()
+    } catch CollectorProcessLease.LeaseError.alreadyRunning {
+        print("已有监督实例，监督退出。")
+        exit(0)
+    } catch {
+        warn("无法登记监督进程：\(error)")
+        exit(1)
+    }
+
     // 监督循环：采集器长驻运行，本进程按周期生成派生产物并看护采集器。
     //
     // 生成任务**不阻塞看护**：同步等待期间采集器若崩溃将无人重启（实测在
     // 模拟接口阻塞时，配置的重试间隔为 0.1 秒，7 秒后采集器仍未重启）。
     // 因此生成作为独立、可跟踪的子进程运行，循环照常检查采集器。
-    let retryDelay = value(of: "--retry-delay").flatMap(Double.init) ?? 30
+    let configuredRetryDelay = value(of: "--retry-delay").flatMap(Double.init) ?? 30
+    let retryDelay = configuredRetryDelay.isFinite ? max(0, configuredRetryDelay) : 30
     let memorizeInterval = value(of: "--memorize-interval").flatMap(Double.init) ?? 600
     // 每次最多补几段。停机后积压可能很多，一次全生成会产生一笔可观的用量，
     // 分批补写让成本可预期，也不至于长时间占用网络。
@@ -576,16 +599,22 @@ if flags.contains("supervise") {
         var arguments: [String]
     }
 
-    var child = CollectorSupervisor.spawnDetachedChild(
-        executable: exe, arguments: ["collect", "--out", root.path])
-    if child == nil {
-        warn("无法启动采集器。")
-        exit(1)
+    func spawn(_ arguments: [String]) -> CollectorSupervisor.Child? {
+        guard !stopRequest.wait(for: 0) else { return nil }
+        do {
+            let childFlags = logStreams.compactMap { inheritedLogFlags[$0] }
+            return try CollectorSupervisor.spawnChild(executable: exe, arguments: arguments + childFlags)
+        } catch {
+            warn("无法启动 \(arguments.first ?? "子进程")：\(error)")
+            return nil
+        }
     }
-    print("采集器已启动（pid \(child!)）。")
 
+    let collectArguments = ["collect", "--out", root.path]
+    var child = spawn(collectArguments)
+    var restartAt = Double.infinity
     var pending: [GenerationTask] = []
-    var running: (pid: pid_t, label: String)?
+    var running: (child: CollectorSupervisor.Child, label: String)?
 
     var nextLogCheck = Date()
     var nextMemorize = Date()
@@ -594,12 +623,27 @@ if flags.contains("supervise") {
     var backgroundRequested = false
     var memoryCountAtLaunch = 0
     var pendingBackground: [GenerationTask] = []
-    var runningBackground: (pid: pid_t, label: String)?
+    var runningBackground: (child: CollectorSupervisor.Child, label: String)?
+
+    func finish(_ code: Int32) -> Never {
+        child?.requestStop()
+        let workers = [running?.child, runningBackground?.child].compactMap { $0 }
+        for worker in workers { worker.requestStop() }
+        var status = code
+        if let child { status = CollectorSupervisor.runToCompletion(pid: child.pid) }
+        for worker in workers { _ = CollectorSupervisor.runToCompletion(pid: worker.pid) }
+        supervisorLease.release()
+        exit(status)
+    }
+
+    if let child { print("采集器已启动（pid \(child.pid)）。") }
+    else { finish(stopRequest.wait(for: 0) ? 0 : 1) }
     let backlog = MemoryGenerator(rootDirectory: root, memoriesDirectory: root.appendingPathComponent("memories"))
     var observedSegments = autoreleasepool { Set(backlog.completedSegmentIDs()) }
     let generationPower = GenerationPowerState.shared
     while true {
-        Thread.sleep(forTimeInterval: 1)
+        let waitTime = child == nil ? min(1, max(0, restartAt - ProcessInfo.processInfo.systemUptime)) : 1
+        if stopRequest.wait(for: waitTime) { finish(0) }
 
         // Foundation 的目录与路径临时对象必须在每轮结束时回收；sleep 不会清空释放池。
         autoreleasepool {
@@ -611,34 +655,26 @@ if flags.contains("supervise") {
                                                    maxBytes: cfg.maxLogBytes)
             }
 
-            // ① 看护采集器：每隔 1 秒检查，生成任务在跑也不中断。
-            if let pid = child, let code = CollectorSupervisor.reap(pid) {
-                if code == 0 || code == 74 {
-                    print(code == 0 ? "采集器正常停止，监督退出。" : "采集器停止时封口失败，监督退出；请检查日志与存储。")
-                    if let running { _ = CollectorSupervisor.terminate(running.pid) }
-                    if let runningBackground { _ = CollectorSupervisor.terminate(runningBackground.pid) }
-                    exit(code)
-                }
-                if code == 73 {
-                    print("已有采集实例，监督退出。")
-                    if let running { _ = CollectorSupervisor.terminate(running.pid) }
-                    if let runningBackground { _ = CollectorSupervisor.terminate(runningBackground.pid) }
-                    exit(0)
-                }
-                print("采集器异常退出（码 \(code)），\(Int(retryDelay)) 秒后重启…")
+            if let current = child, let code = CollectorSupervisor.reap(current.pid) {
                 child = nil
-                // 生成任务与采集器无依赖，继续跑完即可，不必打断。
-                Thread.sleep(forTimeInterval: retryDelay)
-                child = CollectorSupervisor.spawnDetachedChild(
-                    executable: exe, arguments: ["collect", "--out", root.path])
-                if child == nil { warn("重启失败，监督退出。"); exit(1) }
-                print("采集器已重启（pid \(child!)）。")
+                switch code {
+                case 0, 73, 74:
+                    if code == 74 { warn("采集器停止时封口失败，请检查日志与存储。") }
+                    else { print(code == 0 ? "采集器正常停止，监督退出。" : "已有采集实例，监督退出。") }
+                    finish(code == 73 ? 0 : code)
+                default:
+                    print("采集器异常退出（码 \(code)），\(retryDelay) 秒后重启…")
+                    restartAt = ProcessInfo.processInfo.systemUptime + retryDelay
+                }
+            }
+            if child == nil, ProcessInfo.processInfo.systemUptime >= restartAt {
+                child = spawn(collectArguments)
+                guard let child else { finish(stopRequest.wait(for: 0) ? 0 : 1) }
+                print("采集器已重启（pid \(child.pid)）。")
             }
 
-            guard generationPower.canGenerate else { return }
-
             // ② 回收已结束的生成任务，随即启动下一个。
-            if let current = running, let code = CollectorSupervisor.reap(current.pid) {
+            if let current = running, let code = CollectorSupervisor.reap(current.child.pid) {
                 print(code == 0 ? "生成任务完成：\(current.label)" : "生成任务失败：\(current.label)（退出码 \(code)），请检查日志。")
                 if current.label == "叙述层" { completedRealtime = true }
                 let memoryCount = ((try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("memories").path)) ?? []).count
@@ -649,15 +685,16 @@ if flags.contains("supervise") {
                    }) { nextMemorize = Date() }
                 running = nil
             }
-            if let current = runningBackground, let code = CollectorSupervisor.reap(current.pid) {
+            if let current = runningBackground, let code = CollectorSupervisor.reap(current.child.pid) {
                 print(code == 0 ? "生成任务完成：\(current.label)" : "生成任务失败：\(current.label)（退出码 \(code)），请检查日志。")
                 runningBackground = nil
             }
+            guard generationPower.canGenerate, !stopRequest.wait(for: 0) else { return }
             if runningBackground == nil, !pendingBackground.isEmpty {
                 let task = pendingBackground.removeFirst()
                 let arguments = task.arguments + (flags.contains("--no-model") ? ["--no-model"] : [])
-                if let pid = CollectorSupervisor.spawnDetachedChild(executable: exe, arguments: arguments) {
-                    runningBackground = (pid, task.label)
+                if let child = spawn(arguments) {
+                    runningBackground = (child, task.label)
                     print("生成任务启动：\(task.label)")
                 }
             }
@@ -667,9 +704,8 @@ if flags.contains("supervise") {
                     memoryCountAtLaunch = ((try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("memories").path)) ?? []).count
                 }
                 let generationArguments = task.arguments + (flags.contains("--no-model") ? ["--no-model"] : [])
-                if let pid = CollectorSupervisor.spawnDetachedChild(
-                    executable: exe, arguments: generationArguments) {
-                    running = (pid, task.label)
+                if let child = spawn(generationArguments) {
+                    running = (child, task.label)
                     print("生成任务启动：\(task.label)")
                 }
             }
@@ -693,14 +729,16 @@ if flags.contains("supervise") {
                 // 上一轮没跑完时不排队，也**不清除请求标记**——清早了这次请求就丢了。
                 // 手动请求最多积压一次：标记是布尔，连点多次与点一次等价。
                 guard pending.isEmpty, running == nil else { return }
-                // 暂停总结时只保留采集。已经排队的任务跑完即可，不强杀。
-                // 手动请求同样受开关约束——暂停是使用者的明确意图。
-                guard control.summarizing else {
-                    if manual { try? CollectorControl.update(root: root, flushRequested: false) }
-                    return
-                }
                 if manual {
-                    try? CollectorControl.update(root: root, flushRequested: false)
+                    do { try CollectorControl.update(root: root, flushRequested: false) }
+                    catch {
+                        warn("无法清除立即生成请求：\(error)")
+                        return
+                    }
+                }
+                // 暂停总结也会清除这次请求，避免恢复后补跑。
+                guard control.summarizing else { return }
+                if manual {
                     backgroundRequested = true; nextBackground = Date()
                     print("收到立即生成请求。")
                 }
@@ -721,28 +759,47 @@ if flags.contains("supervise") {
 
 if flags.contains("--stop") {
     let root = outputRoot()
-    guard let identity = CollectorProcessLease.runningIdentity(root: root) else {
-        print("未找到身份可验证的运行中采集；未发送信号。")
+    do {
+        var target: (CollectorProcessIdentity, CollectorProcessLease.Role)?
+        let deadline = ProcessInfo.processInfo.systemUptime + 1
+        while target == nil {
+            var pending: CollectorProcessLease.Role?
+            for role in [CollectorProcessLease.Role.supervisor, .collector] {
+                if let identity = CollectorProcessLease.runningIdentity(root: root, role: role) {
+                    target = (identity, role)
+                    break
+                }
+                if try CollectorProcessLease.isHeld(root: root, role: role) {
+                    pending = role
+                    break
+                }
+            }
+            guard let pending else { break }
+            guard ProcessInfo.processInfo.systemUptime < deadline else {
+                let label = pending == .supervisor ? "监督进程" : "采集进程"
+                warn("\(label)身份尚未就绪，请稍后重试。")
+                exit(1)
+            }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        guard let (identity, role) = target else {
+            print("未找到运行中的采集或监督进程。")
+            exit(0)
+        }
+        print("正在停止采集（pid \(identity.pid)），等待当前段封口…")
+        let code = try identity.stop(signal: role == .supervisor ? SIGTERM : SIGINT, timeout: 10)
+        guard code == 0 else {
+            warn("停止时进程以退出码 \(code) 结束，请检查采集日志。")
+            exit(code)
+        }
+        print("已停止。")
         exit(0)
-    }
-    let pid = identity.pid
-    // SIGINT 触发优雅收尾：封口当前 segment 并写出 metadata。
-    guard identity.matchesLiveProcess, kill(pid, SIGINT) == 0 else {
-        warn("采集进程已退出或无法发送停止信号。")
+    } catch {
+        warn("无法确认采集已停止：\(error.localizedDescription)")
         exit(1)
     }
-    print("已请求停止采集（pid \(pid)）。等待封口当前 segment…")
-    for _ in 0..<50 {
-        usleep(100_000)
-        if !identity.matchesLiveProcess { break }
-    }
-    if identity.matchesLiveProcess {
-        warn("进程 \(pid) 未在 5 秒内退出；如需强制结束：kill -9 \(pid)")
-        exit(1)
-    }
-    print("已停止。")
-    exit(0)
 }
+
 
 guard flags.contains("collect") else {
     usage()
@@ -764,11 +821,22 @@ do {
     exit(1)
 }
 
-// 先读配置（日志上限在其中），再接管输出。
 var collectorConfig = loadConfig(root: root)
 var configurationMonitor = CollectorConfigurationMonitor(root: root)
 var lastConfigurationError: String?
-redirectOutput(to: root.appendingPathComponent("collector.log"))
+if let managed = managedChildStreams.first {
+    // Preserve unmanaged startup diagnostics, then join the capture already installed for this process.
+    for stream in [STDOUT_FILENO, STDERR_FILENO] where !managedChildStreams.contains(stream) {
+        guard dup2(managed, stream) != -1 else {
+            warn("无法接管采集日志：\(String(cString: strerror(errno)))")
+            exit(1)
+        }
+    }
+} else {
+    redirectOutput(to: CollectorLog(url: root.appendingPathComponent("collector.log")))
+}
+do { try AccessibilityMessaging.configure(for: .collector) }
+catch { warn("\(error)。继续使用系统默认等待时间。") }
 print("--- \(EventStreamJSON.timestampString(from: Date())) 启动 ---")
 
 // 未获权限时不静默继续——那样只会产出缺一大半的数据。
@@ -797,17 +865,6 @@ session.isPaused = !CollectorControl.load(root: root).recording
 let sampleInterval: TimeInterval = 1.0
 let runSeconds = value(of: "--seconds").flatMap(Double.init)
 
-do {
-    try session.start()
-} catch {
-    warn("无法开始采集：\(error)")
-    processLease.release()
-    exit(1)
-}
-
-print("开始采集 → \(root.appendingPathComponent("segments").path)")
-print("停止：Ctrl-C")
-if let runSeconds { print("将在 \(Int(runSeconds)) 秒后自动停止。") }
 
 var tap: InputTap?
 
@@ -817,7 +874,6 @@ func makeTap() -> InputTap {
       MainActor.assumeIsolated {
         switch event {
         case .leftMouseDown(let n, let flags, let location):
-            session.noteInputActivity()
             session.recordClick(button: "left", clickCount: n,
                                 modifiers: ModifierNames.names(from: flags), location: location)
         case .rightMouseDown(let n, let flags, let location):
@@ -830,14 +886,18 @@ func makeTap() -> InputTap {
             session.recordScroll(deltaX: dx, deltaY: dy,
                                 modifiers: ModifierNames.names(from: flags), location: location)
         case .keyDown(let keyCode, let flags, let isRepeat):
-            session.noteInputActivity()
-            guard !isRepeat else { break }
-            let mods = ModifierNames.names(from: flags)
+            if isRepeat {
+                session.noteInputActivity()
+                break
+            }
             // Shift/Option 可参与字符输入，只有操作组合键在此记录。
-            if InputKey.action(for: keyCode, flags: flags) == .shortcut {
-                session.recordShortcut(keyEquivalent: InputKey.name(for: keyCode), modifiers: mods)
-            } else if InputKey.action(for: keyCode, flags: flags) == .submit {
+            switch InputKey.action(for: keyCode, flags: flags) {
+            case .shortcut:
+                session.recordShortcut(keyEquivalent: InputKey.name(for: keyCode), modifiers: ModifierNames.names(from: flags))
+            case .submit:
                 session.recordSubmit()
+            case .text:
+                session.noteInputActivity()
             }
         case .flagsChanged:
             break
@@ -846,7 +906,7 @@ func makeTap() -> InputTap {
     }
 }
 
-/// 优雅收尾：Ctrl-C 与超时共用同一条封口路径，避免留下未写 metadata 的段。
+/// 采集退出统一封口，信号、定时停机和监督进程退出都走此处。
 ///
 /// 全程在主线程执行——`CGEventTap` 回调、`Timer` 与信号源都投递到主 runloop，
 /// 因此无需额外加锁。
@@ -887,6 +947,52 @@ final class Shutdown {
     }
 }
 let shutdown = Shutdown(session: session, root: root, lease: processLease)
+
+let collectorSignals = TerminationSignals.listen(on: .main) {
+    MainActor.assumeIsolated { () -> Void in exit(shutdown.run()) }
+}
+let parentLifetime: DispatchSourceRead?
+do {
+    parentLifetime = supervised ? try SupervisedLifetime.monitor(on: .main) {
+        MainActor.assumeIsolated { () -> Void in exit(shutdown.run()) }
+    } : nil
+} catch {
+    warn("无法监看监督进程：\(error)")
+    processLease.release()
+    exit(1)
+}
+
+do {
+    try session.start()
+} catch {
+    warn("无法开始采集：\(error)")
+    processLease.release()
+    exit(1)
+}
+
+let collectorPower = SystemPowerObserver(queue: .main) { event in
+    MainActor.assumeIsolated {
+        session.isPaused = !CollectorControl.load(root: root).recording
+        session.observePower(event)
+        if session.isSystemSleeping {
+            windowTextSampler.update(nil) { _, _ in }
+            activityWatchSampler.update(enabled: false) { _ in }
+        }
+    }
+}
+if collectorPower == nil { warn("无法监听系统休眠与唤醒，离开时段继续使用锁屏和无操作状态。") }
+var recoveringSavedSleep = session.isSystemSleeping
+@MainActor
+func reconcileSavedSleep() {
+    guard recoveringSavedSleep else { return }
+    if session.isSystemSleeping && SystemPowerObserver.hasAwakeDisplay { session.observePower(.didWake) }
+    recoveringSavedSleep = session.isSystemSleeping
+}
+reconcileSavedSleep()
+
+print("开始采集 → \(root.appendingPathComponent("segments").path)")
+print("停止：Ctrl-C")
+if let runSeconds { print("将在 \(Int(runSeconds)) 秒后自动停止。") }
 
 do {
     let t = makeTap()
@@ -955,33 +1061,26 @@ let timer = Timer.scheduledTimer(withTimeInterval: sampleInterval, repeats: true
         } else if !wasPaused, session.isPaused {
             print("已暂停记录。")
         }
-        session.sampleFrontmostAsync()
-        activityWatchSampler.update(enabled: collectorConfig.activityWatchEnabled && !session.isPaused && !session.isAway) { snapshot in
+        reconcileSavedSleep()
+        let debugObservation = session.pollFrontmost(debugText: debugText)
+        activityWatchSampler.update(enabled: collectorConfig.activityWatchEnabled && session.canSampleContent() && !session.isAway) { snapshot in
             guard CollectorControl.load(root: root).recording else { return }
             session.recordActivityWatch(snapshot)
         }
-        // 文本输入按同一周期轮询；切块由跟踪器内部的停顿阈值决定，
-        // 与采样周期解耦。
-        session.sampleTextInput()
-        windowTextSampler.update(session.windowTextContext, read: { pid, windowID in
-            try await WindowTextReader.read(pid: pid, windowID: windowID, isAllowed: {
+        let candidate = session.windowTextContext
+        windowTextSampler.update(candidate, read: { pid, windowID in
+            guard let candidate else { return nil }
+            return try await WindowTextReader.read(pid: pid, windowID: windowID, isAllowed: {
                 await MainActor.run {
-                    CollectorControl.load(root: root).recording
-                        && FrontmostApplication.current()?.processIdentifier == pid
+                    CollectorControl.load(root: root).recording && session.allowsWindowTextSampling(candidate)
                 }
             })
         }) { context, result in
-            let current = FrontmostApplication.current()
             guard CollectorControl.load(root: root).recording,
-                  current?.processIdentifier == context.app.processIdentifier,
-                  FrontmostApplication.frontWindow(for: current) == context.window else { return }
+                  session.acceptsWindowTextResult(context) else { return }
             session.recordWindowText(result, context: context)
         }
-        if debugText && !session.isPaused && !session.isAway {
-            let app = FrontmostApplication.current()
-            let window = FrontmostApplication.frontWindow(for: app)
-            guard !collectorConfig.policy.shouldSuppress(app: app, window: window) else { return }
-            let o = FrontmostApplication.focusedElementObservation(for: app)
+        if let (app, o) = debugObservation {
             let v = o.value.map {
                 "\($0)|caret=\(o.caret.map(String.init) ?? "-")"
                 + "|editable=\(o.isEditableBuffer)|focus=\(o.focusIdentity.map(String.init) ?? "-")"
@@ -990,8 +1089,8 @@ let timer = Timer.scheduledTimer(withTimeInterval: sampleInterval, repeats: true
             debugTicks += 1
             if debugTicks <= 5 || v != lastLogged {
                 let shown = v.map { String($0.prefix(70)) } ?? "nil"
-                warn("TEXT[\(debugTicks)] front=\(app?.bundleIdentifier ?? "?") "
-                     + "pid=\(app?.processIdentifier.map(String.init) ?? "-") value=\(shown)")
+                warn("TEXT[\(debugTicks)] front=\(app.bundleIdentifier ?? "?") "
+                     + "pid=\(app.processIdentifier.map(String.init) ?? "-") value=\(shown)")
                 lastLogged = v
             }
         }
@@ -999,12 +1098,17 @@ let timer = Timer.scheduledTimer(withTimeInterval: sampleInterval, repeats: true
 }
 RunLoop.current.add(timer, forMode: .common)
 
-signal(SIGINT, SIG_IGN)
-let sigintSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-sigintSource.setEventHandler {
-    MainActor.assumeIsolated { () -> Void in exit(shutdown.run()) }
+// Track transitions independently of the one-second content sampler.
+let secureInputTimer = Timer(timeInterval: 0.1, repeats: true) { _ in
+    MainActor.assumeIsolated {
+        if !session.canSampleContent() {
+            windowTextSampler.update(nil) { _, _ in }
+            activityWatchSampler.update(enabled: false) { _ in }
+            lastLogged = nil
+        }
+    }
 }
-sigintSource.resume()
+RunLoop.current.add(secureInputTimer, forMode: .common)
 
 // 停止信号处理已就绪后才发布身份，避免启动期间收到信号而未封口。
 do {
@@ -1021,4 +1125,4 @@ if let runSeconds {
     }
 }
 
-RunLoop.current.run()
+withExtendedLifetime((collectorSignals, parentLifetime, collectorPower)) { RunLoop.current.run() }

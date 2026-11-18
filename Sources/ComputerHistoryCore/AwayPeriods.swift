@@ -15,6 +15,7 @@ public struct AwayPeriods: Codable, Equatable, Sendable {
     }
     public var startedAt: Date?
     public var startedReason: Reason? = nil
+    var systemSleep: Bool? = nil
     public var periods: [Period] = []
 
     func sessionStart(at time: Date) -> Date {

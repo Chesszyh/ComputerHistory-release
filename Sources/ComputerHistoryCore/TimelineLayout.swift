@@ -7,7 +7,7 @@ public enum TimelineLayout {
             guard let name = item.sourceActivities?.keys.min() else { return 0 }
             return item.sourceActivities?[name]?.min() ?? 0
         }
-        let ordered = items.flatMap(\.leafItems).map { value in
+        let ordered = items.flatMap(\.leafItems).filter { !$0.isPassive }.map { value in
             var item = value
             item.endTimestamp = max(item.timestamp, item.endTimestamp)
             return item
@@ -25,18 +25,14 @@ public enum TimelineLayout {
             var card = first
             card.id = "period:\(first.timestamp.timeIntervalSince1970)"
             let isDegraded = members.allSatisfy { $0.title == ActivityEvidence.inputDegradedTitle }
-            let noClearActivity = !isDegraded && members.allSatisfy { $0.noClearActivity == true }
             if isDegraded {
                 card.title = ActivityEvidence.inputDegradedTitle
                 card.summary = ActivityEvidence.inputDegradedSummary
-            } else if noClearActivity {
-                card.title = ActivityEvidence.noActivityTitle
-                card.summary = ActivityEvidence.noActivitySummary
             } else {
                 card.title = "\(first.title)(...等\(members.count)项活动)"
                 card.summary = members.dropFirst().prefix(3).map(\.title).joined(separator: "；")
             }
-            card.noClearActivity = noClearActivity ? true : nil
+            card.noClearActivity = nil
             card.endTimestamp = end
             card.children = members
             card.isAway = false
@@ -56,9 +52,7 @@ public enum TimelineLayout {
         }
         for item in ordered {
             if let first = members.first, item.timestamp != first.timestamp, item.timestamp >= end {
-                let adjacentPassive = item.timestamp == end && item.noClearActivity == true
-                    && members.allSatisfy { $0.noClearActivity == true }
-                if !adjacentPassive { flush() }
+                flush()
             }
             if members.isEmpty { end = max(item.timestamp, item.endTimestamp) }
             else { end = max(end, item.endTimestamp) }

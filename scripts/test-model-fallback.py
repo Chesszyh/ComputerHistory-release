@@ -15,11 +15,14 @@ os.environ['COMPUTER_HISTORY_NOTIFICATIONS']='0'
 calls=[]
 primary='ok'
 secondary='ok'
+before_response=None
 class Model(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         data=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         model=data['model'];mode=secondary if model=='synthetic-fallback' else primary
         calls.append((data,self.headers.get('Authorization')))
+        if before_response is not None:
+            before_response(model)
         if mode=='timeout':time.sleep(2)
         if mode=='redirect':self.send_response(307);self.send_header('Location', '/redirect-target');self.end_headers();return
         if mode=='http':self.send_response(503);self.end_headers();return
@@ -50,8 +53,10 @@ with tempfile.TemporaryDirectory(prefix='fallback-test-') as d:
                         'requiresAPIKey':True,'reasoningEffort':'none','timeoutSeconds':3}}
     env=dict(os.environ,DEEPSEEK_API_KEY='synthetic-primary-key',COMPUTER_HISTORY_FALLBACK_API_KEY='synthetic-fallback-key')
     def save(): (root/'model.json').write_text(json.dumps(config))
+    def invoke():
+        return subprocess.run([binary,'memorize','--out',d,'--segment',sid,'--overwrite'],env=env,capture_output=True,text=True,timeout=15)
     def run(ok=True):
-        p=subprocess.run([binary,'memorize','--out',d,'--segment',sid,'--overwrite'],env=env,capture_output=True,text=True,timeout=15)
+        p=invoke()
         assert (p.returncode==0)==ok,p.stderr
         return next((root/'memories').glob('*10min-memory-summary.md')).read_text()
     try:
@@ -117,5 +122,61 @@ with tempfile.TemporaryDirectory(prefix='fallback-test-') as d:
         before=len(calls);run(ok=False)
         assert len(calls)==before+2, 'length retry must be bounded'
         assert next((root/'memories').glob('*10min-memory-summary.md')).read_bytes()==good, 'failed overwrite replaced a good memory'
+        # The primary has already started when another worker books the last available amount.
+        bookable = 100
+        budget_pricing = {'currency':'CNY','inputPerMillion':1_000_000,'cachedInputPerMillion':0,'outputPerMillion':0}
+        config['pricing'] = budget_pricing
+        config['fallback'] = dict(fallback, baseURL=f'http://127.0.0.1:{server.server_port}/backup/v1',
+                                  pricing=dict(budget_pricing, currency='USD'))
+        request_dir = root / 'requests'
+        def book_during_primary(model):
+            if model != 'synthetic-primary':
+                return
+            running = next(record for p in request_dir.glob('*.json')
+                           if (record := json.loads(p.read_text()))['status'] == 'running')
+            charged = dict(running, id='other-worker', status='success', estimatedCost=bookable, pricing=budget_pricing)
+            staging = root / 'charge.tmp'
+            staging.write_text(json.dumps(charged))
+            staging.replace(request_dir / 'other-worker.json')
+        def clear_ledger():
+            for path in request_dir.glob('*.json'):
+                path.unlink()
+        def assert_budget_error(start, models, expected):
+            result = invoke()
+            assert [call[0]['model'] for call in calls[start:]] == models, 'an attempt bypassed the recorded budget'
+            assert result.returncode == 1 and expected in result.stdout + result.stderr, result.stderr
+            assert '降级模型：' not in result.stdout + result.stderr, 'budget rejection was wrapped as transport failure'
+        for field, message in [('dailyBudget', '已达到今日总结预算（CNY 100.0）'),
+                               ('monthlyBudget', '已达到本月总结预算（CNY 100.0）')]:
+            clear_ledger()
+            config[field] = bookable
+            primary='http';secondary='ok';before_response=book_during_primary
+            save()
+            assert_budget_error(len(calls), ['synthetic-primary'], message)
+            before_response=None
+            config.pop(field)
+        clear_ledger()
+        config['dailyBudget'] = bookable
+        config['fallback']['pricing'] = budget_pricing
+        primary='truncated'
+        save()
+        assert_budget_error(len(calls), ['synthetic-primary'], '已达到今日总结预算')
+        clear_ledger()
+        primary='http';secondary='truncated'
+        assert_budget_error(len(calls), ['synthetic-primary','synthetic-fallback'], '已达到今日总结预算')
+        clear_ledger()
+        broken = request_dir / 'unreadable-charge.json'
+        broken.write_text('{')
+        start = len(calls)
+        result = invoke()
+        assert len(calls) == start and result.returncode == 1, 'budget must fail closed if a request cannot be read'
+        assert 'unreadable-charge.json' in result.stderr, result.stderr
+        config.pop('dailyBudget')
+        primary='ok'
+        save()
+        run()
+        assert len(calls) == start + 1, 'without a budget, a historic file must not block a request'
+        print('PASS: an unreadable ledger blocks budgeted requests and is skipped with no limits')
+        print('PASS: daily and monthly limits block a fallback after a concurrent charge, and block both length retries')
         print('PASS: model-group selection and swap; primary-only success; HTTP, empty, truncated, malformed and timeout fallback; independent credentials; next request resets; total-failure health; linked ledger; keyless fallback; budget boundary; expanded output retry and good-memory preservation')
     finally:server.shutdown();server.server_close()

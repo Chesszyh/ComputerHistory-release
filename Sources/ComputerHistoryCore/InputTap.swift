@@ -44,21 +44,43 @@ public enum ModifierNames {
 
 /// 事件 tap 的回调封装。
 ///
-/// `CGEventTap` 的回调是 C 函数指针，没有捕获上下文，因此用全局实例转发。
-/// handler 同步运行于 tap 所在 runloop，耗时会阻塞后续输入处理。
+/// 在同一运行循环上启动、维护和停止监听。C 回调使用实例上下文，
+/// 事件处理投递回原运行循环，等系统回调返回后执行。
 public final class InputTap {
+    struct System {
+        var makePort: (CGEventMask, CGEventTapCallBack, UnsafeMutableRawPointer) -> CFMachPort? = { mask, callback, context in
+            // A passive session tap does not hold up keyboard or mouse delivery.
+            CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly,
+                              eventsOfInterest: mask, callback: callback, userInfo: context)
+        }
+        var listensToKeys: () -> Bool = { InputTap.hasInputMonitoringPermission }
+        var isEnabled: (CFMachPort) -> Bool = { CGEvent.tapIsEnabled(tap: $0) }
+        var enable: (CFMachPort, Bool) -> Void = { CGEvent.tapEnable(tap: $0, enable: $1) }
+        var frontmostPID: () -> pid_t? = { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+    }
+
+    private let system: System
     private var nextRecoveryAt = Date.distantPast
     private var pendingScroll = false
+    private var deliveryGeneration: UInt64 = 0
     public private(set) var interruptionCount = 0
 
     public typealias Handler = (InputEvent) -> Void
     private let handler: Handler
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private var registeredLoop: CFRunLoop?
 
-    public init(handler: @escaping Handler) {
+    public convenience init(handler: @escaping Handler) {
+        self.init(system: .init(), handler: handler)
+    }
+
+    init(system: System, handler: @escaping Handler) {
+        self.system = system
         self.handler = handler
     }
+
+    deinit { stop() }
 
     /// 系统会话的输入时钟覆盖移动、滚轮和普通按键，不依赖历史中的语义事件。
     public static var secondsSinceLastInput: TimeInterval? {
@@ -97,7 +119,7 @@ public final class InputTap {
 
     public var isEnabled: Bool {
         guard let tap, CFMachPortIsValid(tap) else { return false }
-        return CGEvent.tapIsEnabled(tap: tap)
+        return system.isEnabled(tap)
     }
 
     /// 当前 tap 是否包含键盘按键监听。
@@ -107,7 +129,7 @@ public final class InputTap {
     @discardableResult
     public func ensureActive(now: Date = Date()) -> Bool {
         guard isEnabled || now >= nextRecoveryAt else { return false }
-        let canListenKeys = Self.hasInputMonitoringPermission
+        let canListenKeys = system.listensToKeys()
         if let tap, CFMachPortIsValid(tap) {
             // 如果此前未包含按键监听，而现在已获得输入监控授权，需要重建以升级掩码
             if hasKeyListening != canListenKeys {
@@ -120,10 +142,10 @@ public final class InputTap {
                     return false
                 }
             }
-            if !CGEvent.tapIsEnabled(tap: tap) {
-                CGEvent.tapEnable(tap: tap, enable: true)
+            if !system.isEnabled(tap) {
+                system.enable(tap, true)
             }
-            if CGEvent.tapIsEnabled(tap: tap) {
+            if system.isEnabled(tap) {
                 return true
             }
         }
@@ -142,6 +164,8 @@ public final class InputTap {
     /// 用 `kCGSessionEventTap`（会话级）而非 `kCGHIDEventTap`：前者足以覆盖本用户
     /// 的输入，且不需要 root。
     public func start() throws {
+        if let tap, CFMachPortIsValid(tap) { return }
+        if tap != nil { stop() }
         nextRecoveryAt = Date().addingTimeInterval(30)
         var mask: CGEventMask =
             (1 << CGEventType.leftMouseDown.rawValue) |
@@ -149,60 +173,58 @@ public final class InputTap {
             (1 << CGEventType.otherMouseDown.rawValue) |
             (1 << CGEventType.scrollWheel.rawValue)
 
-        let canListenKeys = Self.hasInputMonitoringPermission
+        let canListenKeys = system.listensToKeys()
         if canListenKeys {
             mask |= (1 << CGEventType.keyDown.rawValue)
             mask |= (1 << CGEventType.flagsChanged.rawValue)
         }
-        self.hasKeyListening = canListenKeys
-
         let refcon = Unmanaged.passUnretained(self).toOpaque()
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            // Passive observation keeps system input delivery independent of the collector runloop.
-            options: .listenOnly,
-            eventsOfInterest: mask,
-            callback: { _, type, event, refcon in
-                guard let refcon else { return Unmanaged.passUnretained(event) }
-                let me = Unmanaged<InputTap>.fromOpaque(refcon).takeUnretainedValue()
-                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-                    me.handleDisabled(type: type)
-                    return nil
-                }
-                me.dispatch(type: type, event: event, deferred: true)
-                return Unmanaged.passUnretained(event)
-            },
-            userInfo: refcon
-        ) else {
+        guard let tap = system.makePort(mask, { _, type, event, refcon in
+            guard let refcon else { return Unmanaged.passUnretained(event) }
+            let me = Unmanaged<InputTap>.fromOpaque(refcon).takeUnretainedValue()
+            if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                me.handleDisabled(type: type)
+                return nil
+            }
+            me.dispatch(type: type, event: event, deferred: true)
+            return Unmanaged.passUnretained(event)
+        }, refcon) else {
             throw InputTapError.tapCreationFailed
         }
 
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
+        guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
+            CFMachPortInvalidate(tap)
+            throw InputTapError.tapCreationFailed
+        }
+        let loop = CFRunLoopGetCurrent()
         self.tap = tap
         self.runLoopSource = source
+        self.registeredLoop = loop
+        self.hasKeyListening = canListenKeys
+        CFRunLoopAddSource(loop, source, .commonModes)
+        system.enable(tap, true)
     }
 
     public func stop() {
-        if let tap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-            if CFMachPortIsValid(tap) {
-                CFMachPortInvalidate(tap)
-            }
+        deliveryGeneration &+= 1
+        pendingScroll = false
+        hasKeyListening = false
+        if let source = runLoopSource, let loop = registeredLoop {
+            CFRunLoopRemoveSource(loop, source, .commonModes)
         }
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
+        if let tap, CFMachPortIsValid(tap) {
+            system.enable(tap, false)
+            CFMachPortInvalidate(tap)
         }
         runLoopSource = nil
+        registeredLoop = nil
         tap = nil
     }
 
     func handleDisabled(type: CGEventType) {
         interruptionCount += 1
         if let tap, CFMachPortIsValid(tap) {
-            CGEvent.tapEnable(tap: tap, enable: true)
+            system.enable(tap, true)
         }
     }
 
@@ -212,10 +234,12 @@ public final class InputTap {
             if !deferred { handler(value); return }
             // AX queries and persistence run after the system event callback has returned.
             let targetPID = Int32(event.getIntegerValueField(.eventTargetUnixProcessID))
-            CFRunLoopPerformBlock(CFRunLoopGetCurrent(), CFRunLoopMode.commonModes.rawValue) { [self] in
-                if case .scroll = value { pendingScroll = false }
-                if targetPID > 0, NSWorkspace.shared.frontmostApplication?.processIdentifier != targetPID { return }
-                handler(value)
+            let generation = deliveryGeneration
+            CFRunLoopPerformBlock(CFRunLoopGetCurrent(), CFRunLoopMode.commonModes.rawValue) { [weak self] in
+                guard let self, self.deliveryGeneration == generation else { return }
+                if case .scroll = value { self.pendingScroll = false }
+                if targetPID > 0, self.system.frontmostPID() != targetPID { return }
+                self.handler(value)
             }
         }
         switch type {

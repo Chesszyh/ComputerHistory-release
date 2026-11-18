@@ -40,16 +40,18 @@ public enum ModelAPIKey {
         process.executableURL = executable
         let input = Pipe(), output = Pipe(), errors = Pipe()
         process.standardInput = input; process.standardOutput = output; process.standardError = errors
-        try process.run()
-        try input.fileHandleForWriting.write(contentsOf: JSONSerialization.data(withJSONObject: request))
-        try input.fileHandleForWriting.close()
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              process.terminationStatus == 0, result["ok"] as? Bool == true else {
-            let result = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            throw ConfigurationInputError.invalid(result?["error"] as? String ?? "密钥助手未完成操作，请在设置中恢复密钥访问。")
+        return try SupervisedLifetime.withHelper(process) {
+            defer { try? input.fileHandleForWriting.close() }
+            try input.fileHandleForWriting.write(contentsOf: JSONSerialization.data(withJSONObject: request))
+            try input.fileHandleForWriting.close()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  process.terminationStatus == 0, result["ok"] as? Bool == true else {
+                let result = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                throw ConfigurationInputError.invalid(result?["error"] as? String ?? "密钥助手未完成操作，请在设置中恢复密钥访问。")
+            }
+            return result
         }
-        return result
     }
 }

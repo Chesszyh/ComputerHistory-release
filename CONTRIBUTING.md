@@ -7,9 +7,12 @@ swift test
 bash scripts/build.sh -c release
 python3 scripts/test-process-control.py .build/debug/computer-history
 python3 scripts/test-process-control.py .build/release/computer-history
+python3 scripts/test-menubar-startup.py .build/release/computer-history-menubar
+python3 scripts/test-collector-power.py .build/release/computer-history
+python3 scripts/test-collector-logs.py .build/release/computer-history
 ```
 
-进程测试须以普通用户运行，权限拒绝场景不支持 root。测试拥有自己的临时目录和子进程，不应修改真实运行服务。常规测试不访问个人历史；只有显式设置 `COMPUTER_HISTORY_SAMPLES` 才启用三项私有样本兼容性测试，其断言针对维护者的数据集，不适用于任意小样本。
+休眠回归向测试拥有的采集器注入电源通知，不切换本机电源或前台。日志回归使用并发编号行验证裁剪与追加，还检查前台监督、脱离终端及继承日志文件描述符时的输出。进程测试须以普通用户运行，权限拒绝场景不支持 root。测试拥有自己的临时目录和子进程，不应修改真实运行服务。常规测试不访问个人历史；只有显式设置 `COMPUTER_HISTORY_SAMPLES` 才启用三项私有样本兼容性测试，其断言针对维护者的数据集，不适用于任意小样本。
 
 修复生命周期问题时增加跨状态回归：暂停和恢复、应用切换、同窗重启、配置不完整、删除失败与进程身份变化。纯渲染和解析改动使用合成输入即可。模型相关测试应使用本地模拟接口，不能依赖真实密钥或产生付费请求。
 
@@ -73,7 +76,7 @@ python3 scripts/test-menubar-catalog.py
 
 用量与设置面板用例使用临时合成记录，验证分组及请求详情标题整行点击、详情返回后的展开与滚动位置、提示词保存和恢复默认，以及原生模型／采集表单的编辑、保存和校验、总结删除与回收站恢复；不启动真实采集器、写入密钥或访问模型服务。
 
-`test-collector-input.swift` 在独立合成窗口验证系统键鼠监听、鼠标目标与键盘焦点不同的点击、组合点击、Shift 字符和 Command 快捷键。需测试程序的辅助功能权限；缺少权限退出 77，计为跳过。测试结束恢复前台应用与鼠标位置。
+`test-collector-input.swift` 在独立合成窗口验证系统键鼠监听、鼠标目标与键盘焦点不同的点击、组合点击、Shift 字符和 Command 快捷键。还检查 macOS 全局安全输入的启停、暂停内容采样和原生密码控件跳过取值。需测试程序的辅助功能权限；缺少权限退出 77，计为跳过。测试结束恢复前台应用与鼠标位置。
 
 ## CI 与版本发布
 
@@ -121,7 +124,23 @@ bash scripts/test-menubar-panel.sh scripts/test-menubar-reports.swift
 bash scripts/test-menubar-panel.sh scripts/test-accessibility-relaunch.swift --chrome-executable "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 ```
 
-该测试需要为测试程序提供辅助功能权限，不开启真实采集或调用模型。ActivityWatch 常规测试使用模拟接口，验证本机数据桶选择、过期数据、取消请求、屏蔽规则、区间去重和总结来源标注，不访问正在运行的 ActivityWatch 服务。
+该测试需要为测试程序提供辅助功能权限，不开启真实采集或调用模型。
+
+通信超时回归用可挂起的 AppKit 窗口测量单条消息、窗口、焦点和整树。传入已签名的 CLI 与测试动态库，还会验证实际采集器和菜单栏状态模型恢复，以及同步查询期间 `--stop` 能正常封口。使用 `--foreground` 显式允许测试窗口切到前台。测试需要图形会话及辅助功能权限，结束后恢复原前台应用。后台验证使用前文的 `swift test` 和进程控制测试。
+
+```bash
+bin="$(swift build -c release --show-bin-path)"
+probe="$bin/ax-timeout-test"
+interposer="$bin/ax-timeout-test.dylib"
+swiftc -O -parse-as-library -D AX_TIMEOUT_MENUBAR -I "$bin" scripts/test-accessibility-timeout.swift \
+  Sources/computer-history-menubar/{StatusModel,PermissionSetupPane}.swift "$bin/ComputerHistoryCore.o" -o "$probe"
+local-codesign --identifier xyz.chesszyh.computer-history.panel-test "$probe"
+clang -dynamiclib -framework ApplicationServices scripts/test-accessibility-timeout-interpose.c -o "$interposer"
+local-codesign --identifier xyz.chesszyh.computer-history.ax-fixture-interpose "$interposer"
+python3 scripts/test-accessibility-timeout.py "$probe" --foreground --collector "$bin/computer-history" --interposer "$interposer"
+```
+
+ActivityWatch 常规测试使用模拟接口，验证本机数据桶选择、过期数据、取消请求、屏蔽规则、区间去重和总结来源标注，不访问正在运行的 ActivityWatch 服务。
 
 `test-narrative-activities.py` 使用合成多任务记忆和本地模拟模型，检查先归属后概览、任务间材料隔离、失败阶段续跑、相邻续接、中断后关联、原文保留、来源修订及固定十分钟模式。
 

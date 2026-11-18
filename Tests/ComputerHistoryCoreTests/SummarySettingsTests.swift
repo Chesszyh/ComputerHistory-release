@@ -13,13 +13,12 @@ final class SummarySettingsTests: XCTestCase {
         var loaded = try SummarySettings.load(root: root)
         XCTAssertEqual(loaded[.tenMinute], "合成提示词")
         XCTAssertEqual(loaded[.narrative], "合成活动整理提示词")
-        XCTAssertEqual(loaded[.sixHour], MemoryGenerator.sixHourSystemPrompt)
         loaded[.tenMinute] = SummarySettings.Stage.tenMinute.defaultPrompt
         try loaded.save(root: root)
         let restored = try SummarySettings.load(root: root)
         XCTAssertNil(restored.tenMinutePrompt)
         XCTAssertEqual(restored.narrativePrompt, "合成活动整理提示词")
-        loaded[.sixHour] = "  \n"
+        loaded[.weekly] = "  \n"
         XCTAssertThrowsError(try loaded.save(root: root))
         XCTAssertEqual(try SummarySettings.load(root: root), restored)
     }
@@ -39,6 +38,18 @@ final class SummarySettingsTests: XCTestCase {
         XCTAssertEqual(try SummarySettings.load(root: root).timelineMode, .continuous)
         try Data(#"{"timelineMode":"unknown"}"#.utf8).write(to: root.appendingPathComponent("summary.json"))
         XCTAssertThrowsError(try SummarySettings.load(root: root))
+    }
+
+    func testRetiredPromptIsIgnoredAndRemovedOnSave() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("summary.json")
+        try Data(#"{"sixHourPrompt":"Old prompt","tenMinutePrompt":"Keep prompt"}"#.utf8).write(to: file)
+        let settings = try SummarySettings.load(root: root)
+        XCTAssertEqual(settings.tenMinutePrompt, "Keep prompt")
+        try settings.save(root: root)
+        XCTAssertFalse(try String(contentsOf: file, encoding: .utf8).contains("sixHourPrompt"))
     }
 
     func testInvalidConfigurationIsReportedWithoutReplacingIt() throws {

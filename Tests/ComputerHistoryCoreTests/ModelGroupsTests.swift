@@ -36,6 +36,26 @@ final class ModelGroupsTests: XCTestCase {
         XCTAssertThrowsError(try groups.resolved())
     }
 
+    func testRetiredTaskDoesNotBlockActiveConfiguration() throws {
+        let root = try root()
+        let group = ModelGroup(id: "one", name: "One", settings: .init(
+            baseURL: URL(string: "http://localhost/v1")!, model: "one", requiresAPIKey: false))
+        let groups = ModelGroups(groups: [group], primaryGroupID: group.id,
+            tasks: ["6h": .init(groupID: "removed", outputTokenBudget: 0),
+                    "daily": .init(outputTokenBudget: 8192)])
+        let file = root.appendingPathComponent("model.json")
+        try JSONEncoder().encode(groups).write(to: file)
+        let before = try Data(contentsOf: file)
+        let loaded = try ModelGroups.load(root: root)
+        XCTAssertNil(loaded.tasks?["6h"])
+        XCTAssertEqual(try ModelSettings.load(root: root)?.model, "one")
+        XCTAssertEqual(try Data(contentsOf: file), before)
+        try loaded.save(root: root)
+        XCTAssertFalse(try String(contentsOf: file, encoding: .utf8).contains("6h"))
+        XCTAssertEqual(try ModelGroups.load(root: root).tasks?["daily"]?.outputTokenBudget, 8192)
+        XCTAssertFalse(ModelTaskConfiguration.tasks.contains("6h"))
+    }
+
     func testTopLevelReasoningUsageIsRecorded() throws {
         let data = Data(#"{"choices":[{"message":{"content":"Synthetic"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":25,"reasoning_tokens":20,"prompt_tokens_details":{"cached_tokens":64}}}"#.utf8)
         let completion = try DeepSeekClient.parse(data).get()

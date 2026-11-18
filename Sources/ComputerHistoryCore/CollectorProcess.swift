@@ -21,6 +21,30 @@ public struct CollectorProcessIdentity: Codable, Equatable, Sendable {
     }
 
     public var matchesLiveProcess: Bool { Self.read(pid: pid) == self }
+
+    public func stop(signal: Int32, timeout: Int) throws -> Int32 {
+        let queue = kqueue()
+        guard queue >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { Darwin.close(queue) }
+        var event = kevent(ident: UInt(pid), filter: Int16(EVFILT_PROC),
+                           flags: UInt16(EV_ADD | EV_ONESHOT), fflags: NOTE_EXIT | UInt32(NOTE_EXITSTATUS),
+                           data: 0, udata: nil)
+        guard kevent(queue, &event, 1, nil, 0, nil) == 0,
+              matchesLiveProcess, kill(pid, signal) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .ESRCH)
+        }
+        var deadline = timespec(tv_sec: timeout, tv_nsec: 0)
+        var result = kevent()
+        let count = kevent(queue, nil, 0, &result, 1, &deadline)
+        guard count > 0 else {
+            throw POSIXError(count == 0 ? .ETIMEDOUT : (POSIXErrorCode(rawValue: errno) ?? .EIO))
+        }
+        guard result.flags & UInt16(EV_ERROR) == 0, result.fflags & UInt32(NOTE_EXITSTATUS) != 0 else {
+            throw POSIXError(.EIO)
+        }
+        let signal = Int32(result.data & 0x7F)
+        return signal == 0 ? Int32((result.data >> 8) & 0xFF) : 128 + signal
+    }
 }
 
 /// 锁文件保持原位，避免删除后并发启动的进程锁住不同 inode。
@@ -32,9 +56,17 @@ public final class CollectorProcessLease {
 
     public enum LeaseError: Error { case alreadyRunning, identityUnavailable }
 
-    public init(root: URL) throws {
+    public enum Role: String {
+        case collector, supervisor
+
+        fileprivate func file(in root: URL, extension suffix: String) -> URL {
+            root.appendingPathComponent(rawValue).appendingPathExtension(suffix)
+        }
+    }
+
+    public init(root: URL, role: Role = .collector) throws {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let fd = open(root.appendingPathComponent("collector.lock").path,
+        let fd = open(role.file(in: root, extension: "lock").path,
                       O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
@@ -49,7 +81,7 @@ public final class CollectorProcessLease {
         }
         descriptor = fd
         identity = current
-        recordURL = root.appendingPathComponent("collector.pid")
+        recordURL = role.file(in: root, extension: "pid")
     }
 
     public func publish() throws {
@@ -70,16 +102,25 @@ public final class CollectorProcessLease {
     deinit { release() }
 
     public static func runningIdentity(root: URL,
+                                       role: Role = .collector,
                                        executableName: String = "computer-history") -> CollectorProcessIdentity? {
-        // PID 文件本身不能证明实例仍在运行，必须同时有采集锁和进程身份。
-        let fd = open(root.appendingPathComponent("collector.lock").path, O_RDWR | O_CLOEXEC)
-        guard fd >= 0 else { return nil }
-        defer { Darwin.close(fd) }
-        guard flock(fd, LOCK_EX | LOCK_NB) != 0, errno == EWOULDBLOCK,
-              let data = try? Data(contentsOf: root.appendingPathComponent("collector.pid")),
+        guard (try? isHeld(root: root, role: role)) == true,
+              let data = try? Data(contentsOf: role.file(in: root, extension: "pid")),
               let identity = try? JSONDecoder().decode(CollectorProcessIdentity.self, from: data),
               URL(fileURLWithPath: identity.executablePath).lastPathComponent == executableName,
               identity.matchesLiveProcess else { return nil }
         return identity
+    }
+
+    public static func isHeld(root: URL, role: Role) throws -> Bool {
+        let fd = open(role.file(in: root, extension: "lock").path, O_RDWR | O_CLOEXEC)
+        guard fd >= 0 else {
+            if errno == ENOENT { return false }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer { Darwin.close(fd) }
+        if flock(fd, LOCK_EX | LOCK_NB) == 0 { return false }
+        if errno == EWOULDBLOCK { return true }
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
 }

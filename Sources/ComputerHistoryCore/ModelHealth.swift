@@ -20,7 +20,7 @@ public struct ModelHealth: Codable, Sendable {
             process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
             process.arguments = ["-e", "display notification \"模型请求未能完成，请在总结用量中查看错误并检查模型设置。\" with title \"计算机历史\""]
             process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
-            try? process.run()
+            try? SupervisedLifetime.startHelper(process)
         }
     }
 }

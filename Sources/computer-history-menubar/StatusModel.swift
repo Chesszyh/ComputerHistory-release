@@ -1,7 +1,6 @@
 import Foundation
 import Combine
 import AppKit
-import ApplicationServices
 import ComputerHistoryCore
 import SwiftUI
 
@@ -210,6 +209,8 @@ final class StatusModel: ObservableObject {
         self.status = .empty(root: root)
         self.control = CollectorControl()
         self.loginItemEnabled = LoginItem.isEnabled
+        do { try AccessibilityMessaging.configure(for: .menubar) }
+        catch { FileHandle.standardError.write(Data("\(error)。继续使用系统默认等待时间。\n".utf8)) }
         startTimers()
         NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
             .sink { [weak self] _ in MainActor.assumeIsolated { self?.shutdown() } }
@@ -813,9 +814,14 @@ final class StatusModel: ObservableObject {
     }
 
     func removeEditingModelGroup() {
-        guard modelGroups.count > 1, editingGroupID != primaryGroupID, editingGroupID != fallbackGroupID else { return }
-        guard !modelTasks.values.contains(where: { $0.groupID == editingGroupID }) else { return }
-        modelGroups.removeAll { $0.id == editingGroupID }
+        guard modelGroups.count > 1, modelGroups.contains(where: { $0.id == editingGroupID }) else { return }
+        let removedID = editingGroupID
+        modelGroups.removeAll { $0.id == removedID }
+        if primaryGroupID == removedID { primaryGroupID = modelGroups[0].id }
+        if fallbackGroupID == removedID || fallbackGroupID == primaryGroupID { fallbackGroupID = "" }
+        for task in Array(modelTasks.keys) where modelTasks[task]?.groupID == removedID {
+            modelTasks[task]?.groupID = nil
+        }
         editingGroupID = primaryGroupID
     }
 
@@ -1107,7 +1113,6 @@ final class StatusModel: ObservableObject {
 private actor TrayWindowReader {
     static let shared = TrayWindowReader()
     func read(pid: Int32?) -> EventStreamWindow? {
-        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.2)
-        return FrontmostApplication.window(pid: pid)
+        FrontmostApplication.window(pid: pid)
     }
 }

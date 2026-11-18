@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 public struct ModelRequest: Codable, Sendable, Equatable, Identifiable {
     public var id: String
@@ -25,12 +26,30 @@ public struct ModelRequest: Codable, Sendable, Equatable, Identifiable {
     public var durationSeconds: Double? = nil
 
     public func save(root: URL) throws {
-        let dir = root.appendingPathComponent("requests")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
-                                               attributes: [.posixPermissions: 0o700])
+        let dir = Self.ledgerDirectory(root: root)
         let encoder = EventStreamJSON.makeEncoder(preservingSubseconds: true)
         encoder.outputFormatting = [.sortedKeys]
-        try encoder.encode(self).write(to: dir.appendingPathComponent(id + ".json"), options: .atomic)
+        let data = try encoder.encode(self)
+        try Self.withLedgerLock(root: root) {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
+                                                   attributes: [.posixPermissions: 0o700])
+            try data.write(to: dir.appendingPathComponent(id + ".json"), options: .atomic)
+        }
+    }
+
+    static func ledgerDirectory(root: URL) -> URL { root.appendingPathComponent("requests") }
+
+    static func withLedgerLock<T>(root: URL, _ operation: () throws -> T) throws -> T {
+        let url = GenerationLock.lockURL("request-ledger", root: root)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // The JSON entries are replaced atomically. The lock must live on a separate, stable file.
+        let fd = open(url.path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { close(fd) }
+        while flock(fd, LOCK_EX) != 0 {
+            if errno != EINTR { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        }
+        return try operation()
     }
 
     public static func load(url: URL) throws -> ModelRequest {
@@ -44,7 +63,7 @@ public struct ModelRequest: Codable, Sendable, Equatable, Identifiable {
         case "narrative-grouping": label = "活动归属"
         case "narrative": label = "活动整理"; default: label = task }
         if retryOf != nil { return "加长重试 · " + label }
-        return fallbackOf != nil ? "降级 · " + label : (comparisonOf == nil ? label : "历史对照 · " + label)
+        return fallbackOf != nil ? "降级 · " + label : label
     }
     public var statusLabel: String {
         if status == "running" {
@@ -71,7 +90,7 @@ public actor ModelRequestLoader {
     private var cached: [URL: Cached] = [:]
     public init() {}
     public func load(root: URL) -> [ModelRequest] {
-        let directory = root.appendingPathComponent("requests")
+        let directory = ModelRequest.ledgerDirectory(root: root)
         let files = ((try? FileManager.default.contentsOfDirectory(at: directory,
             includingPropertiesForKeys: nil)) ?? []).filter { $0.pathExtension == "json" }
         let live = Set(files)

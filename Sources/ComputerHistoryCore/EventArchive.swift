@@ -21,25 +21,26 @@ public enum EventArchive {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/gzip")
         process.arguments = ["-dc", url.path]
         process.standardOutput = pipe; process.standardError = errors
-        try process.run()
-        do {
-            let value = try body(pipe.fileHandleForReading)
-            if !consumesEntireFile {
+        return try SupervisedLifetime.withHelper(process) {
+            do {
+                let value = try body(pipe.fileHandleForReading)
+                if !consumesEntireFile {
+                    if process.isRunning { process.terminate() }
+                    try? pipe.fileHandleForReading.close()
+                    process.waitUntilExit()
+                    return value
+                }
+                process.waitUntilExit()
+                guard process.terminationStatus == 0 else {
+                    throw ArchiveError.failed(String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+                }
+                return value
+            } catch {
                 if process.isRunning { process.terminate() }
                 try? pipe.fileHandleForReading.close()
                 process.waitUntilExit()
-                return value
+                throw error
             }
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else {
-                throw ArchiveError.failed(String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
-            }
-            return value
-        } catch {
-            if process.isRunning { process.terminate() }
-            try? pipe.fileHandleForReading.close()
-            process.waitUntilExit()
-            throw error
         }
     }
 
@@ -96,8 +97,8 @@ public enum EventArchive {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/gzip")
         process.arguments = ["-c", source.path]
         process.standardOutput = output; process.standardError = errors
-        do { try process.run() } catch { try? output.close(); throw error }
-        process.waitUntilExit()
+        defer { try? output.close() }
+        try SupervisedLifetime.withHelper(process) { process.waitUntilExit() }
         try output.close()
         guard process.terminationStatus == 0 else {
             throw ArchiveError.failed(String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))

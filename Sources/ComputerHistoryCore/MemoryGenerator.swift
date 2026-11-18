@@ -17,8 +17,6 @@ public struct MemoryGenerator: Sendable {
     public enum GenerateError: Error, CustomStringConvertible {
         case noEvents(segmentID: String)
         case modelFailed(String)
-        /// 粗粒度汇总的依赖（细粒度记忆）尚未齐全。
-        case dependenciesMissing(segmentID: String, missing: [String])
 
         public var description: String {
             switch self {
@@ -26,8 +24,6 @@ public struct MemoryGenerator: Sendable {
                 return "段 \(id) 没有事件，跳过"
             case .modelFailed(let detail):
                 return "模型调用失败：\(detail)"
-            case .dependenciesMissing(let id, let missing):
-                return "\(id) 的十分钟记忆尚缺 \(missing.count) 份，暂不生成"
             }
         }
     }
@@ -130,8 +126,9 @@ public struct MemoryGenerator: Sendable {
                                                 withIntermediateDirectories: true)
         let memoryURL = memoriesDirectory
             .appendingPathComponent(MemoryWriter.fileName(segmentID: segmentID))
+        let existing = try? String(contentsOf: memoryURL, encoding: .utf8)
 
-        if !overwrite, Self.hasUsableMemory(at: memoryURL) {
+        if !overwrite, Self.hasUsableMemory(existing) {
             return Outcome(segmentID: segmentID, memoryURL: memoryURL,
                            usedModel: false, usage: nil)
         }
@@ -143,10 +140,14 @@ public struct MemoryGenerator: Sendable {
         var enrichment: String?
         var usage: DeepSeekClient.Usage?
         var modelNote: String?
-        if let client, !noClearActivity, !isInputDegraded {
+        if var client, !noClearActivity, !isInputDegraded {
             let prior = previousMemoryPath.flatMap { try? String(contentsOfFile: $0,
                                                                 encoding: .utf8) }
             let prompt = try SummarySettings.load(root: rootDirectory)[.tenMinute]
+            let rejections = MemoryContextRejections(segmentDirectory: segmentDir, retriesRejectedRequests: overwrite)
+            try rejections.importLegacyRejections(root: rootDirectory, segmentID: segmentID,
+                failedMemory: Self.hasUsableMemory(existing) ? nil : existing)
+            client.memoryContextRejections = rejections
             do {
             let completion = try client.complete(
                 system: prompt,
@@ -166,13 +167,15 @@ public struct MemoryGenerator: Sendable {
             usage = completion.usage
             } catch DeepSeekClient.ClientError.sleepDeferred {
                 throw DeepSeekClient.ClientError.sleepDeferred
+            } catch DeepSeekClient.ClientError.previouslyRejectedContext(let requestID) where existing != nil {
+                throw DeepSeekClient.ClientError.previouslyRejectedContext(requestID: requestID)
             } catch {
                 // 网络或接口故障同样降级，不让一段记忆因外部依赖缺失而消失。
                 modelNote = "\(error)"
             }
         }
 
-        if let modelNote, Self.hasUsableMemory(at: memoryURL) {
+        if let modelNote, Self.hasUsableMemory(existing) {
             throw GenerateError.modelFailed(modelNote)
         }
         let markdown = MemoryWriter.render(
@@ -237,255 +240,14 @@ public struct MemoryGenerator: Sendable {
                 continue
             } catch DeepSeekClient.ClientError.sleepDeferred {
                 break
+            } catch DeepSeekClient.ClientError.previouslyRejectedContext {
+                previous = target.path
             } catch {
                 FileHandle.standardError.write(
                     "段 \(segmentID) 生成失败：\(error)\n".data(using: .utf8)!)
             }
         }
         return outcomes
-    }
-
-    // MARK: - 6 小时汇总
-
-    /// 6 小时时间窗的标识，对齐到 00/06/12/18 时。
-    ///
-    /// 官方产物形如 `2026-10-06T12-00-00-iRvw-6h-memory-summary.md`。
-    public static func sixHourBucket(for date: Date) -> Date {
-        let seconds = 6 * 3600.0
-        let epoch = date.timeIntervalSince1970
-        return Date(timeIntervalSince1970: (epoch / seconds).rounded(.down) * seconds)
-    }
-
-    /// 把段按 6 小时分桶，返回 `桶起始时刻 -> 段 ID`（按时间升序）。
-    ///
-    /// - Parameter includingOpenBuckets: 是否包含尚未结束的时段。
-    ///   默认排除：未结束的时段只覆盖了一部分，据此生成的汇总会残缺，
-    ///   而记忆一旦写出就不会自动更新（`generateMissingSixHour` 会跳过已存在的）。
-    public func sixHourBuckets(includingOpenBuckets: Bool = false,
-                               now: Date = Date())
-        -> [(bucket: Date, segmentIDs: [String])] {
-        var grouped: [Date: [String]] = [:]
-        for id in completedSegmentIDs() {
-            guard let start = SegmentClock.date(fromSegmentID: id) else { continue }
-            grouped[Self.sixHourBucket(for: start), default: []].append(id)
-        }
-        return grouped.keys.sorted().compactMap { bucket in
-            if !includingOpenBuckets,
-               bucket.addingTimeInterval(6 * 3600) > now { return nil }
-            return (bucket, grouped[bucket]!.sorted())
-        }
-    }
-
-    /// 为某个 6 小时桶生成汇总记忆。
-    ///
-    /// 与 10 分钟粒度的区别：内容由**该桶内各 10 分钟记忆的标题与描述**归纳，
-    /// 而不是重读全部事件——既省用量，也让汇总建立在已提炼的层次上。
-    /// 结构化活动数据仍由段摘要合并而来，保证事实可核对。
-    public func generateSixHour(bucket: Date,
-                                overwrite: Bool = false) throws -> Outcome {
-        let ids = sixHourBuckets(includingOpenBuckets: true)
-            .first { $0.bucket == bucket }?.segmentIDs ?? []
-        guard !ids.isEmpty else {
-            throw GenerateError.noEvents(segmentID: "6h-\(bucket)")
-        }
-
-        // 依赖必须齐全：缺任何一份十分钟记忆都会让汇总永久缺段——写出后
-        // `generateMissingSixHour` 仅凭文件存在就跳过，新增来源也不会更新它。
-        // 这里宁可等，也不产出残缺且不再更新的汇总。
-        var missing: [String] = []
-        for id in ids {
-            let url = memoriesDirectory.appendingPathComponent(
-                MemoryWriter.fileName(segmentID: id))
-            if !FileManager.default.fileExists(atPath: url.path) { missing.append(id) }
-        }
-        if !missing.isEmpty, !overwrite {
-            throw GenerateError.dependenciesMissing(
-                segmentID: "6h-\(bucket)", missing: missing)
-        }
-
-        // 逐个读取该桶内已生成的 10 分钟记忆；未生成的段落不参与。
-        var digests: [SegmentDigest] = []
-        var summaries: [(title: String, description: String, path: String)] = []
-        for id in ids {
-            let memoryURL = memoriesDirectory
-                .appendingPathComponent(MemoryWriter.fileName(segmentID: id))
-            guard let text = try? String(contentsOf: memoryURL, encoding: .utf8) else { continue }
-            let meta = MemoryWriter.parseFrontmatter(text)
-            summaries.append((meta.title, ActivityEvidence.summary(in: text), memoryURL.path))
-
-            let eventsURL = rootDirectory.appendingPathComponent("segments")
-                .appendingPathComponent(id).appendingPathComponent("events.jsonl")
-            if let events = try? Self.readEvents(at: eventsURL), !events.isEmpty {
-                digests.append(SegmentDigest.make(
-                    events: events, segmentID: id,
-                    suppressedEventCount: Self.readSuppressedCount(
-                        at: eventsURL.deletingLastPathComponent())))
-            }
-        }
-        guard !summaries.isEmpty else {
-            throw GenerateError.noEvents(segmentID: "6h-\(bucket)")
-        }
-
-        let bucketID = SegmentClock.segmentID(for: bucket)
-        let digest = SegmentDigest.merging(digests, bucketID: bucketID)
-
-        try FileManager.default.createDirectory(at: memoriesDirectory,
-                                                withIntermediateDirectories: true)
-        let memoryURL = memoriesDirectory.appendingPathComponent(
-            MemoryWriter.fileName(segmentID: bucketID, granularity: "6h"))
-        if !overwrite, Self.hasUsableMemory(at: memoryURL) {
-            return Outcome(segmentID: bucketID, memoryURL: memoryURL,
-                           usedModel: false, usage: nil)
-        }
-
-        var enrichment: String?
-        var usage: DeepSeekClient.Usage?
-        var modelNote: String?
-        var modelTitle: String?
-        if let client {
-            let prompt = try SummarySettings.load(root: rootDirectory)[.sixHour]
-            do {
-                let completion = try client.complete(
-                    system: prompt,
-                    user: Self.sixHourUserPrompt(bucket: bucket, digest: digest,
-                                                summaries: summaries),
-                    recordingAt: rootDirectory, task: "6h", sources: ids)
-                let parsed = Self.splitTitle(
-                    completion.text.trimmingCharacters(in: .whitespacesAndNewlines))
-                if parsed.body.isEmpty || completion.finishReason == "length" {
-                    modelNote = completion.truncatedByBudget
-                        ? "输出预算被推理耗尽（推理 \(completion.usage?.reasoningTokens ?? 0) token）。"
-                        : "模型返回空内容。"
-                } else {
-                    enrichment = parsed.body
-                    modelTitle = parsed.title
-                }
-                usage = completion.usage
-            } catch DeepSeekClient.ClientError.sleepDeferred {
-                throw DeepSeekClient.ClientError.sleepDeferred
-            } catch {
-                modelNote = "\(error)"
-            }
-        }
-
-        if let modelNote, Self.hasUsableMemory(at: memoryURL) {
-            throw GenerateError.modelFailed(modelNote)
-        }
-        let markdown = MemoryWriter.render(
-            digest: digest,
-            eventsPath: rootDirectory.appendingPathComponent("segments").path,
-            previousMemoryPath: summaries.first?.path,
-            enrichment: enrichment,
-            modelNote: modelNote,
-            granularity: "6h",
-            sources: summaries.map(\.path),
-            titleOverride: modelTitle)
-        try markdown.write(to: memoryURL, atomically: true, encoding: .utf8)
-
-        return Outcome(segmentID: bucketID, memoryURL: memoryURL,
-                       usedModel: enrichment != nil, usage: usage)
-    }
-
-    /// 为所有已有 10 分钟记忆的桶补写 6 小时汇总。
-    public func generateMissingSixHour(limit: Int? = nil,
-                                       overwrite: Bool = false,
-                                       includingOpenBuckets: Bool = false) -> [Outcome] {
-        var outcomes: [Outcome] = []
-        for entry in sixHourBuckets(includingOpenBuckets: includingOpenBuckets) {
-            if let limit, outcomes.count >= limit { break }
-            let bucketID = SegmentClock.segmentID(for: entry.bucket)
-            let target = memoriesDirectory.appendingPathComponent(
-                MemoryWriter.fileName(segmentID: bucketID, granularity: "6h"))
-            if !overwrite, Self.hasUsableMemory(at: target) { continue }
-            do {
-                outcomes.append(try generateSixHour(bucket: entry.bucket,
-                                                    overwrite: overwrite))
-            } catch GenerateError.dependenciesMissing {
-                // 依赖未齐属正常等待，不是失败，不报错刷屏。
-                continue
-            } catch {
-                FileHandle.standardError.write(
-                    "6h 桶 \(bucketID) 生成失败：\(error)\n".data(using: .utf8)!)
-            }
-        }
-        return outcomes
-    }
-
-    public static let sixHourSystemPrompt = """
-    \(SummarySettings.activityRules)
-
-    你为一份本地活动记录写**六小时**跨度的汇总记忆。读者是记录者本人，
-    几周后会回看。输入是该时段内若干份十分钟粒度的记忆摘要。
-
-    只依据用户提供的事实，不要推测未出现的内容。与十分钟粒度相比，
-    六小时汇总应更侧重：这段时间的整体走向、跨段延续的工作线、
-    反复出现的模式，而不是逐条复述。
-
-    用第二人称"你"称呼记录者。语言简洁、具体。
-    按任务归并跨应用活动，直接描述有材料支持的动作；缺少结果就省略结果。
-    不重复归因免责声明，不把相邻的不同任务强行合并。
-
-    输出格式：第一行是 `TITLE: <不超过 20 字的主题标题>`，
-    概括这六小时的主线（例如「网络工具更新与终端环境检查」），不要用应用名。
-    随后空一行，输出以下三节，不要有其它标题或前言：
-
-    ### 整体走向
-    2-3 段，说明这六小时主要在做什么、如何演变。
-
-    ### 延续的工作线
-    列出跨段延续的事项，每条一行，以 "- " 开头。没有则写"- 本时段未见明显延续。"。
-
-    ### 重要非显然上下文
-    1-4 条对日后理解该用户有用的稳定特征或偏好，每条一行，以 "- " 开头。
-    没有可靠依据时写"- 本段不足以归纳稳定特征。"。
-    """
-
-    static func sixHourUserPrompt(
-        bucket: Date, digest: SegmentDigest,
-        summaries: [(title: String, description: String, path: String)]
-    ) -> String {
-        var out = "## 时段\n"
-        out += "\(iso(bucket)) 起的六小时，含 \(summaries.count) 份十分钟记忆。\n\n"
-
-        out += "## 各十分钟记忆的标题与摘要\n"
-        for item in summaries {
-            out += "- 《\(item.title)》：\(item.description)\n"
-        }
-        out += "\n"
-
-        out += "## 该时段活动总计\n"
-        out += "共 \(digest.eventCount) 条事件，涉及 \(digest.activities.count) 个应用。\n"
-        for activity in digest.activities.prefix(12) {
-            out += "- \(activity.displayName)：\(activity.eventCount) 条事件"
-            if activity.clickCount > 0 { out += "，点击 \(activity.clickCount) 次" }
-            if !activity.typedTexts.isEmpty { out += "，文本值变化 \(activity.typedTexts.count) 段" }
-            out += "\n"
-        }
-
-        let titles = digest.activities.flatMap(\.windowTitles).prefix(25)
-        if !titles.isEmpty {
-            out += "\n## 出现过的窗口标题\n"
-            for t in titles { out += "- \(MemoryWriter.truncate(t, 90))\n" }
-        }
-        return out
-    }
-
-    /// 从模型输出里切出 `TITLE:` 行与正文。
-    ///
-    /// 粗粒度汇总的主题无法由主导应用名体现（六小时可能横跨多个应用），
-    /// 故交由模型给出，再由本方法取出。缺少该行时标题为空，由调用方回退。
-    static func splitTitle(_ text: String) -> (title: String?, body: String) {
-        var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-        guard let first = lines.first,
-              first.hasPrefix("TITLE:") else { return (nil, text) }
-        let title = String(first.dropFirst("TITLE:".count))
-            .trimmingCharacters(in: .whitespaces)
-        lines.removeFirst()
-        // 去掉标题与正文之间可能的多余空行
-        while let f = lines.first, f.trimmingCharacters(in: .whitespaces).isEmpty {
-            lines.removeFirst()
-        }
-        return (title.isEmpty ? nil : title, lines.joined(separator: "\n"))
     }
 
     /// 同窗重启时按事件顺序筛选前驱，不能按文件名或时间窗前缀判断。
@@ -595,7 +357,11 @@ public struct MemoryGenerator: Sendable {
     }
 
     static func hasUsableMemory(at url: URL) -> Bool {
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
+        hasUsableMemory(try? String(contentsOf: url, encoding: .utf8))
+    }
+
+    private static func hasUsableMemory(_ text: String?) -> Bool {
+        guard let text else { return false }
         return !text.contains("\ngeneration: failed\n") && !text.contains("本节未由语言模型归纳：")
     }
 

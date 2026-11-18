@@ -140,6 +140,26 @@ struct SettingsRegression {
         model.loadConfigurationDrafts()
         precondition(model.modelTasks["narrative"]?.groupID == originalID)
         precondition(try! ModelGroups.load(root: root).resolved(for: "narrative").outputTokenBudget == 2048)
+        stage("delete saved referenced model groups")
+        model.editingGroupID = originalID
+        model.removeEditingModelGroup()
+        precondition(model.modelGroups.count == 1, "Saved fallback and task model groups must be deletable")
+        precondition(model.fallbackGroupID.isEmpty)
+        precondition(model.modelTasks["narrative"]?.groupID == nil)
+        precondition(model.modelTasks["narrative"]?.outputTokenBudget == 2048)
+        model.saveModelConfiguration()
+        model.loadConfigurationDrafts()
+        precondition(model.modelGroups.count == 1)
+        model.addModelGroup()
+        model.modelGroups[1].settings.requiresAPIKey = false
+        let replacementID = model.editingGroupID
+        model.editingGroupID = newID
+        model.removeEditingModelGroup()
+        precondition(model.primaryGroupID == replacementID)
+        model.saveModelConfiguration()
+        precondition(model.modelSettingsError == nil)
+        model.removeEditingModelGroup()
+        precondition(model.modelGroups.count == 1, "Keep the final model group")
         stage("summary deletion and trash")
         try ActivityNarrative(items: [.init(id: "synthetic-delete", timestamp: Date(), title: "Synthetic summary",
             summary: "Synthetic duplicate", apps: [], sourceMemories: [])]).save(root: root)

@@ -1,7 +1,7 @@
 import Foundation
 
 public struct ModelTaskConfiguration: Codable, Sendable, Equatable {
-    public static let tasks = ["10min", "narrative-grouping", "narrative", "daily", "weekly", "6h"]
+    public static let tasks = ["10min", "narrative-grouping", "narrative", "daily", "weekly"]
     public var groupID: String?
     public var reasoningEffort: String?
     public var outputTokenBudget: Int?
@@ -60,7 +60,8 @@ public struct ModelGroups: Codable, Sendable {
         if FileManager.default.fileExists(atPath: file.path) {
             let data = try Data(contentsOf: file)
             if let object = try JSONSerialization.jsonObject(with: data) as? [String: Any], object["groups"] != nil {
-                let value = try JSONDecoder().decode(Self.self, from: data)
+                var value = try JSONDecoder().decode(Self.self, from: data)
+                value.tasks?.removeValue(forKey: "6h")
                 _ = try value.resolved()
                 return value
             }
@@ -84,7 +85,7 @@ public struct ModelGroups: Codable, Sendable {
             throw invalid("模型组的 id 必须唯一且非空，name 不能为空。")
         }
         for group in groups { try group.settings.validate() }
-        for (name, options) in tasks ?? [:] {
+        for (name, options) in tasks ?? [:] where name != "6h" {
             guard ModelTaskConfiguration.tasks.contains(name),
                   options.groupID == nil || groups.contains(where: { $0.id == options.groupID }),
                   options.outputTokenBudget == nil || options.outputTokenBudget! > 0 else {
@@ -93,7 +94,7 @@ public struct ModelGroups: Codable, Sendable {
         }
         if dailyBudget != nil || monthlyBudget != nil {
             let currency = groups.first(where: { $0.id == primaryGroupID })?.pricing?.currency
-            for (name, options) in tasks ?? [:] {
+            for (name, options) in tasks ?? [:] where name != "6h" {
                 let selected = groups.first(where: { $0.id == (options.groupID ?? primaryGroupID) })
                 guard let pricing = selected?.pricing, pricing.currency == currency else {
                     throw invalid("tasks.\(name) 的模型组需填写与主模型相同计费币种的单价，才能应用统一预算。")
@@ -134,7 +135,9 @@ public struct ModelGroups: Codable, Sendable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        try encoder.encode(self).write(to: root.appendingPathComponent("model.json"), options: .atomic)
+        var value = self
+        value.tasks?.removeValue(forKey: "6h")
+        try encoder.encode(value).write(to: root.appendingPathComponent("model.json"), options: .atomic)
     }
 }
 

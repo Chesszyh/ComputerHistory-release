@@ -72,7 +72,7 @@ public enum MemoryWriter {
             summary = ActivityEvidence.inputDegradedSummary
         } else {
             heading = titleOverride ?? title(for: digest)
-            summary = granularity == "6h" ? sixHourDescription(for: digest) : description(for: digest)
+            summary = description(for: digest)
         }
         out += "title: \(heading)\n"
         out += "description: \(summary)\n"
@@ -173,24 +173,6 @@ public enum MemoryWriter {
             parts.append("另有 \(digest.suppressedEventCount) 条事件按观测策略抑制。")
         }
         return parts.joined()
-    }
-
-    /// 粗粒度汇总的描述：说明时间窗与窗口内**确实记录到**的范围。
-    ///
-    /// 用「各段首末事件跨度之和」而不是 `endedAt - startedAt`：后者是首末记录的
-    /// 跨度，会把段间与段内的大片空白算成活动（实测某六小时记忆声称约 74 分钟活动，
-    /// 而各段跨度相加仅 9.75 分钟）。措辞也不说「活动时长」——
-    /// 即便相加，也只是各段内有活动的时间下界。
-    static func sixHourDescription(for digest: SegmentDigest) -> String {
-        guard !digest.activities.isEmpty else { return "本时段未记录到应用活动。" }
-        let span = digest.recordedSpan
-        let top = digest.activities.prefix(3).map(\.displayName).joined(separator: "、")
-        var parts = "六小时时段内共 \(digest.coveredSegments) 段有记录，"
-        parts += "各段首末事件跨度合计约 \(Int(span / 60)) 分钟"
-        if span < 60 { parts += "（不足一分钟）" }
-        parts += "，\(digest.eventCount) 条事件，涉及 \(digest.activities.count) 个应用。"
-        parts += "主要使用 \(top)。"
-        return parts
     }
 
     /// 无模型时的 `Memory summary` 正文：只列可核对的事实。

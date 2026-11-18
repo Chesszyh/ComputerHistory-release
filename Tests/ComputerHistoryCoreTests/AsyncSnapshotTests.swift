@@ -1,5 +1,7 @@
+import ApplicationServices
 import Foundation
 import XCTest
+import os
 @testable import ComputerHistoryCore
 
 private final class ControlledAXRead: @unchecked Sendable {
@@ -48,7 +50,7 @@ final class AsyncSnapshotTests: XCTestCase {
 
     private func schedule(_ session: CollectionSession, _ state: State, _ reader: ControlledAXRead, sampledAt: Date? = nil) {
         session.sampleFrontmostAsync(context: state.context, now: sampledAt ?? start, idleSeconds: 0,
-            read: { reader.read(pid: $0, maxNodes: $1) },
+            read: { context, maxNodes, _ in reader.read(pid: context.app.processIdentifier ?? 0, maxNodes: maxNodes) },
             currentContext: { state.context }, completedAt: { state.now })
     }
 
@@ -106,7 +108,7 @@ final class AsyncSnapshotTests: XCTestCase {
         defer { reader.release() }
         schedule(session, state, reader)
         try await waitFor { reader.count == 1 }
-        state.context?.window?.url = "https://blocked.test"
+        state.context?.observedWindow?.details.url = "https://blocked.test"
         reader.release()
         try await waitFor { !session.frontmostSampleInFlight }
         schedule(session, state, reader)
@@ -127,7 +129,7 @@ final class AsyncSnapshotTests: XCTestCase {
         defer { reader.release() }
         schedule(session, state, reader)
         try await waitFor { reader.count == 1 }
-        state.context?.window?.windowID = 8
+        state.context?.observedWindow?.details.windowID = 8
         schedule(session, state, reader)
         state.context = original
         schedule(session, state, reader)
@@ -135,6 +137,41 @@ final class AsyncSnapshotTests: XCTestCase {
         try await waitFor { !session.frontmostSampleInFlight }
         try session.stop(now: start.addingTimeInterval(3))
         XCTAssertFalse(try events(root).contains { $0.ax != nil })
+    }
+
+    func testNumberlessWindowSwitchAndReturnRejectsEarlierRead() async throws {
+        let first = Context(app: app, observedWindow: .init(details: .init(title: "Same title"),
+            reference: .init(element: AXUIElementCreateApplication(10_001))))
+        let second = Context(app: app, observedWindow: .init(details: .init(title: "Same title"),
+            reference: .init(element: AXUIElementCreateApplication(10_002))))
+        for returnsToFirst in [false, true] {
+            let root = root()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let session = CollectionSession(configuration: .init(rootDirectory: root))
+            try session.start(now: start)
+            let state = State(first, now: start.addingTimeInterval(2))
+            let reader = ControlledAXRead()
+            defer { reader.release() }
+            session.sampleFrontmostAsync(context: first, now: start, idleSeconds: 0,
+                read: { owner, limit, _ in
+                    XCTAssertTrue(owner.matches(first))
+                    return reader.read(pid: 42, maxNodes: limit)
+                }, currentContext: { state.context }, completedAt: { state.now })
+            try await waitFor { reader.count == 1 }
+            state.context = second
+            if returnsToFirst {
+                schedule(session, state, reader)
+                state.context = first
+                schedule(session, state, reader)
+            }
+            reader.release()
+            try await waitFor { !session.frontmostSampleInFlight }
+            XCTAssertFalse(try events(root).contains { $0.ax != nil })
+            schedule(session, state, reader)
+            try await waitFor { !session.frontmostSampleInFlight }
+            try session.stop(now: start.addingTimeInterval(3))
+            XCTAssertEqual(try events(root).compactMap(\.ax?.mode), [.fullTree])
+        }
     }
 
     func testPauseConfigurationRestartAndIdleTransitionsRejectOldReads() async throws {
@@ -166,6 +203,59 @@ final class AsyncSnapshotTests: XCTestCase {
             try session.stop(now: start.addingTimeInterval(3))
             XCTAssertEqual(try events(root).filter { $0.ax != nil }.count, 1, transition)
         }
+    }
+
+    func testSecureInputTransitionRejectsEarlierAXResultEvenAfterItEnds() async throws {
+        let root = root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = OSAllocatedUnfairLock(initialState: false)
+        let session = CollectionSession(configuration: .init(rootDirectory: root),
+                                        readers: .init(), secureInput: { source.withLock { $0 } })
+        try session.start(now: start)
+        let state = State(Context(app: app, window: .init(windowID: 7)), now: start.addingTimeInterval(2))
+        let reader = ControlledAXRead()
+        defer { reader.release() }
+        schedule(session, state, reader)
+        try await waitFor { reader.count == 1 }
+        source.withLock { $0 = true }
+        XCTAssertFalse(session.canSampleContent())
+        schedule(session, state, reader)
+        source.withLock { $0 = false }
+        XCTAssertTrue(session.canSampleContent())
+        reader.release()
+        try await waitFor { !session.frontmostSampleInFlight }
+        XCTAssertFalse(try events(root).contains { $0.ax != nil })
+        schedule(session, state, reader)
+        try await waitFor { !session.frontmostSampleInFlight }
+        try session.stop(now: start.addingTimeInterval(3))
+        XCTAssertEqual(reader.count, 2)
+        XCTAssertEqual(try events(root).filter { $0.ax?.mode == .fullTree }.count, 1)
+    }
+
+    func testFailedAXTreeClearsOCRAndNextReadStartsWithAFullTree() async throws {
+        let root = root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let session = CollectionSession(configuration: .init(rootDirectory: root,
+            windowTextApplications: ["test.browser"]))
+        try session.start(now: start)
+        let context = Context(app: app, window: .init(windowID: 7))
+        var checks = 0
+        func sample(_ roots: [UIElementRender]?, at seconds: TimeInterval) async throws {
+            let time = start.addingTimeInterval(seconds)
+            session.sampleFrontmostAsync(context: context, now: time, idleSeconds: 0,
+                read: { _, _, _ in roots }, currentContext: { checks += 1; return context }, completedAt: { time })
+            try await waitFor { !session.frontmostSampleInFlight }
+        }
+        try await sample([.init(id: 1, text: "initial frame")], at: 1)
+        let initialOCR = try XCTUnwrap(session.windowTextContext)
+        try await sample(nil, at: 2)
+        XCTAssertNil(session.windowTextContext)
+        XCTAssertEqual(checks, 1)
+        XCTAssertEqual(session.totalEventsWritten, 2)
+        try await sample([.init(id: 1, text: "recovered frame")], at: 3)
+        XCTAssertNotEqual(initialOCR, try XCTUnwrap(session.windowTextContext))
+        try session.stop(now: start.addingTimeInterval(4))
+        XCTAssertEqual(try events(root).compactMap(\.ax?.mode), [.fullTree, .fullTree])
     }
 
     func testCompletionAfterSegmentBoundaryUsesCompletionTime() async throws {

@@ -17,12 +17,12 @@ final class OptimizationTests: XCTestCase {
         let app = EventStreamApp(name: "Editor", processIdentifier: 42, bundleIdentifier: "example.editor")
         let login = EventStreamApp(name: "Login window", processIdentifier: 43, bundleIdentifier: "com.apple.loginwindow")
         let tree = [UIElementRender(id: 0, text: "Synthetic window")]
-        session.recordSnapshot(roots: tree, app: app, window: nil, now: start)
+        session.recordSnapshot(roots: tree, context: .init(app: app, window: nil), now: start)
         let count = session.totalEventsWritten
-        session.recordSnapshot(roots: tree, app: login, window: nil, now: start.addingTimeInterval(60))
+        session.recordSnapshot(roots: tree, context: .init(app: login, window: nil), now: start.addingTimeInterval(60))
         XCTAssertTrue(session.isAway)
         var readFocused = false
-        session.sampleTextInput(app: login, window: nil, readFocused: {
+        session.sampleTextInput(context: .init(app: login, window: .init(windowID: 1)), readFocused: {
             readFocused = true
             fatalError("Login window must not read focused values")
         }, now: start.addingTimeInterval(120))
@@ -31,7 +31,7 @@ final class OptimizationTests: XCTestCase {
         XCTAssertEqual(AwayPeriods.load(root: root).startedAt, start.addingTimeInterval(60))
         // A missing frontmost application is not evidence that the user returned.
         XCTAssertFalse(session.observeAvailability(app: nil, now: start.addingTimeInterval(600)))
-        session.recordSnapshot(roots: tree, app: app, window: nil, now: start.addingTimeInterval(7200))
+        session.recordSnapshot(roots: tree, context: .init(app: app, window: nil), now: start.addingTimeInterval(7200))
         XCTAssertFalse(session.isAway)
         XCTAssertEqual(session.totalEventsWritten, count + 1)
         let away = AwayPeriods.load(root: root)
@@ -78,7 +78,7 @@ final class OptimizationTests: XCTestCase {
         XCTAssertFalse(session.observeAvailability(app: app, now: start.addingTimeInterval(1), idleSeconds: 300))
         XCTAssertEqual(AwayPeriods.load(root: root).startedReason, .idle)
         let count = session.totalEventsWritten
-        session.recordSnapshot(roots: [.init(id: 0, text: "background reply")], app: app, window: nil, now: start.addingTimeInterval(30))
+        session.recordSnapshot(roots: [.init(id: 0, text: "background reply")], context: .init(app: app, window: nil), now: start.addingTimeInterval(30))
         XCTAssertEqual(session.totalEventsWritten, count)
         XCTAssertFalse(session.observeAvailability(app: login, now: start.addingTimeInterval(601), idleSeconds: 900))
         let locked = AwayPeriods.load(root: root)
@@ -91,7 +91,7 @@ final class OptimizationTests: XCTestCase {
         try session.stop(now: start.addingTimeInterval(1202))
         let snapshot = await TraySnapshotLoader().load(root: root)
         let away = snapshot.groups.flatMap(\.items).flatMap(\.leafItems).filter(\.isAway)
-        XCTAssertEqual(away.map(\.summary), ["锁屏或休眠", "长时间无操作，未锁屏"])
+        XCTAssertEqual(away.map(\.summary), ["长时间无操作、锁屏或休眠"])
     }
 
     func testFirstClickAfterIdleIsRecordedAndPauseEndsIdleCoverage() throws {
@@ -177,15 +177,15 @@ final class OptimizationTests: XCTestCase {
         ]
         var filter = ModelRequestFilter()
         func ids() -> [String] { filter.apply(records, now: now, calendar: calendar).map(\.id) }
-        XCTAssertEqual(ids(), ["today", "compare"])
+        XCTAssertEqual(ids(), ["today"])
         filter.period = .yesterday
         XCTAssertEqual(ids(), ["yesterday"])
         filter.period = .week
-        XCTAssertEqual(ids(), ["today", "compare", "yesterday", "monday", "tomorrow"])
+        XCTAssertEqual(ids(), ["today", "yesterday", "monday", "tomorrow"])
         filter.period = .month
         XCTAssertFalse(ids().contains("lastMonth"))
-        filter.source = .comparison; filter.task = "narrative"
-        XCTAssertEqual(ids(), ["compare"])
+        filter.source = .all; filter.task = "narrative"
+        XCTAssertTrue(ids().isEmpty, "Retired comparison requests must be excluded from usage")
         filter.source = .primary
         XCTAssertTrue(ids().isEmpty)
         filter.task = "10min"; filter.period = .today
@@ -280,15 +280,14 @@ final class OptimizationTests: XCTestCase {
         try session.start(now: start)
         let app = EventStreamApp(name: "Fixture", processIdentifier: 42, bundleIdentifier: "example.fixture")
         let roots = [UIElementRender(id: 0, text: "窗口 Synthetic")]
-        session.recordSnapshot(roots: roots, app: app, window: .init(windowID: 1), now: start.addingTimeInterval(1))
-        session.recordSnapshot(roots: [.init(id: 0, text: "窗口 Changed")], app: app,
-            window: .init(windowID: 1), now: start.addingTimeInterval(2))
-        session.recordSnapshot(roots: roots, app: app, window: .init(windowID: 2), now: start.addingTimeInterval(3))
+        session.recordSnapshot(roots: roots, context: .init(app: app, window: .init(windowID: 1)), now: start.addingTimeInterval(1))
+        session.recordSnapshot(roots: [.init(id: 0, text: "窗口 Changed")], context: .init(app: app, window: .init(windowID: 1)), now: start.addingTimeInterval(2))
+        session.recordSnapshot(roots: roots, context: .init(app: app, window: .init(windowID: 2)), now: start.addingTimeInterval(3))
         session.isPaused = true
-        session.recordSnapshot(roots: roots, app: app, window: .init(windowID: 2), now: start.addingTimeInterval(4))
+        session.recordSnapshot(roots: roots, context: .init(app: app, window: .init(windowID: 2)), now: start.addingTimeInterval(4))
         session.isPaused = false
-        session.recordSnapshot(roots: roots, app: app, window: .init(windowID: 2), now: start.addingTimeInterval(5))
-        session.recordSnapshot(roots: roots, app: app, window: .init(windowID: 2), now: start.addingTimeInterval(601))
+        session.recordSnapshot(roots: roots, context: .init(app: app, window: .init(windowID: 2)), now: start.addingTimeInterval(5))
+        session.recordSnapshot(roots: roots, context: .init(app: app, window: .init(windowID: 2)), now: start.addingTimeInterval(601))
         try session.stop(now: start.addingTimeInterval(602))
         let generator = MemoryGenerator(rootDirectory: root, memoriesDirectory: root.appendingPathComponent("memories"))
         let events = try generator.orderedSegments().flatMap {

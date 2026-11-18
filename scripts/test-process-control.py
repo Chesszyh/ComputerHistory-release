@@ -17,7 +17,7 @@ binary = Path(sys.argv[1] if len(sys.argv) > 1 else ".build/debug/computer-histo
 
 def command(root, *args):
     return subprocess.run([str(binary), *args, "--out", str(root)],
-                          capture_output=True, text=True, timeout=8)
+                          capture_output=True, text=True, timeout=13)
 
 
 def wait_for_record(root, process, supervisor=False, previous_pid=None):
@@ -55,7 +55,7 @@ with tempfile.TemporaryDirectory(prefix="collector-cli-") as directory:
 
         forged = dict(record, startedSeconds=record["startedSeconds"] + 1)
         (root / "collector.pid").write_text(json.dumps(forged))
-        assert command(root, "--stop").returncode == 0
+        assert command(root, "--stop").returncode == 1
         assert collector.poll() is None, "mismatched start time received a signal"
         print("PASS: mismatched start time rejected while lock is held")
         (root / "collector.pid").write_text(json.dumps(record))
@@ -89,7 +89,7 @@ with tempfile.TemporaryDirectory(prefix="collector-cli-") as directory:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             forged = dict(record, pid=foreign.pid)
             (root / "collector.pid").write_text(json.dumps(forged))
-            assert command(root, "--stop").returncode == 0
+            assert command(root, "--stop").returncode == 1
             assert foreign.poll() is None
         print("PASS: foreign process identity rejected even with a held lock")
     finally:
@@ -98,6 +98,175 @@ with tempfile.TemporaryDirectory(prefix="collector-cli-") as directory:
                 if process.poll() is None:
                     process.kill()
                 process.wait(timeout=5)
+
+
+def wait_until(predicate, message, timeout=5):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.02)
+    raise AssertionError(message)
+
+
+def pid_is_gone(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    return False
+
+
+def collector_lock_is_held(root):
+    try:
+        with (root / "collector.lock").open("rb") as lease:
+            try:
+                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+    except FileNotFoundError:
+        pass
+    return False
+
+
+for startup in ("publishes", "times out", "exits"):
+    with tempfile.TemporaryDirectory(prefix="collector-stop-starting-") as directory:
+        root = Path(directory)
+        (root / "control.json").write_text('{"recording": false, "summarizing": false}')
+        log = root / "collector.log"
+        # Opening the log for writing gates a real collect after flock and before identity publication.
+        os.mkfifo(log)
+        with subprocess.Popen([str(binary), "collect", "--out", str(root)],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as collector:
+            stop = None
+            reader = None
+            try:
+                wait_until(lambda: collector_lock_is_held(root), "collector never acquired startup lock")
+                assert not (root / "collector.pid").exists()
+                stop = subprocess.Popen([str(binary), "--stop", "--out", str(root)],
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                if startup == "times out":
+                    _, error = stop.communicate(timeout=4)
+                    assert stop.returncode == 1 and "身份尚未就绪" in error, error
+                    assert collector.poll() is None and not (root / "collector.pid").exists()
+                    reader = os.open(log, os.O_RDONLY | os.O_NONBLOCK)
+                    wait_for_record(root, collector)
+                    assert command(root, "--stop").returncode == 0
+                else:
+                    time.sleep(0.15)
+                    assert stop.poll() is None, "--stop returned while the collector was starting"
+                    if startup == "publishes":
+                        reader = os.open(log, os.O_RDONLY | os.O_NONBLOCK)
+                    else:
+                        collector.kill()
+                        collector.wait(timeout=5)
+                    stdout, error = stop.communicate(timeout=5)
+                    assert stop.returncode == 0, error
+                    if startup == "publishes":
+                        assert "已停止" in stdout and list((root / "segments").glob("*/metadata.json"))
+                    else:
+                        assert "未找到" in stdout
+                assert collector.wait(timeout=5) == (0 if startup != "exits" else -signal.SIGKILL)
+                assert not (root / "collector.pid").exists()
+                print(f"PASS: --stop handles an independent collector that {startup} before startup resolves")
+            finally:
+                for process in (stop, collector):
+                    if process is not None and process.poll() is None:
+                        process.kill()
+                        process.wait(timeout=5)
+                if reader is not None:
+                    os.close(reader)
+
+
+def supervisor_process(root, retry_delay, **options):
+    return subprocess.Popen(
+        [str(binary), "supervise", "--out", str(root), "--no-model",
+         "--retry-delay", str(retry_delay), "--memorize-interval", "0"],
+        start_new_session=True, **options)
+
+
+def clean_process_group(process):
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait(timeout=5)
+
+
+with tempfile.TemporaryDirectory(prefix="collector-stop-backoff-") as directory:
+    root = Path(directory)
+    (root / "control.json").write_text(json.dumps({"recording": False, "summarizing": False}))
+    log = root / "test.log"
+    with log.open("w") as output:
+        supervisor = supervisor_process(root, retry_delay=10, stdout=output, stderr=output)
+        try:
+            collector = wait_for_record(root, supervisor, supervisor=True)
+            os.kill(collector["pid"], signal.SIGKILL)
+            wait_until(lambda: "秒后重启" in log.read_text(), "supervisor never entered restart backoff")
+            duplicate = supervisor_process(root, retry_delay=10, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                stdout, _ = duplicate.communicate(timeout=3)
+                assert duplicate.returncode == 0 and "已有监督实例" in stdout.decode()
+            finally:
+                clean_process_group(duplicate)
+            assert pid_is_gone(collector["pid"])
+            stopped = command(root, "--stop")
+            assert stopped.returncode == 0, stopped.stderr
+            assert supervisor.wait(timeout=3) == 0, "supervisor did not stop during backoff"
+            assert "已重启" not in log.read_text()
+            print("PASS: restart backoff remains exclusive and can be stopped")
+        finally:
+            clean_process_group(supervisor)
+
+
+with tempfile.TemporaryDirectory(prefix="collector-term-") as directory:
+    root = Path(directory)
+    (root / "control.json").write_text('{"recording": false, "summarizing": false}')
+    for supervised in (False, True):
+        process = (supervisor_process(root, retry_delay=10) if supervised else
+                   subprocess.Popen([str(binary), "collect", "--out", str(root)], start_new_session=True))
+        try:
+            wait_for_record(root, process, supervisor=supervised)
+            process.terminate()
+            assert process.wait(timeout=5) == 0
+            assert not (root / "collector.pid").exists()
+            assert not (root / "supervisor.pid").exists()
+        finally:
+            clean_process_group(process)
+    assert len(list((root / "segments").glob("*/metadata.json"))) == 2
+    print("PASS: SIGTERM seals both standalone and supervised collection")
+
+
+with tempfile.TemporaryDirectory(prefix="collector-detach-") as directory:
+    root = Path(directory)
+    (root / "control.json").write_text('{"recording": false, "summarizing": false}')
+    started = command(root, "supervise", "--daemon", "--no-model")
+    assert started.returncode == 0, started.stderr
+    try:
+        assert (root / "supervisor.pid").exists(), "daemon reported success before publishing identity"
+        stopped = command(root, "--stop")
+        assert stopped.returncode == 0, stopped.stderr
+        assert not (root / "supervisor.pid").exists()
+        assert not (root / "collector.pid").exists()
+    finally:
+        command(root, "--stop")
+    print("PASS: daemon can be stopped immediately after startup")
+
+
+with tempfile.TemporaryDirectory(prefix="collector-parent-killed-") as directory:
+    root = Path(directory)
+    (root / "control.json").write_text(json.dumps({"recording": False, "summarizing": False}))
+    supervisor = supervisor_process(root, retry_delay=0.2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        collector = wait_for_record(root, supervisor, supervisor=True)
+        supervisor.kill()
+        assert supervisor.wait(timeout=3) == -signal.SIGKILL
+        wait_until(lambda: pid_is_gone(collector["pid"]), "collector survived its supervisor")
+        assert list((root / "segments").glob("*/metadata.json")), "collector did not seal on parent loss"
+        assert not (root / "collector.pid").exists()
+        print("PASS: collector seals and exits after supervisor SIGKILL")
+    finally:
+        clean_process_group(supervisor)
 
 
 with tempfile.TemporaryDirectory(prefix="collector-supervisor-") as directory:
@@ -179,10 +348,11 @@ with tempfile.TemporaryDirectory(prefix="collector-close-failure-") as directory
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                   start_new_session=True)
     try:
-        identity = wait_for_record(root, supervisor, supervisor=True)
+        wait_for_record(root, supervisor, supervisor=True)
         segment = next((root / "segments").iterdir())
         (segment / "metadata.json").mkdir()
-        os.kill(identity["pid"], signal.SIGINT)
+        stopped = command(root, "--stop")
+        assert stopped.returncode == 74, stopped.stderr
         assert supervisor.wait(timeout=8) == 74, "failed stop was treated as success or restarted"
         assert "封口失败" in (root / "collector.log").read_text()
         assert not (root / "collector.pid").exists()
@@ -222,9 +392,7 @@ class ModelProbe(http.server.BaseHTTPRequestHandler):
         pass
 
 
-with tempfile.TemporaryDirectory(prefix="collector-offline-") as directory:
-    root = Path(directory)
-    (root / "control.json").write_text(json.dumps({"recording": False, "summarizing": True}))
+def seed_segment(root):
     segment_id = "2020-01-01T00-00-00Z"
     segment = root / "segments" / segment_id
     segment.mkdir(parents=True)
@@ -235,6 +403,13 @@ with tempfile.TemporaryDirectory(prefix="collector-offline-") as directory:
         "app": {"name": "Example Editor", "bundleIdentifier": "test.editor"},
         "window": {"title": "Synthetic document"}
     }) + "\n")
+    return segment_id
+
+
+with tempfile.TemporaryDirectory(prefix="collector-offline-") as directory:
+    root = Path(directory)
+    (root / "control.json").write_text(json.dumps({"recording": False, "summarizing": True}))
+    segment_id = seed_segment(root)
     server = http.server.HTTPServer(("127.0.0.1", 0), ModelProbe)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -275,6 +450,109 @@ with tempfile.TemporaryDirectory(prefix="collector-offline-") as directory:
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+class WaitingModel(ModelProbe):
+    started = threading.Event()
+    release = threading.Event()
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self.started.set()
+        self.release.wait(timeout=15)
+
+
+with tempfile.TemporaryDirectory(prefix="collector-generation-parent-killed-") as directory:
+    root = Path(directory)
+    (root / "control.json").write_text('{"recording": false, "summarizing": true}')
+    seed_segment(root)
+    server = http.server.HTTPServer(("127.0.0.1", 0), WaitingModel)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    (root / "model.json").write_text(json.dumps({
+        "baseURL": f"http://127.0.0.1:{server.server_port}/v1",
+        "model": "synthetic", "requiresAPIKey": False
+    }))
+    supervisor = subprocess.Popen([str(binary), "supervise", "--out", str(root)],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                  start_new_session=True)
+    try:
+        collector = wait_for_record(root, supervisor, supervisor=True)
+        assert WaitingModel.started.wait(timeout=8), "synthetic model request never started"
+        worker = int((root / ".locks" / "memorize.lock").read_text().split()[1])
+        supervisor.kill()
+        assert supervisor.wait(timeout=3) == -signal.SIGKILL
+        assert not WaitingModel.release.is_set()
+        for pid in (collector["pid"], worker):
+            wait_until(lambda: pid_is_gone(pid), f"supervised process {pid} survived a blocked request")
+        print("PASS: parent loss stops a generation worker with a blocked model request")
+    finally:
+        clean_process_group(supervisor)
+        WaitingModel.release.set()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+for stopping in ("--stop", "SIGKILL"):
+    with tempfile.TemporaryDirectory(prefix="collector-backup-stopped-") as directory:
+        root = Path(directory)
+        (root / "control.json").write_text('{"recording": false, "summarizing": true, "flushRequested": true}')
+        (root / "backup.json").write_text('{"repository": "synthetic/private", "enabled": true}')
+        helper = root / "gh"
+        helper.write_text(
+            '#!/bin/sh\n'
+            'printf "synthetic stdout\\n"\n'
+            'printf "synthetic stderr\\n" >&2\n'
+            '/bin/sleep 60 &\n'
+            f'printf "%s %s %s\\n" "$PPID" "$$" "$!" > "{root / "helper.pids"}"\n'
+            'wait\n'
+        )
+        helper.chmod(0o700)
+        log = root / "test.log"
+        pids = []
+        output_paths = set()
+        with log.open("w") as output:
+            supervisor = supervisor_process(root, retry_delay=0.2, stdout=output, stderr=output,
+                                            env=dict(os.environ, PATH=f"{root}:{os.environ['PATH']}"))
+            try:
+                collector = wait_for_record(root, supervisor, supervisor=True)
+                pid_file = root / "helper.pids"
+                wait_until(lambda: pid_file.exists() and len(pid_file.read_text().split()) == 3,
+                           "supervised backup never launched its helper", timeout=15)
+                pids = [int(pid) for pid in pid_file.read_text().split()]
+                assert all(not pid_is_gone(pid) for pid in pids)
+                files = subprocess.run(["/usr/sbin/lsof", "-a", "-p", str(pids[1]), "-d", "1,2", "-Ffn"],
+                                       check=True, capture_output=True, text=True, timeout=5).stdout
+                assert {"f1", "f2"} <= set(files.splitlines()), "helper output descriptors were not observed"
+                for line in files.splitlines():
+                    if line.startswith("n/"):
+                        path = Path(line[1:])
+                        if path.parent.resolve() == Path(tempfile.gettempdir()).resolve():
+                            output_paths.add(path)
+                if stopping == "SIGKILL":
+                    supervisor.kill()
+                    assert supervisor.wait(timeout=3) == -signal.SIGKILL
+                else:
+                    stopped = command(root, "--stop")
+                    assert stopped.returncode == 0, stopped.stderr
+                    assert supervisor.wait(timeout=3) == 0
+                for pid in [collector["pid"], *pids]:
+                    wait_until(lambda: pid_is_gone(pid), f"process {pid} survived supervisor stop")
+                assert list((root / "segments").glob("*/metadata.json"))
+                assert not any(path.exists() for path in output_paths), "backup helper left output on disk"
+                print(f"PASS: {stopping} closes the backup, its helper process group, and its output")
+            except AssertionError:
+                print(log.read_text()[-2500:], file=sys.stderr)
+                raise
+            finally:
+                clean_process_group(supervisor)
+                for pid in pids:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                for path in output_paths:
+                    path.unlink(missing_ok=True)
 
 with tempfile.TemporaryDirectory(prefix="collector-reconfigure-") as directory:
     root = Path(directory)

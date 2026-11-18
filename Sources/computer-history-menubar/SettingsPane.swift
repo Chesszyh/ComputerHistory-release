@@ -125,7 +125,7 @@ struct SummarySettingsPane: View {
                 model.summaryStage = $0
                 model.loadSummaryDraft()
             })) {
-                ForEach(SummarySettings.Stage.allCases.filter { $0 != .sixHour }, id: \.self) { Text($0.rawValue).tag($0) }
+                ForEach(SummarySettings.Stage.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.menu)
 
@@ -291,7 +291,7 @@ struct SummarySettingsPane: View {
                     SettingsDisclosure("按任务选择模型") {
                         ForEach(ModelTaskConfiguration.tasks, id: \.self) { task in
                             VStack(alignment: .leading, spacing: 5) {
-                                Text(["10min": "十分钟记忆", "narrative-grouping": "活动归属", "narrative": "活动概览", "daily": "日报", "weekly": "周报", "6h": "六小时汇总"][task] ?? task)
+                                Text(["10min": "十分钟记忆", "narrative-grouping": "活动归属", "narrative": "活动概览", "daily": "日报", "weekly": "周报"][task] ?? task)
                                 Picker("模型组", selection: Binding(get: { model.modelTasks[task]?.groupID ?? "" }, set: { id in
                                     var options = model.modelTasks[task] ?? .init()
                                     options.groupID = id.isEmpty ? nil : id
@@ -323,7 +323,8 @@ struct SummarySettingsPane: View {
                             Button("新增模型组") { model.addModelGroup() }
                             Spacer()
                             Button("删除模型组", role: .destructive) { model.removeEditingModelGroup() }
-                                .disabled(model.modelGroups.count < 2 || model.editingGroupID == model.primaryGroupID || model.editingGroupID == model.fallbackGroupID || model.modelTasks.values.contains { $0.groupID == model.editingGroupID })
+                                .disabled(model.modelGroups.count < 2)
+                                .accessibilityIdentifier("model-group-delete")
                         }
                         if let index = model.modelGroups.firstIndex(where: { $0.id == model.editingGroupID }) {
                             modelGroupEditor(index)

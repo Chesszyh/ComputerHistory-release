@@ -31,10 +31,12 @@ public struct DeepSeekClient: Sendable {
         case transport(String)
         case budgetExceeded(String)
         case sleepDeferred
+        case previouslyRejectedContext(requestID: String)
 
         public var description: String {
             switch self {
             case .sleepDeferred: return "系统休眠或合盖，总结等待唤醒后继续。"
+            case .previouslyRejectedContext: return "该模型已拒绝相同请求，超出上下文上限。"
             case .missingAPIKey:
                 return "未找到模型密钥。请在菜单栏的模型设置中填写，或设置 DEEPSEEK_API_KEY 环境变量。"
             case .http(let status, let body):
@@ -80,7 +82,33 @@ public struct DeepSeekClient: Sendable {
     private let timeout: TimeInterval
     private let settings: ModelSettings?
     private let fallbackAPIKey: String
+    private var spendingLimit: SpendingLimit?
     var powerState: GenerationPowerState = .shared
+    var memoryContextRejections: MemoryContextRejections?
+
+    private struct SpendingLimit: Sendable {
+        let currency: String
+        let daily: Double?
+        let monthly: Double?
+
+        init?(settings: ModelSettings?) {
+            guard let settings, let pricing = settings.pricing,
+                  settings.dailyBudget != nil || settings.monthlyBudget != nil else { return nil }
+            currency = pricing.currency
+            daily = settings.dailyBudget
+            monthly = settings.monthlyBudget
+        }
+
+        func check(root: URL, at started: Date) throws {
+            let totals = try ModelBudgetIndex.totals(root: root, currency: currency, at: started)
+            if let daily, totals.daily >= daily {
+                throw ClientError.budgetExceeded("已达到今日总结预算（\(currency) \(daily)）")
+            }
+            if let monthly, totals.monthly >= monthly {
+                throw ClientError.budgetExceeded("已达到本月总结预算（\(currency) \(monthly)）")
+            }
+        }
+    }
 
     public init(apiKey: String,
                 baseURL: URL = DeepSeekClient.defaultBaseURL,
@@ -92,6 +120,7 @@ public struct DeepSeekClient: Sendable {
         self.model = model
         self.timeout = timeout
         self.settings = settings; self.fallbackAPIKey = fallbackAPIKey
+        self.spendingLimit = SpendingLimit(settings: settings)
     }
 
     /// 从环境变量构造。密钥缺失时抛错，避免静默降级成"生成成功但内容为空"。
@@ -163,6 +192,7 @@ public struct DeepSeekClient: Sendable {
             var routed = DeepSeekClient(apiKey: key, baseURL: config.baseURL, model: config.model,
                 timeout: config.timeoutSeconds ?? ModelSettings.defaultTimeoutSeconds, settings: config, fallbackAPIKey: fallbackAPIKey)
             routed.powerState = powerState
+            routed.memoryContextRejections = memoryContextRejections
             return try routed.complete(system: system, user: user, maxTokens: maxTokens, temperature: temperature,
                 reasoningEffort: reasoningEffort, requiresJSONObject: requiresJSONObject, recordingAt: root, task: task, sources: sources)
         }
@@ -184,8 +214,11 @@ public struct DeepSeekClient: Sendable {
             try powerState.check(powerRevision)
             guard error is ClientError else { throw error }
             let primaryError = String(describing: error)
+            let rejectedPrimaryID: String?
+            if case ClientError.previouslyRejectedContext(let requestID) = error { rejectedPrimaryID = requestID }
+            else { rejectedPrimaryID = nil }
             guard let secondary = settings?.fallback else {
-                if let root { try ModelHealth.record(root: root, error: primaryError, usedFallback: false) }
+                if let root, rejectedPrimaryID == nil { try ModelHealth.record(root: root, error: primaryError, usedFallback: false) }
                 throw error
             }
             let config = ModelSettings(baseURL: secondary.baseURL, model: secondary.model,
@@ -199,7 +232,9 @@ public struct DeepSeekClient: Sendable {
                 var fallback = DeepSeekClient(apiKey: key, baseURL: secondary.baseURL, model: secondary.model,
                     timeout: secondary.timeoutSeconds ?? ModelSettings.defaultTimeoutSeconds, settings: config)
                 fallback.powerState = powerState
-                let response = try fallback.completeWithLengthRetry(id: UUID().uuidString, fallbackOf: id,
+                fallback.spendingLimit = spendingLimit
+                fallback.memoryContextRejections = memoryContextRejections
+                let response = try fallback.completeWithLengthRetry(id: UUID().uuidString, fallbackOf: rejectedPrimaryID ?? id,
                     system: system, user: user, maxTokens: maxTokens, temperature: temperature, requiresJSONObject: requiresJSONObject,
                     recordingAt: root, task: task, sources: sources)
                 guard !response.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, response.finishReason != "length" else {
@@ -207,8 +242,11 @@ public struct DeepSeekClient: Sendable {
                 }
                 if let root { try ModelHealth.record(root: root, error: nil, usedFallback: true) }
                 return response
+            } catch ClientError.budgetExceeded(let message) {
+                throw ClientError.budgetExceeded(message)
             } catch {
                 if case ClientError.sleepDeferred = error { throw error }
+                if rejectedPrimaryID != nil, case ClientError.previouslyRejectedContext = error { throw error }
                 try powerState.check(powerRevision)
                 let message = "主模型：\(primaryError)；降级模型：\(error)"
                 if let root { try ModelHealth.record(root: root, error: message, usedFallback: true) }
@@ -240,25 +278,20 @@ public struct DeepSeekClient: Sendable {
                          sources: [String] = []) throws -> Completion {
         guard let powerRevision = powerState.snapshot() else { throw ClientError.sleepDeferred }
         try powerState.check(powerRevision)
+        let budget = outputTokenBudget ?? maxTokens
+        let endpoint = baseURL.absoluteString
+        func contextKey() -> String {
+            MemoryContextRejections.key(endpoint: endpoint, model: model, outputBudget: budget, system: system, input: user)
+        }
+        let knownRejections = memoryContextRejections?.load() ?? [:]
+        let knownKey = knownRejections.isEmpty ? nil : contextKey()
+        if let knownKey, let rejectedID = knownRejections[knownKey], memoryContextRejections?.retriesRejectedRequests == false {
+            throw ClientError.previouslyRejectedContext(requestID: rejectedID)
+        }
         let started = Date()
         let startedUptime = ProcessInfo.processInfo.systemUptime
         let pricing = settings?.pricing
-        if let root, let settings, let pricing,
-           settings.dailyBudget != nil || settings.monthlyBudget != nil {
-            let dir = root.appendingPathComponent("requests")
-            let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-            let previous = files.compactMap { try? ModelRequest.load(url: $0) }
-                .filter { $0.pricing?.currency == pricing.currency }
-            let cal = Calendar.current
-            let today = previous.filter { cal.isDate($0.startedAt, inSameDayAs: started) }.compactMap(\.estimatedCost).reduce(0, +)
-            let month = previous.filter { cal.isDate($0.startedAt, equalTo: started, toGranularity: .month) }.compactMap(\.estimatedCost).reduce(0, +)
-            if let cap = settings.dailyBudget, today >= cap {
-                throw ClientError.budgetExceeded("已达到今日总结预算（\(pricing.currency) \(cap)）")
-            }
-            if let cap = settings.monthlyBudget, month >= cap {
-                throw ClientError.budgetExceeded("已达到本月总结预算（\(pricing.currency) \(cap)）")
-            }
-        }
+        if let root { try spendingLimit?.check(root: root, at: started) }
         try ModelTransport.validate(baseURL, allowInsecureHTTP: settings?.allowInsecureHTTP == true)
         var request = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))
         request.httpMethod = "POST"
@@ -274,18 +307,18 @@ public struct DeepSeekClient: Sendable {
         ]
         if !effort.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { payload["reasoning_effort"] = effort.trimmingCharacters(in: .whitespacesAndNewlines) }
         if settings?.requestStyle == .reasoning {
-            payload["max_completion_tokens"] = outputTokenBudget ?? maxTokens
+            payload["max_completion_tokens"] = budget
         } else {
-            payload["max_tokens"] = outputTokenBudget ?? maxTokens
+            payload["max_tokens"] = budget
             payload["temperature"] = temperature
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
         var record = ModelRequest(id: id, startedAt: started,
-            model: model, endpoint: baseURL.absoluteString, task: task, sources: sources,
+            model: model, endpoint: endpoint, task: task, sources: sources,
             status: "running", system: system, input: user, pricing: pricing, fallbackOf: fallbackOf)
         record.retryOf = retryOf
-        record.outputTokenBudget = payload["max_tokens"] as? Int ?? payload["max_completion_tokens"] as? Int
+        record.outputTokenBudget = budget
         record.worker = CollectorProcessIdentity.read(pid: getpid())
         // 请求前落盘失败就不外发，避免产生无法查询的付费请求。
         if let root { try record.save(root: root) }
@@ -350,20 +383,26 @@ public struct DeepSeekClient: Sendable {
             record.finishReason = completion.finishReason
             record.status = completion.finishReason == "length" ? "truncated" : (completion.text.isEmpty ? "empty" : "success")
             record.estimatedCost = completion.usage.flatMap { usage in pricing.map { $0.estimate(usage) } }
-            if requiresJSONObject, completion.finishReason != "length",
-               (try? JSONSerialization.jsonObject(with: Data(completion.text.utf8))) as? [String: Any] == nil {
-                let error = ClientError.malformedResponse("模型输出不是完整 JSON 对象")
+            let invalidJSON = requiresJSONObject && completion.finishReason != "length"
+                && (try? JSONSerialization.jsonObject(with: Data(completion.text.utf8))) as? [String: Any] == nil
+            let error = ClientError.malformedResponse("模型输出不是完整 JSON 对象")
+            if invalidJSON {
                 record.status = "invalid"; record.error = String(describing: error)
-                if let root { try record.save(root: root) }
-                throw error
             }
             if let root { try record.save(root: root) }
+            if let knownKey, knownRejections[knownKey] != nil {
+                try memoryContextRejections?.update(key: knownKey, rejectedRequestID: nil)
+            }
+            if invalidJSON { throw error }
             return completion
         case .failure(let error):
             if case ClientError.sleepDeferred = error { record.status = "deferred" }
             else { record.status = "failed" }
             record.error = String(describing: error)
             if let root { try record.save(root: root) }
+            if let memoryContextRejections, MemoryContextRejections.isContextLimit(error) {
+                try memoryContextRejections.update(key: knownKey ?? contextKey(), rejectedRequestID: retryOf ?? id)
+            }
             throw error
         }
     }

@@ -24,6 +24,7 @@ public struct TrayTimelineItem: Codable, Sendable, Equatable, Identifiable {
     public var taskTitle: String? = nil
     public var leafItems: [TrayTimelineItem] { children?.flatMap(\.leafItems) ?? [self] }
     public var incidentalCount: Int { sourceIncidental?.values.reduce(0) { $0 + $1.count } ?? 0 }
+    var isPassive: Bool { !isAway && (noClearActivity == true || title == ActivityEvidence.noActivityTitle) }
     public var isIncidentalOnly: Bool {
         guard let activities = sourceActivities, !activities.isEmpty else { return false }
         return activities.allSatisfy { name, numbers in Set(numbers).isSubset(of: sourceIncidental?[name] ?? []) }
@@ -54,6 +55,12 @@ public struct TraySnapshot: Sendable {
 /// 独立 actor 提供串行磁盘执行边界；快照只携带展示字段，不携带历史正文。
 public actor TraySnapshotLoader {
     private typealias Stamp = FileStamp
+    private struct EventFile {
+        var url: URL
+        var stamp: Stamp
+        var firstEventAt: Date?
+        var endedAt: Date?
+    }
     private struct Counter {
         var stamp: Stamp
         var offset: UInt64
@@ -70,6 +77,8 @@ public actor TraySnapshotLoader {
     private var previousNarrative: [ActivityNarrative.Item] = []
     private var previousDeletions = TimelineDeletions()
     private var previousAway = AwayPeriods()
+    private var previousBlockedAwayGaps: Set<ClosedRange<Date>> = []
+    private var interactionsByFile: [URL: (stamp: Stamp, times: [Date]?)] = [:]
     private var previousTimeZone: TimeZone?
     private var previousEdits = TimelineEdits()
     private var previousCorrections = TimelineCorrections()
@@ -147,6 +156,7 @@ public actor TraySnapshotLoader {
         var sealed: [String] = []
         var earliest: Date?, latest: Date?, lastWrite: Date?
         var seen: Set<URL> = []
+        var eventFilesByBucket: [Date: [EventFile]] = [:]
         for dir in dirs {
             let url = EventArchive.eventsURL(in: dir)
             guard let current = stamp(url) else {
@@ -161,6 +171,8 @@ public actor TraySnapshotLoader {
             let written = url.pathExtension == "gz" ? (metadata?.endedAt ?? current.modified) : current.modified
             lastWrite = max(lastWrite ?? written, written)
             if let date = SegmentClock.date(fromSegmentID: dir.lastPathComponent) {
+                eventFilesByBucket[date, default: []].append(.init(
+                    url: url, stamp: current, firstEventAt: metadata?.firstEventAt, endedAt: metadata?.endedAt))
                 earliest = min(earliest ?? date, date)
                 latest = max(latest ?? date, date)
             }
@@ -249,12 +261,15 @@ public actor TraySnapshotLoader {
                                            title: $0.title, summary: $0.summary, apps: $0.applications, activityFragmentCount: $0.activityFragmentCount) }
         let deletions = (try? TimelineDeletions.load(root: root)) ?? previousDeletions
         let away = AwayPeriods.load(root: root)
+        let (blockedAwayGaps, interactionBytes) = blockedGaps(away: away, eventFilesByBucket: eventFilesByBucket)
+        bytesRead += interactionBytes
+        let awayChanged = away != previousAway || blockedAwayGaps != previousBlockedAwayGaps
         let mode = (try? SummarySettings.load(root: root))?.timelineMode ?? previousTimelineMode ?? .continuous
         let edits = (try? TimelineEdits.load(root: root)) ?? previousEdits
         let corrections = (try? TimelineCorrections.load(root: root)) ?? previousCorrections
         if edits != previousEdits || corrections != previousCorrections { contentVersion += 1 }
-        if away != previousAway || deletions != previousDeletions { contentVersion += 1 }
-        if edits != previousEdits || corrections != previousCorrections || deletions != previousDeletions || away != previousAway || sources != previousTimelineEntries || narrative.items != previousNarrative || previousTimeZone != timeZone || previousTimelineMode != mode {
+        if awayChanged || deletions != previousDeletions { contentVersion += 1 }
+        if edits != previousEdits || corrections != previousCorrections || deletions != previousDeletions || awayChanged || sources != previousTimelineEntries || narrative.items != previousNarrative || previousTimeZone != timeZone || previousTimelineMode != mode {
             if previousTimelineMode != mode { contentVersion += 1 }
             var displayNarrative = narrative
             let lookup = Dictionary(uniqueKeysWithValues: index.entries.map { ($0.id, $0) })
@@ -283,13 +298,8 @@ public actor TraySnapshotLoader {
                 items = items.map { edits.applying(to: $0, mode: mode, index: index) }
                 return items.isEmpty ? nil : TrayTimelineGroup(day: group.day, items: items)
             }
-            let cards = TimelineLayout.cards(groups.flatMap(\.items))
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyy-MM-dd"
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.timeZone = timeZone
-            let days = Dictionary(grouping: cards, by: { formatter.string(from: $0.timestamp) })
-            groups = days.keys.sorted(by: >).map { TrayTimelineGroup(day: $0, items: days[$0]!) }
+            groups = Self.displayGroups(items: groups.flatMap(\.items), periods: away.periods,
+                                        blockedGaps: blockedAwayGaps, timeZone: timeZone)
             previousCorrections = corrections
             previousEdits = edits
             previousDeletions = deletions
@@ -298,6 +308,7 @@ public actor TraySnapshotLoader {
             previousTimeZone = timeZone
             previousTimelineMode = mode
             previousAway = away
+            previousBlockedAwayGaps = blockedAwayGaps
         }
         let data = CollectorStatus.DataStats(segmentCount: count, eventCount: events,
                     eventCountIncomplete: incomplete, bytes: bytes, earliest: earliest, latest: latest,
@@ -307,25 +318,96 @@ public actor TraySnapshotLoader {
                      awayReason: away.startedAt.map { _ in away.startedReason ?? .locked },
                      inputListening: InputListeningStatus.load(root: root))
         return TraySnapshot(status: status, control: CollectorControl.load(root: root),
-                            groups: Self.addingOpenAway(to: groups, away: away, timeZone: timeZone),
+                            groups: Self.addingOpenAway(to: groups, away: away, blockedGaps: blockedAwayGaps, timeZone: timeZone),
                             contentVersion: contentVersion, timelineMode: mode, deletedSummaries: deletedSummaries, eventBytesRead: bytesRead, memoriesParsed: parsed, invalidCorrections: corrections.invalidCount(index: index))
     }
 
+    private static let awayGapTolerance: TimeInterval = 60
+
+    private func blockedGaps(away: AwayPeriods, eventFilesByBucket: [Date: [EventFile]])
+        -> (Set<ClosedRange<Date>>, Int) {
+        var boundaries = away.periods.filter { $0.end >= $0.start }
+        if let start = away.startedAt { boundaries.append(.init(start: start, end: start)) }
+        var end = Date.distantPast
+        var blocked: Set<ClosedRange<Date>> = []
+        var bytes = 0
+        var usedFiles: Set<URL> = []
+        for period in boundaries.sorted(by: { $0.start < $1.start }) {
+            if period.start > end, period.start.timeIntervalSince(end) <= Self.awayGapTolerance {
+                let gap = end...period.start
+                // Historical event timestamps can round down even when away boundaries keep subseconds.
+                let recordedGap = Date(timeIntervalSince1970: floor(end.timeIntervalSince1970))...period.start
+                let buckets = Set([SegmentClock.alignedStart(for: end), SegmentClock.alignedStart(for: period.start)])
+                for bucket in buckets {
+                    for file in eventFilesByBucket[bucket] ?? [] {
+                        // Legacy sealed metadata can round down to the second.
+                        if let end = file.endedAt, end.addingTimeInterval(1) < gap.lowerBound { continue }
+                        if let first = file.firstEventAt, first > gap.upperBound { continue }
+                        usedFiles.insert(file.url)
+                        if interactionsByFile[file.url]?.stamp != file.stamp {
+                            let events = try? EventArchive.readEvents(at: file.url)
+                            let times = events?.filter(ActivityEvidence.isMeaningfulInteraction).map(\.timestamp)
+                            interactionsByFile[file.url] = (file.stamp, times)
+                            bytes += Int(file.stamp.size)
+                        }
+                        if interactionsByFile[file.url]?.times?.contains(where: recordedGap.contains) != false {
+                            blocked.insert(gap)
+                        }
+                    }
+                }
+            }
+            end = max(end, period.end)
+        }
+        interactionsByFile = interactionsByFile.filter { usedFiles.contains($0.key) }
+        return (blocked, bytes)
+    }
+
     private static func addingOpenAway(to groups: [TrayTimelineGroup], away: AwayPeriods,
-                                       timeZone: TimeZone) -> [TrayTimelineGroup] {
+                                       blockedGaps: Set<ClosedRange<Date>>, timeZone: TimeZone) -> [TrayTimelineGroup] {
         let now = Date()
         guard let start = away.startedAt, now.timeIntervalSince(start) >= 60 else { return groups }
+        // The visible endpoint changes by the minute; it must not invalidate historical sources.
+        let minute = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970 / 60) * 60)
+        let open = AwayPeriods.Period(start: start, end: max(start.addingTimeInterval(60), minute),
+                                     reason: away.startedReason)
+        let activities = groups.flatMap(\.items).flatMap(\.leafItems).filter { !$0.isAway }
+        return displayGroups(items: activities, periods: away.periods + [open], blockedGaps: blockedGaps, timeZone: timeZone)
+    }
+
+    private static func displayGroups(items: [TrayTimelineItem], periods: [AwayPeriods.Period],
+                                      blockedGaps: Set<ClosedRange<Date>>, timeZone: TimeZone) -> [TrayTimelineGroup] {
+        let activities = items.filter { !$0.isPassive }
+        var merged: [(start: Date, end: Date, reasons: Set<AwayPeriods.Reason>)] = []
+        for period in periods.filter({ $0.end >= $0.start }).sorted(by: { $0.start < $1.start }) {
+            let reason = period.reason ?? .locked
+            if let last = merged.last,
+               period.start.timeIntervalSince(last.end) <= awayGapTolerance {
+                let canBridge = period.start <= last.end || (
+                    !blockedGaps.contains(last.end...period.start)
+                    && !activities.contains { $0.timestamp <= period.start && $0.endTimestamp >= last.start }
+                )
+                if canBridge {
+                    merged[merged.count - 1].end = max(last.end, period.end)
+                    merged[merged.count - 1].reasons.insert(reason)
+                    continue
+                }
+            }
+            merged.append((period.start, period.end, [reason]))
+        }
+        let awayItems = merged.filter { $0.end.timeIntervalSince($0.start) >= 60 }.map { period in
+            let locked = period.reasons.contains(.locked)
+            let summary = period.reasons.count > 1 ? "长时间无操作、锁屏或休眠"
+                : (locked ? AwayPeriods.Reason.locked : .idle).summary
+            return TrayTimelineItem(id: "away-\(period.start.timeIntervalSince1970)", timestamp: period.start,
+                title: locked ? "离开电脑" : "用户离开电脑", summary: summary, apps: [],
+                isNarrative: false, memoryFiles: [], coveredCount: 1, eventCount: nil,
+                endTimestamp: period.end, isAway: true)
+        }
+        let cards = TimelineLayout.cards(activities + awayItems)
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = timeZone
-        // The visible endpoint changes by the minute; it must not invalidate historical sources.
-        let end = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970 / 60) * 60)
-        let item = TrayTimelineItem(id: "away-\(start.timeIntervalSince1970)", timestamp: start,
-            title: away.startedReason == .idle ? "用户离开电脑" : "离开电脑",
-            summary: (away.startedReason ?? .locked).summary, apps: [], isNarrative: false,
-            memoryFiles: [], coveredCount: 1, eventCount: nil, endTimestamp: max(start, end), isAway: true)
-        let cards = TimelineLayout.cards(groups.flatMap(\.items) + [item])
         let days = Dictionary(grouping: cards, by: { formatter.string(from: $0.timestamp) })
         return days.keys.sorted(by: >).map { .init(day: $0, items: days[$0]!) }
     }
@@ -406,18 +488,7 @@ public actor TraySnapshotLoader {
                 restoredNarrative.items.forEach(appendNarrative)
             } else { byDay[date.string(from: item.timestamp), default: []].append(item) }
         }
-        for period in away.periods where period.end.timeIntervalSince(period.start) >= 60 {
-            byDay[date.string(from: period.start), default: []].append(TrayTimelineItem(
-                id: "away-\(period.start.timeIntervalSince1970)", timestamp: period.start,
-                title: period.reason == .idle ? "用户离开电脑" : "离开电脑", summary: (period.reason ?? .locked).summary, apps: [],
-                isNarrative: false, memoryFiles: [], coveredCount: 1, eventCount: nil,
-                endTimestamp: period.end, isAway: true))
-        }
-        let chronological: [TrayTimelineItem] = byDay.values.flatMap { $0 }
-        let days = Dictionary(grouping: chronological, by: { date.string(from: $0.timestamp) })
-        return days.keys.sorted(by: >).map { day in
-            TrayTimelineGroup(day: day, items: days[day]!)
-        }
+        return byDay.keys.sorted(by: >).map { TrayTimelineGroup(day: $0, items: byDay[$0]!) }
     }
 }
 
