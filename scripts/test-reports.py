@@ -101,6 +101,24 @@ with tempfile.TemporaryDirectory(prefix='report-test-') as directory:
         assert len(calls)==1
         report=root/'reports/daily/2020-01-01.json';original=report.read_bytes()
         run('report','--day','2020-01-01');assert len(calls)==1
+        with (root/'.locks/report.lock').open('a') as automatic:
+            fcntl.flock(automatic, fcntl.LOCK_EX)
+            run('report','--day','2020-01-01')
+        with (root/'.locks/report-daily-2020-01-01.lock').open('a') as selected:
+            fcntl.flock(selected, fcntl.LOCK_EX)
+            busy = run('report','--day','2020-01-01',ok=False)
+            assert '正在生成' in busy.stderr
+            waiter = subprocess.Popen([binary, 'report', '--day', '2020-01-01', '--out', root, '--wait-lock'],
+                                      env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                time.sleep(.4)
+                assert waiter.poll() is None
+                fcntl.flock(selected, fcntl.LOCK_UN)
+                result = waiter.communicate(timeout=10)
+                assert waiter.returncode == 0 and len(calls) == 1, result
+            finally:
+                if waiter.poll() is None:
+                    waiter.kill(); waiter.communicate()
         run('export','--day','2020-01-01','--material','--file',str(base/'material.md'))
         material=(base/'material.md').read_text()
         assert '合成活动' in material and 'RAW PRIVATE' not in material and '/private/synthetic' not in material

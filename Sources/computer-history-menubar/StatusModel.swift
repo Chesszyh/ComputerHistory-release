@@ -28,6 +28,7 @@ final class StatusModel: ObservableObject {
     @Published private(set) var reportText = ""
     @Published private(set) var reportMaterial = ""
     @Published private(set) var reportBusy = false
+    @Published private(set) var reportLoading = false
     @Published var reportMessage: String?
     @Published var reportError: String?
     @Published private(set) var effectiveBackupEnabled = false
@@ -36,6 +37,7 @@ final class StatusModel: ObservableObject {
     @Published private(set) var backupLoaded = false
     @Published private(set) var backupMessage = ""
     private var reportTask: Task<Void, Never>?
+    private var reportLoadTask: Task<Void, Never>?
     @Published var showsUsage = false
     @Published var requestDetail: ModelRequest?
     @Published var requestError: String?
@@ -309,6 +311,7 @@ final class StatusModel: ObservableObject {
         liveTask?.cancel()
         detailTask?.cancel()
         reportTask?.cancel()
+        reportLoadTask?.cancel()
         timelineTask?.cancel()
         cancellables.removeAll()
     }
@@ -326,36 +329,33 @@ final class StatusModel: ObservableObject {
     func loadReports() {
         guard !reportBusy else { return }
         let root = root, period = ReportPeriod(kind: reportKind, date: reportDate)
-        reportBusy = true; reportError = nil; reportMessage = nil
-        reportTask = Task { [weak self] in
-            let result = await Task.detached { () -> (String, String, BackupSettings?, BackupStatus, String?) in
+        reportLoadTask?.cancel()
+        reportLoading = true; reportError = nil; reportMessage = nil
+        reportText = ""; reportMaterial = ""
+        reportLoadTask = Task { [weak self] in
+            let result = await Task.detached { () -> Result<String, Error> in
                 do {
-                    let settings = try BackupSettings.load(root: root)
                     let report = try ActivityReport.load(root: root, period: period)
-                    let material = (try? ActivityExport.aiMaterial(root: root, period: period)) ?? ""
-                    return (report?.markdown ?? "", material, settings, BackupStatus.load(root: root), nil)
-                } catch { return ("", "", nil, BackupStatus.load(root: root), String(describing: error)) }
+                    return .success(report?.markdown ?? "")
+                } catch { return .failure(error) }
             }.value
-            guard let self, !self.stopped else { return }
-            self.reportText = result.0; self.reportMaterial = result.1
-            self.backupRepository = result.2?.repository ?? ""
-            self.backupEnabled = result.2?.enabled ?? false
-            self.backupLoaded = result.4 == nil
-            self.reportError = result.4
-            if let error = result.3.error { self.backupMessage = error }
-            else if let date = result.3.lastSuccess {
-                self.backupMessage = "最近备份：" + date.formatted(date: .abbreviated, time: .shortened)
-            } else { self.backupMessage = "尚无成功备份" }
-            self.reportBusy = false
+            guard let self, !self.stopped, !Task.isCancelled else { return }
+            switch result {
+            case .success(let text): self.reportText = text
+            case .failure(let error): self.reportError = String(describing: error)
+            }
+            self.reportLoading = false
         }
     }
 
     func generateReport() {
-        runReportCommand(["report", "--kind", reportKind.rawValue, "--day", ReportPeriod.day(reportDate), "--overwrite"], message: "报告已生成")
+        var arguments = ["report", "--kind", reportKind.rawValue, "--day", ReportPeriod.day(reportDate), "--wait-lock"]
+        if !reportText.isEmpty { arguments.append("--overwrite") }
+        runReportCommand(arguments, message: "报告已生成")
     }
 
     func runReportCommand(_ arguments: [String], message: String) {
-        guard !reportBusy else { return }
+        guard !reportBusy, !reportLoading else { return }
         let root = root
         let binary = commandExecutable
         reportBusy = true; reportError = nil; reportMessage = nil
@@ -377,17 +377,41 @@ final class StatusModel: ObservableObject {
     }
 
     func copyReport(material: Bool) {
-        let text = material ? reportMaterial : reportText
-        guard !text.isEmpty else { return }
-        writeToPasteboard(text)
-        reportMessage = material ? "已复制给 AI 的材料" : "已复制报告"
+        withReportText(material: material) { model, text in
+            model.writeToPasteboard(text)
+            model.reportMessage = material ? "已复制给 AI 的材料" : "已复制报告"
+        }
     }
 
     func saveReport(to url: URL, material: Bool) {
-        do {
-            try ActivityExport.write(ActivityExport.formatted(material ? reportMaterial : reportText, format: url.pathExtension), to: url)
-            reportMessage = "已导出 \(url.lastPathComponent)"; reportError = nil
-        } catch { reportError = String(describing: error) }
+        withReportText(material: material) { model, text in
+            do {
+                try ActivityExport.write(ActivityExport.formatted(text, format: url.pathExtension), to: url)
+                model.reportMessage = "已导出 \(url.lastPathComponent)"; model.reportError = nil
+            } catch { model.reportError = String(describing: error) }
+        }
+    }
+
+    private func withReportText(material: Bool, action: @escaping (StatusModel, String) -> Void) {
+        guard !reportBusy, !reportLoading else { return }
+        if !material || !reportMaterial.isEmpty {
+            let text = material ? reportMaterial : reportText
+            if !text.isEmpty { action(self, text) }
+            return
+        }
+        let root = root, period = ReportPeriod(kind: reportKind, date: reportDate)
+        reportBusy = true; reportError = nil; reportMessage = nil
+        reportTask = Task { [weak self] in
+            let result = await Task.detached { Result { try ActivityExport.aiMaterial(root: root, period: period) } }.value
+            guard let self, !self.stopped, !Task.isCancelled else { return }
+            self.reportBusy = false
+            switch result {
+            case .success(let text):
+                self.reportMaterial = text
+                action(self, text)
+            case .failure(let error): self.reportError = String(describing: error)
+            }
+        }
     }
 
     func setBackupEnabled(_ enabled: Bool) {

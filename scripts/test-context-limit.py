@@ -26,7 +26,11 @@ class Model(http.server.BaseHTTPRequestHandler):
         request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         model = request['model']
         self.server.calls.append((self.path, request))
-        status, error = self.server.responses.get(model, (200, None))
+        is_report = request['messages'][-1]['content'].startswith('报告：')
+        if self.server.override:
+            status, error = self.server.override(request)
+        else:
+            status, error = (200, None) if is_report else self.server.responses.get(model, (200, None))
         payload = {'error': error} if error else {
             'choices': [{'message': {'content': '### 本次活动\n- **更新测试文档**：补充合成回归结果。'},
                          'finish_reason': 'stop'}],
@@ -90,6 +94,18 @@ def main(binary, server):
         assert len(list((root / 'requests').glob('*.json'))) == 2, 'skipped requests created usage records'
         assert run(root, 'report', '--day', '2020-01-01', ok=False) == [], 'report dependency resubmitted rejected material'
 
+        healthy = root / 'memories/2020-01-01T00-10-00Z-ABCD-10min-memory-summary.md'
+        healthy.write_text('---\ntitle: Synthetic\ndescription: Synthetic\ngeneration: model\n---\n'
+                           '### 本次活动\n- **核对测试文档**：HEALTHY_REPORT_SOURCE。\n')
+        requests = run(root, 'report', '--day', '2020-01-01', ok=True)
+        assert len(requests) == 1 and 'HEALTHY_REPORT_SOURCE' in requests[0]['messages'][-1]['content']
+        report = json.loads((root / 'reports/daily/2020-01-01.json').read_text())
+        assert report['contextLimitedSegments'] == 1 and memory.name not in report['material']
+        assert run(root, 'report', '--day', '2020-01-01', ok=True) == [], 'unchanged partial report was regenerated'
+        assert len(run(root, 'report', '--kind', 'weekly', '--day', '2020-01-01', ok=True)) == 1
+        weekly = json.loads((root / 'reports/weekly/2019-12-30.json').read_text())
+        assert weekly['contextLimitedSegments'] == 1
+
         # An explicit overwrite can verify a server-side limit change without changing the local request.
         assert models(run(root, 'memorize', '--segment', SID, '--overwrite', ok=False)) == [PRIMARY, FALLBACK]
 
@@ -103,6 +119,9 @@ def main(binary, server):
         config(root, primary='synthetic-larger', budget=4096)
         assert models(background(root, ok=True)) == ['synthetic-larger']
         assert 'generation: model' in memory.read_text()
+        assert len(run(root, 'report', '--day', '2020-01-01', ok=True)) == 1
+        recovered = json.loads((root / 'reports/daily/2020-01-01.json').read_text())
+        assert 'contextLimitedSegments' not in recovered and memory.name in recovered['material']
 
     with tempfile.TemporaryDirectory(prefix='history-context-legacy-') as directory:
         root = fixture(directory)
@@ -137,10 +156,59 @@ def main(binary, server):
         rejected = next(entry for entry in ledger if entry['model'] == PRIMARY)
         assert all(entry.get('fallbackOf') == rejected['id'] for entry in ledger if entry['model'] == FALLBACK)
 
+    with tempfile.TemporaryDirectory(prefix='history-context-batches-') as directory:
+        root = fixture(directory)
+        source = root / 'segments' / SID / 'events.jsonl'
+        axis = 'HEAD_OF_COMPLETE_INPUT ' + ''.join(f'观测{number:05d}详细内容。' for number in range(1800)) + ' TAIL_OF_COMPLETE_INPUT'
+        with source.open('a') as stream:
+            stream.write(json.dumps({'id': 2, 'timestamp': TIME, 'kind': 'window.changed',
+                'app': {'name': 'Synthetic Editor', 'bundleIdentifier': 'example.editor'},
+                'ax': {'mode': 'fullTree', 'text': '1 AXStaticText: Value: ' + axis}}) + '\n')
+        group = lambda name, full: dict(id=name, name=name, model=name, baseURL=endpoint,
+                                        fullInput=full, outputTokenBudget=8192, requiresAPIKey=False)
+        def routed(primary_full, fallback_full):
+            (root / 'model.json').write_text(json.dumps(dict(groups=[group('default', True),
+                group(PRIMARY, primary_full), group(FALLBACK, fallback_full)], primaryGroupID='default',
+                fallbackGroupID=FALLBACK, tasks={'10min': {'groupID': PRIMARY}})))
+        accepted = []
+        fail_next_batch = True
+        def context_model(request):
+            nonlocal fail_next_batch
+            input = request['messages'][-1]['content']
+            if request['model'] == PRIMARY:
+                return 503, {'message': 'Synthetic primary busy'}
+            if len(input.encode()) > 7500:
+                return 400, LIMIT[FALLBACK]
+            if input.startswith('从下面这一批'):
+                if accepted and fail_next_batch:
+                    fail_next_batch = False
+                    return 503, {'message': 'Synthetic interrupted batch'}
+                accepted.append(input)
+            return 200, None
+        routed(False, True)
+        server.override = context_model
+        initial = background(root, ok=False)
+        assert models(initial[:2]) == [PRIMARY, FALLBACK]
+        original_primary, original_fallback = [request['messages'][-1]['content'] for request in initial[:2]]
+        assert 'TAIL_OF_COMPLETE_INPUT' not in original_primary and 'TAIL_OF_COMPLETE_INPUT' in original_fallback
+        first_batch, = accepted
+        resumed = background(root, ok=True)
+        assert all(request['messages'][-1]['content'] not in (original_fallback, first_batch) for request in resumed)
+        assert any('HEAD_OF_COMPLETE_INPUT' in text for text in accepted)
+        assert any('TAIL_OF_COMPLETE_INPUT' in text for text in accepted)
+        assert resumed[-1]['messages'][-1]['content'].startswith('合并以下同一十分钟时段')
+        routed(True, False)
+        requests = run(root, 'memorize', '--segment', SID, '--overwrite', ok=True)
+        assert models(requests) == [PRIMARY, FALLBACK]
+        assert 'TAIL_OF_COMPLETE_INPUT' in requests[0]['messages'][-1]['content']
+        assert 'TAIL_OF_COMPLETE_INPUT' not in requests[1]['messages'][-1]['content']
+        server.override = None
+
 
 if __name__ == '__main__':
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Model)
     server.calls = []
+    server.override = None
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         main(str(Path(sys.argv[1]).resolve()), server)

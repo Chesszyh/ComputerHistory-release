@@ -27,6 +27,24 @@ struct MemoryContextRejections: Sendable {
         try save(rejections)
     }
 
+    private func partURL(_ key: String) -> URL {
+        file.deletingLastPathComponent().appendingPathComponent("model-context-parts/\(key).txt")
+    }
+
+    func part(key: String) -> String? {
+        guard !retriesRejectedRequests else { return nil }
+        return try? String(contentsOf: partURL(key), encoding: .utf8)
+    }
+
+    func savePart(_ text: String, key: String) throws {
+        let url = partURL(key)
+        let directory = url.deletingLastPathComponent()
+        if !FileManager.default.fileExists(atPath: directory.path) {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        }
+        try text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
     func importLegacyRejections(root: URL, segmentID: String, failedMemory: String?) throws {
         guard !FileManager.default.fileExists(atPath: file.path), let failedMemory,
               let diagnostic = failedMemory.range(of: "\n- 本节未由语言模型归纳："),

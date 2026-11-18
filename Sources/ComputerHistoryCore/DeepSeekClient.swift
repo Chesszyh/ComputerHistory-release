@@ -85,6 +85,7 @@ public struct DeepSeekClient: Sendable {
     private var spendingLimit: SpendingLimit?
     var powerState: GenerationPowerState = .shared
     var memoryContextRejections: MemoryContextRejections?
+    var memoryMaterial: (@Sendable (Bool, Bool) -> String)?
 
     private struct SpendingLimit: Sendable {
         let currency: String
@@ -193,15 +194,18 @@ public struct DeepSeekClient: Sendable {
                 timeout: config.timeoutSeconds ?? ModelSettings.defaultTimeoutSeconds, settings: config, fallbackAPIKey: fallbackAPIKey)
             routed.powerState = powerState
             routed.memoryContextRejections = memoryContextRejections
+            routed.memoryMaterial = memoryMaterial
             return try routed.complete(system: system, user: user, maxTokens: maxTokens, temperature: temperature,
                 reasoningEffort: reasoningEffort, requiresJSONObject: requiresJSONObject, recordingAt: root, task: task, sources: sources)
         }
         let id = UUID().uuidString
+        var primaryLedgerID = id
         guard let powerRevision = powerState.snapshot() else { throw ClientError.sleepDeferred }
         try powerState.check(powerRevision)
         do {
-            let response = try completeWithLengthRetry(id: id, system: system, user: user, maxTokens: maxTokens,
-                temperature: temperature, reasoningEffort: reasoningEffort, requiresJSONObject: requiresJSONObject, recordingAt: root, task: task, sources: sources)
+            let response = try completeRoute(id: id, system: system, user: user, maxTokens: maxTokens,
+                temperature: temperature, reasoningEffort: reasoningEffort, requiresJSONObject: requiresJSONObject,
+                recordingAt: root, task: task, sources: sources, onCachedRejection: { primaryLedgerID = $0 })
             guard !response.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, response.finishReason != "length" else {
                 throw ClientError.malformedResponse("主模型返回空内容或输出截断")
             }
@@ -234,7 +238,8 @@ public struct DeepSeekClient: Sendable {
                 fallback.powerState = powerState
                 fallback.spendingLimit = spendingLimit
                 fallback.memoryContextRejections = memoryContextRejections
-                let response = try fallback.completeWithLengthRetry(id: UUID().uuidString, fallbackOf: rejectedPrimaryID ?? id,
+                fallback.memoryMaterial = memoryMaterial
+                let response = try fallback.completeRoute(id: UUID().uuidString, fallbackOf: rejectedPrimaryID ?? primaryLedgerID,
                     system: system, user: user, maxTokens: maxTokens, temperature: temperature, requiresJSONObject: requiresJSONObject,
                     recordingAt: root, task: task, sources: sources)
                 guard !response.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, response.finishReason != "length" else {
@@ -251,6 +256,37 @@ public struct DeepSeekClient: Sendable {
                 let message = "主模型：\(primaryError)；降级模型：\(error)"
                 if let root { try ModelHealth.record(root: root, error: message, usedFallback: true) }
                 throw ClientError.transport(message)
+            }
+        }
+    }
+
+    private func completeRoute(id: String, fallbackOf: String? = nil, system: String, user: String,
+                               maxTokens: Int, temperature: Double, reasoningEffort: String = "",
+                               requiresJSONObject: Bool, recordingAt root: URL?, task: String,
+                               sources: [String], onCachedRejection: ((String) -> Void)? = nil) throws -> Completion {
+        let fullInput = settings?.fullInput == true
+        let input = memoryMaterial?(fullInput, true) ?? user
+        func send(_ input: String, id: String) throws -> Completion {
+            try completeWithLengthRetry(id: id, fallbackOf: fallbackOf, system: system, user: input, maxTokens: maxTokens,
+                temperature: temperature, reasoningEffort: reasoningEffort, requiresJSONObject: requiresJSONObject,
+                recordingAt: root, task: task, sources: sources)
+        }
+        do { return try send(input, id: id) }
+        catch where fullInput && MemoryBatchSummary.rejectedForContext(error) {
+            guard let memoryMaterial, let rejections = memoryContextRejections else { throw error }
+            if case ClientError.previouslyRejectedContext(let requestID) = error { onCachedRejection?(requestID) }
+            let budget = settings?.outputTokenBudget ?? maxTokens
+            return try MemoryBatchSummary.complete(memoryMaterial(true, false)) { input in
+                try powerState.check()
+                let key = MemoryContextRejections.key(endpoint: baseURL.absoluteString, model: model,
+                    outputBudget: budget, system: system, input: input)
+                if let text = rejections.part(key: key) { return Completion(text: text, usage: nil, finishReason: "stop") }
+                let result = try send(input, id: UUID().uuidString)
+                guard !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, result.finishReason != "length" else {
+                    throw ClientError.malformedResponse("十分钟记忆分批请求未返回完整摘要。")
+                }
+                try rejections.savePart(result.text, key: key)
+                return result
             }
         }
     }

@@ -49,11 +49,22 @@ def stop(root,p,log):
 with tempfile.TemporaryDirectory(prefix='scheduling-test-') as d:
     root=Path(d);p,log=launch(root,True)
     try:
-        time.sleep(1.5);sid='2020-01-01T00-00-00Z';segment(root,sid);start=time.monotonic()
+        time.sleep(1.5)
+        yesterday=datetime.date.today()-datetime.timedelta(days=1)
+        stamp=datetime.datetime.combine(yesterday,datetime.time(12)).astimezone(datetime.timezone.utc)
+        sid=stamp.strftime('%Y-%m-%dT%H-%M-%SZ');segment(root,sid);start=time.monotonic()
         while time.monotonic()-start<3 and not ready(root,sid):time.sleep(.05)
         elapsed=time.monotonic()-start
         assert ready(root,sid),(elapsed,(root/'test.log').read_text())
         print(f'PASS: new sealed segment summarized in {elapsed:.2f}s with an 8s periodic interval')
+        deadline=time.monotonic()+5
+        narrative=root/'narrative.json'
+        while time.monotonic()<deadline:
+            if narrative.exists() and sid in narrative.read_text(): break
+            time.sleep(.05)
+        else:
+            raise AssertionError('a late memory for yesterday never reached the timeline')
+        print('PASS: yesterday’s late memory reached the timeline automatically')
     finally:stop(root,p,log)
 with tempfile.TemporaryDirectory(prefix='scheduling-background-') as d:
     root=Path(d);server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Model)

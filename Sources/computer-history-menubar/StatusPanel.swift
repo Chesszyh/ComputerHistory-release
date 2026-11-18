@@ -1604,9 +1604,6 @@ struct ModelUsagePane: View {
                             Picker("任务", selection: $model.usageFilter.task) {
                                 Text("全部任务").tag("")
                                 Text("十分钟记忆").tag("10min")
-                                if model.modelRequests.contains(where: { $0.task == "6h" }) {
-                                    Text("六小时汇总（历史）").tag("6h")
-                                }
                                 Text("活动整理").tag("narrative")
                                 Text("活动归属").tag("narrative-grouping")
                                 Text("日报").tag("daily")

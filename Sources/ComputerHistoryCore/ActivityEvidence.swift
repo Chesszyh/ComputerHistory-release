@@ -37,7 +37,7 @@ public enum ActivityEvidence {
         return text + "记录首末时间是观测范围，不代表持续操作时长；不能由缺少交互推断用户离开、看手机或没有阅读。\n"
     }
     public static func material(events: [EventStreamRecord], segmentID: String,
-                                characterBudget: Int? = 16000) -> String {
+                                characterBudget: Int? = 16000, useTextReferences: Bool = true) -> String {
         var observations: [(reference: String, context: String, facts: [String], nodes: [String], hasContent: Bool)] = []
         var lastContext: String?
         let replaced = Set(events.flatMap { $0.keyboard?.textReplaces ?? [] })
@@ -102,7 +102,7 @@ public enum ActivityEvidence {
             var encoder = EvidenceTextEncoder()
             return observations.compactMap { item in
                 let fresh = item.nodes.enumerated().filter { seenScreen.insert(item.context + "\n" + $0.element).inserted }.map { _, node in
-                    encoder.encode(node)
+                    useTextReferences ? encoder.encode(node) : node
                 }
                 guard !fresh.isEmpty || !item.facts.isEmpty else { return nil }
                 let reference: String
@@ -114,7 +114,7 @@ public enum ActivityEvidence {
                     reference = String(item.reference.dropLast(item.context.count)) + "上下文 C\(number)：" + item.context
                 }
                 let facts = item.facts.map { fact in
-                    encoder.encode(fact)
+                    useTextReferences ? encoder.encode(fact) : fact
                 }
                 var text = reference + "\n" + facts.joined(separator: "\n")
                 if !fresh.isEmpty { text += "\n界面显示：" + fresh.joined(separator: "；") }

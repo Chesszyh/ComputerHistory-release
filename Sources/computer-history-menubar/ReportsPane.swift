@@ -44,8 +44,8 @@ struct ReportsPane: View {
                     .buttonStyle(.plain)
                     .help("前一天")
 
-                    DatePicker("日期", selection: Binding(get: { model.reportDate }, set: { model.reportDate = $0; model.loadReports() }), in: ...Date(), displayedComponents: .date)
-                        .labelsHidden()
+                    ReportDateField(date: Binding(get: { model.reportDate }, set: { model.reportDate = $0; model.loadReports() }))
+                        .fixedSize()
 
                     Button {
                         if let next = Calendar.current.date(byAdding: .day, value: 1, to: model.reportDate), next <= Date() {
@@ -82,7 +82,7 @@ struct ReportsPane: View {
             .disabled(model.reportBusy)
             HStack {
                 Button(model.reportText.isEmpty ? "生成报告" : "重新生成") { model.generateReport() }
-                    .disabled(model.reportBusy)
+                    .disabled(model.reportBusy || model.reportLoading)
                     .accessibilityIdentifier("report-generate")
                 Button("复制报告") { model.copyReport(material: false) }
                     .disabled(model.reportText.isEmpty || model.reportBusy)
@@ -92,7 +92,7 @@ struct ReportsPane: View {
             }.controlSize(.small)
             ScrollView {
                 if model.reportText.isEmpty {
-                    Text(model.reportBusy ? "正在补齐记忆并生成报告…" : "尚无报告。可直接复制活动材料，或生成报告。")
+                    Text(model.reportLoading ? "正在读取报告…" : model.reportBusy ? "正在准备报告…" : "尚无报告。可直接复制活动材料，或生成报告。")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(10)
                 } else {
@@ -102,7 +102,7 @@ struct ReportsPane: View {
             .background(Color.primary.opacity(0.03))
             .clipShape(RoundedRectangle(cornerRadius: 8))
             Button("复制给 AI 的材料") { model.copyReport(material: true) }
-                .disabled(model.reportMaterial.isEmpty || model.reportBusy)
+                .disabled(model.reportBusy || model.reportLoading)
                 .accessibilityIdentifier("report-copy-material")
             HStack {
                 Picker("导出", selection: $exportMaterial) {
@@ -111,7 +111,7 @@ struct ReportsPane: View {
                 Picker("格式", selection: $exportFormat) { Text("Markdown").tag("md"); Text("TXT").tag("txt") }
                     .labelsHidden()
                 Button("导出…", action: save)
-                    .disabled(model.reportBusy || (exportMaterial ? model.reportMaterial.isEmpty : model.reportText.isEmpty))
+                    .disabled(model.reportBusy || model.reportLoading || (!exportMaterial && model.reportText.isEmpty))
             }.controlSize(.small)
             if let error = model.reportError {
                 ScrollView { Text(error).foregroundStyle(.red).textSelection(.enabled) }.frame(maxHeight: 65)
@@ -128,6 +128,34 @@ struct ReportsPane: View {
         panel.allowedContentTypes = [exportFormat == "txt" ? .plainText : UTType(filenameExtension: "md") ?? .plainText]
         panel.nameFieldStringValue = ReportPeriod(kind: model.reportKind, date: model.reportDate).id + (exportMaterial ? "-material" : "") + "." + exportFormat
         if panel.runModal() == .OK, let url = panel.url { model.saveReport(to: url, material: exportMaterial) }
+    }
+}
+
+private struct ReportDateField: NSViewRepresentable {
+    @Binding var date: Date
+
+    func makeCoordinator() -> Coordinator { Coordinator(date: $date) }
+
+    func makeNSView(context: Context) -> NSDatePicker {
+        let picker = NSDatePicker()
+        picker.datePickerStyle = .textField
+        picker.datePickerElements = .yearMonthDay
+        picker.setAccessibilityLabel("日期")
+        picker.target = context.coordinator
+        picker.action = #selector(Coordinator.changed(_:))
+        return picker
+    }
+
+    func updateNSView(_ picker: NSDatePicker, context: Context) {
+        context.coordinator.date = $date
+        picker.maxDate = Date()
+        if picker.dateValue != date { picker.dateValue = date }
+    }
+
+    @MainActor final class Coordinator: NSObject {
+        var date: Binding<Date>
+        init(date: Binding<Date>) { self.date = date }
+        @objc func changed(_ picker: NSDatePicker) { date.wrappedValue = picker.dateValue }
     }
 }
 

@@ -33,6 +33,28 @@ struct ReportsRegression {
         let model = StatusModel(root: root)
         defer { model.shutdown() }
         model.openReports()
+        if CommandLine.arguments.contains("--background") {
+            func wait(_ pending: () -> Bool) {
+                let deadline = Date().addingTimeInterval(5)
+                while pending() && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+                precondition(!pending())
+            }
+            model.reportDate = period.start.addingTimeInterval(-3600)
+            model.loadReports()
+            wait { model.reportLoading }
+            precondition(model.reportText.isEmpty && model.reportMaterial.isEmpty)
+            model.reportDate = period.start
+            model.loadReports()
+            wait { model.reportLoading }
+            precondition(!model.reportText.isEmpty && model.reportMaterial.isEmpty)
+            let file = root.appendingPathComponent("background.txt")
+            model.saveReport(to: file, material: true)
+            wait { model.reportBusy }
+            let exported = try String(contentsOf: file, encoding: .utf8)
+            precondition(exported.contains("Synthetic activity"))
+            print("PASS: rapid report-date changes and on-demand material export without a window")
+            return
+        }
         let view = NSHostingView(rootView: StatusPanel(model: model))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 640),
                               styleMask: [.borderless], backing: .buffered, defer: false)
@@ -40,11 +62,10 @@ struct ReportsRegression {
         window.orderFront(nil)
         defer { window.orderOut(nil) }
         let deadline = Date().addingTimeInterval(5)
-        while model.reportBusy && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        while model.reportLoading && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         view.layoutSubtreeIfNeeded()
-        precondition(!model.reportText.isEmpty && model.reportMaterial.contains("Synthetic activity"))
-        precondition(!model.backupEnabled && model.backupLoaded)
+        precondition(!model.reportText.isEmpty && model.reportMaterial.isEmpty)
         let pasteboard = NSPasteboard.general
         let saved = (pasteboard.pasteboardItems ?? []).map { item in
             item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
@@ -67,6 +88,9 @@ struct ReportsRegression {
         click(125, 640 - 104)
         precondition(pasteboard.string(forType: .string) == model.reportText, "Copy report button must copy the entire report")
         model.copyReport(material: true)
+        let materialDeadline = Date().addingTimeInterval(5)
+        while model.reportBusy && Date() < materialDeadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        precondition(model.reportMaterial.contains("Synthetic activity"))
         precondition(pasteboard.string(forType: .string) == model.reportMaterial)
         let output = root.appendingPathComponent("output.txt")
         model.saveReport(to: output, material: true)

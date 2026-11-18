@@ -68,9 +68,11 @@ public struct ActivityReport: Codable, Sendable {
     public var usedModel: Bool
     public var material: String
     public var body: String
+    public var contextLimitedSegments: Int? = nil
     public var markdown: String {
-        "# \(title)\(preview ? "（截至当前）" : "")\n\n" +
-        "时区：\(timeZone) · \(usedModel ? "模型总结" : "活动材料（未调用模型）")\n\n\(body)\n"
+        let coverage = contextLimitedSegments.map { "有 \($0) 个十分钟段因模型上下文超限未纳入。\n\n" } ?? ""
+        return "# \(title)\(preview ? "（截至当前）" : "")\n\n" +
+        "时区：\(timeZone) · \(usedModel ? "模型总结" : "活动材料（未调用模型）")\n\n\(coverage)\(body)\n"
     }
     public static func url(root: URL, period: ReportPeriod) -> URL {
         root.appendingPathComponent("reports/\(period.kind.rawValue)/\(period.key).json")
@@ -100,7 +102,9 @@ public enum ActivityExport {
         return entry.summary
     }
     public static func material(root: URL, period: ReportPeriod) throws -> String {
-        let source = entries(root: root, period: period)
+        try material(entries: entries(root: root, period: period), period: period)
+    }
+    static func material(entries source: [MemoryIndex.Entry], period: ReportPeriod) throws -> String {
         guard !source.isEmpty else { throw ReportError.invalid("\(period.title)没有十分钟活动材料。") }
         return "# \(period.title)的活动材料\n\n时区：\(period.calendar.timeZone.identifier)\n\n" + source.map {
             "## \($0.dayLabel(timeZone: period.calendar.timeZone)) \($0.timeLabel(timeZone: period.calendar.timeZone))\n来源：\($0.id)\n状态：\($0.generationStatus ?? "unknown")\n\n\(text(for: $0))"
@@ -148,7 +152,17 @@ public struct ReportGenerator {
     public let client: DeepSeekClient?
     public init(root: URL, client: DeepSeekClient?) { self.root = root; self.client = client }
 
-    public func generate(period: ReportPeriod, now: Date = Date(), overwrite: Bool = false, fillDailyDependencies: Bool = true) throws -> ActivityReport {
+    public func generate(period: ReportPeriod, now: Date = Date(), overwrite: Bool = false,
+                         fillDailyDependencies: Bool = true, waitForLock: TimeInterval = 0) throws -> ActivityReport {
+        let lockURL = GenerationLock.lockURL("report-\(period.id)", root: root)
+        let deadline = ProcessInfo.processInfo.systemUptime + waitForLock
+        var lock = ProcessLock(url: lockURL)
+        while lock == nil, ProcessInfo.processInfo.systemUptime < deadline {
+            Thread.sleep(forTimeInterval: 0.2)
+            lock = ProcessLock(url: lockURL)
+        }
+        guard let lock else { throw ReportError.pending("\(period.title)正在生成，请稍后刷新。") }
+        defer { lock.release() }
         let preview = now < period.end
         if !preview {
             let segments = root.appendingPathComponent("segments")
@@ -159,20 +173,25 @@ public struct ReportGenerator {
             }
             guard !open else { throw ReportError.pending("\(period.title)仍有未封口的事件段，稍后重试。") }
         }
-        try fillMemoryDependencies(period: period)
-        let entries = ActivityExport.entries(root: root, period: period)
-        guard !entries.isEmpty else { throw ReportError.invalid("\(period.title)没有活动材料。") }
-        guard !entries.contains(where: { $0.generationStatus == "failed" }) else {
+        let contextLimited = try fillMemoryDependencies(period: period)
+        let entries = ActivityExport.entries(root: root, period: period).filter { !contextLimited.contains($0.sourceSegmentID) }
+        guard !entries.contains(where: \.generationFailed) else {
             throw ReportError.pending("\(period.title)有失败记忆缺少可重试的原始事件，请检查采集日志。")
         }
-        var material = try ActivityExport.material(root: root, period: period)
+        guard !entries.isEmpty else {
+            if !contextLimited.isEmpty { throw ReportError.pending("\(period.title)的记忆因模型上下文超限未能生成。") }
+            throw ReportError.invalid("\(period.title)没有活动材料。")
+        }
+        let coverage = contextLimited.isEmpty ? nil : contextLimited.count
+        var material = try ActivityExport.material(entries: entries, period: period)
         if period.kind == .weekly {
             let days = Set(entries.map { $0.dayLabel(timeZone: period.calendar.timeZone) }).sorted()
             var daily: [String] = []
             for day in days {
                 let p = ReportPeriod(kind: .daily, date: try ReportPeriod.parseDay(day, timeZone: period.calendar.timeZone), timeZone: period.calendar.timeZone)
+                let dayEntries = entries.filter { p.contains($0.startedAt) }
                 if let report = try ActivityReport.load(root: root, period: p), !report.preview,
-                   report.material == (try ActivityExport.material(root: root, period: p)), report.usedModel || client == nil {
+                   report.material == (try ActivityExport.material(entries: dayEntries, period: p)), report.usedModel || client == nil {
                     daily.append(report.markdown)
                 } else if !preview {
                     guard fillDailyDependencies else { throw ReportError.pending("\(day) 日报尚未完成，请先补齐日报。") }
@@ -182,6 +201,7 @@ public struct ReportGenerator {
             if !daily.isEmpty && !preview { material = daily.joined(separator: "\n\n") }
         }
         if !overwrite, let previous = try ActivityReport.load(root: root, period: period), previous.material == material,
+           previous.contextLimitedSegments == coverage,
            previous.preview == preview, previous.timeZone == period.calendar.timeZone.identifier,
            previous.usedModel || client == nil { return previous }
         let prompt = client == nil ? period.kind.prompt : try SummarySettings.load(root: root)[period.kind == .daily ? .daily : .weekly]
@@ -214,20 +234,21 @@ public struct ReportGenerator {
             body = parts[0]
         }
         let report = ActivityReport(kind: period.kind, key: period.key, title: period.title, generatedAt: now,
-            timeZone: period.calendar.timeZone.identifier, preview: preview, usedModel: client != nil, material: material, body: body)
+            timeZone: period.calendar.timeZone.identifier, preview: preview, usedModel: client != nil, material: material, body: body,
+            contextLimitedSegments: coverage)
         let file = ActivityReport.url(root: root, period: period)
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try EventStreamJSON.makeEncoder(preservingSubseconds: true).encode(report).write(to: file, options: .atomic)
         try ActivityExport.write(report.markdown, to: root.appendingPathComponent("exports/\(preview ? "previews/" + period.kind.rawValue : period.kind.rawValue)/\(period.key).md"))
         return report
     }
-    private func fillMemoryDependencies(period: ReportPeriod) throws {
+    private func fillMemoryDependencies(period: ReportPeriod) throws -> Set<String> {
         let generator = MemoryGenerator(rootDirectory: root, memoriesDirectory: root.appendingPathComponent("memories"), client: client)
         let segments = generator.orderedSegments().filter { period.contains($0.firstEventAt) }
         func needsMemory(_ id: String) -> Bool {
             !MemoryGenerator.hasUsableMemory(at: root.appendingPathComponent("memories/" + MemoryWriter.fileName(segmentID: id)))
         }
-        guard segments.contains(where: { needsMemory($0.segmentID) }) else { return }
+        guard segments.contains(where: { needsMemory($0.segmentID) }) else { return [] }
         var lock = GenerationLock.memorize(root: root)
         let deadline = Date().addingTimeInterval(300)
         while lock == nil, Date() < deadline {
@@ -236,6 +257,7 @@ public struct ReportGenerator {
         }
         guard let lock else { throw ReportError.pending("记忆生成仍在运行，未能取得补齐任务，请稍后重新生成报告。") }
         defer { lock.release() }
+        var contextLimited: Set<String> = []
         for segment in segments where needsMemory(segment.segmentID) {
             do {
                 _ = try generator.generate(segmentID: segment.segmentID,
@@ -243,10 +265,13 @@ public struct ReportGenerator {
                 if needsMemory(segment.segmentID) {
                     throw MemoryGenerator.GenerateError.modelFailed(ModelHealth.load(root: root)?.error ?? "未生成可用记忆，请查看失败请求。")
                 }
+            } catch DeepSeekClient.ClientError.previouslyRejectedContext {
+                contextLimited.insert(segment.segmentID)
             } catch {
                 throw ReportError.pending("\(period.title)补齐记忆失败（\(segment.segmentID)）：\(error)")
             }
         }
+        return contextLimited
     }
     private struct ReportPart: Codable { var input: String; var output: String }
     private func complete(_ client: DeepSeekClient, prompt: String, input: String, period: ReportPeriod) throws -> String {

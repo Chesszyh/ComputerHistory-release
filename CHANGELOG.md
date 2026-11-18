@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1 - 2026-11-19
+
+- Load saved daily and weekly reports when switching dates. Prepare activity material on demand for copying or export. Remove the date field stepper and keep day navigation and direct date editing.
+- Prepare ten-minute summary material separately for the primary and fallback models. Split full inputs after a context limit rejection and reuse completed batches on retry.
+- Mark periods omitted because of context limits in daily and weekly reports and summarize the remaining sources. Generate reports for different dates independently.
+- Add late memories from yesterday to their original timeline date. Remove the retired six-hour summary option from the usage filter.
+
 ## 0.4.0 - 2026-11-18
 
 ### Collection and privacy

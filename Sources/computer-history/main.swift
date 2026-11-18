@@ -23,9 +23,9 @@ func usage() {
                                 [--granularity 10min]
                                             把已封口的段写成记忆文件
       computer-history segments             列出可生成记忆的段
-      computer-history narrative [--limit N] [--day <yyyy-MM-dd>] [--print] [--overwrite] [--wait-lock]
+      computer-history narrative [--limit N] [--day <yyyy-MM-dd> | --recent] [--print] [--overwrite] [--wait-lock]
                                             把记忆归纳成前端叙述条目
-      computer-history report [--kind daily|weekly] [--day yyyy-MM-dd] [--no-model] [--overwrite] [--print]
+      computer-history report [--kind daily|weekly] [--day yyyy-MM-dd] [--no-model] [--overwrite] [--wait-lock] [--print]
                                             先补齐所需记忆，再生成报告；省略日期补齐已结束时段
       computer-history export --day yyyy-MM-dd [--kind daily|weekly] [--material]
                               [--format md|txt] [--file <路径>] [--copy]
@@ -260,17 +260,18 @@ if flags.contains("report") || flags.contains("export") {
                 guard NSPasteboard.general.setString(ActivityExport.formatted(text, format: format), forType: .string) else { throw ReportError.invalid("写入剪贴板失败，请重试。") }
             }
         } else {
-            guard let lock = ProcessLock(url: GenerationLock.lockURL("report", root: root)) else {
-                throw ReportError.invalid("报告正在生成，请稍后重试。")
-            }
-            defer { lock.release() }
             let client = flags.contains("--no-model") ? nil : try DeepSeekClient.fromEnvironment(rootDirectory: root)
             let generator = ReportGenerator(root: root, client: client)
             if let day = value(of: "--day") {
                 let period = ReportPeriod(kind: kind, date: try ReportPeriod.parseDay(day))
-                let report = try generator.generate(period: period, overwrite: flags.contains("--overwrite"))
+                let report = try generator.generate(period: period, overwrite: flags.contains("--overwrite"),
+                    waitForLock: flags.contains("--wait-lock") ? 120 : 0)
                 print(flags.contains("--print") ? report.markdown : "已生成\(report.title)\(report.preview ? "（截至当前）" : "")。")
             } else {
+                guard let lock = ProcessLock(url: GenerationLock.lockURL("report", root: root)) else {
+                    throw ReportError.pending("后台报告批次正在运行。")
+                }
+                defer { lock.release() }
                 let count = try generator.generateMissing()
                 print("已补齐 \(count) 份日报／周报。")
             }
@@ -339,6 +340,10 @@ if flags.contains("narrative") {
     if let day = value(of: "--day") {
         do { outcomes = [try generator.generate(day: day,
                                                overwrite: flags.contains("--overwrite"))] }
+        catch { warn("生成失败：\(error)"); exit(1) }
+    } else if flags.contains("--recent") {
+        do { outcomes = try generator.generateRecent(limit: value(of: "--limit").flatMap(Int.init),
+                                                     overwrite: flags.contains("--overwrite")) }
         catch { warn("生成失败：\(error)"); exit(1) }
     } else {
         do {
@@ -747,10 +752,8 @@ if flags.contains("supervise") {
                     GenerationTask(label: "十分钟记忆",
                                    arguments: ["memorize", "--out", root.path,
                                                "--limit", String(memorizeBatch), "--recent-first"]),
-                    // 叙述层只处理当天：更早的日期其记忆已稳定，不必反复归纳。
                     GenerationTask(label: "叙述层",
-                                   arguments: ["narrative", "--out", root.path,
-                                               "--day", todayLabel()]),
+                                   arguments: ["narrative", "--out", root.path, "--recent"]),
                 ]
             }
         }
@@ -844,14 +847,6 @@ let trusted = InputTap.hasAccessibilityPermission
 if !trusted {
     warn("警告：未授予辅助功能权限，键盘/鼠标事件与 AX 树都无法采集。")
     warn("      运行 computer-history --check 查看详情。")
-}
-
-/// 本地时区的今天，格式 `yyyy-MM-dd`，与记忆文件的日期分组一致。
-func todayLabel() -> String {
-    let f = DateFormatter()
-    f.dateFormat = "yyyy-MM-dd"
-    f.locale = Locale(identifier: "en_US_POSIX")
-    return f.string(from: Date())
 }
 
 if !collectorConfig.windowTextApplications.isEmpty {

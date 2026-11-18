@@ -52,9 +52,12 @@ public struct NarrativeGenerator: Sendable {
     /// 只归纳该日的十分钟记忆；六小时记忆是更粗的层次，不参与——否则同一段活动
     /// 会被写两遍。
     public func generate(day: String, overwrite: Bool = false) throws -> Outcome {
+        try generate(day: day, overwrite: overwrite, index: MemoryIndex.load(from: memoriesDirectory))
+    }
+
+    private func generate(day: String, overwrite: Bool, index: MemoryIndex) throws -> Outcome {
         let settings = try SummarySettings.load(root: rootDirectory)
         let mode = settings.timelineMode
-        let index = MemoryIndex.load(from: memoriesDirectory)
         let away = AwayPeriods.load(root: rootDirectory)
         var sources: [MemoryIndex.Entry] = index.entries
             .filter { $0.granularity == "10min" && $0.dayLabel() == day }
@@ -351,12 +354,23 @@ public struct NarrativeGenerator: Sendable {
         let index = MemoryIndex.load(from: memoriesDirectory)
         let days = Set(index.entries.filter { $0.granularity == "10min" }
             .map { $0.dayLabel() }).sorted()
+        return try generate(days: days, index: index, limit: limit, overwrite: overwrite)
+    }
+
+    public func generateRecent(now: Date = Date(), limit: Int? = nil, overwrite: Bool = false) throws -> [Outcome] {
+        let calendar = Calendar.current
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: now)!
+        let days = [ReportPeriod.day(now), ReportPeriod.day(yesterday)]
+        return try generate(days: days, index: MemoryIndex.load(from: memoriesDirectory), limit: limit, overwrite: overwrite)
+    }
+
+    private func generate(days: [String], index: MemoryIndex, limit: Int?, overwrite: Bool) throws -> [Outcome] {
         var outcomes: [Outcome] = []
         var failure: Error?
         for day in days {
             if let limit, outcomes.count >= limit { break }
             do {
-                let outcome = try generate(day: day, overwrite: overwrite)
+                let outcome = try generate(day: day, overwrite: overwrite, index: index)
                 // 无新增的日期不计入结果——否则「处理了几天」会被误读为「生成了几条」。
                 if outcome.newItems > 0 { outcomes.append(outcome) }
             } catch GenerateError.noSourceMemories {
