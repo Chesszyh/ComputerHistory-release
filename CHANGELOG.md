@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.0 - 2026-11-18
+
+### Collection and privacy
+- Stopping collection seals the current recording segment and ends the summary and backup jobs started by the supervisor. Supervised jobs also exit if the supervisor is forcibly terminated.
+- Pause window and control content capture while macOS Secure Input is on. Skip password fields before reading their values.
+- Fix a race between the recording pause switch and requests to generate summaries immediately. Improve Accessibility timeouts and keep snapshots and input tied to the correct window.
+
+### Timeline and summaries
+- Record away periods from system sleep through full wake. Hide summaries with no clear evidence of activity and merge compatible adjacent away periods.
+- After a model explicitly rejects a ten-minute summary request for exceeding its context limit, background jobs skip identical requests to that model. Transient failures can still be retried.
+- Check spending against an index grouped by request date and currency, avoiding repeated reads of historical request bodies. Fallback models and retries with a larger output allowance also respect spending limits.
+- Allow model groups to be deleted. Tasks that referred to a deleted group use the primary group.
+
+### Removed features
+- Remove six-hour summary generation, its settings, and the historical model comparison view. Existing ten-minute memories, daily and weekly reports, and raw event records remain usable.
+
 ## 0.3.4 - 2026-11-04
 
 ### Menubar visual and interaction refinements
