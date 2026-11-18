@@ -1,0 +1,23 @@
+CHANGELOG.md
+  s_c5cf29a2d26b6f::t_e1d126f346cfd5 3-18
+CHANGELOG.zh.md
+  s_c5cf29a2d26b6f::t_f93b71de11925e 3-18
+VERSION
+  s_c5cf29a2d26b6f::t_d1cc65d257fc8c 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fdf3714f816fecd0a002c6994d5bff764397ed05",
+  "prompts": {},
+  "sessions": {
+    "s_c5cf29a2d26b6f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1ed56-004d-7903-8a9e-ea82227865fa",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
