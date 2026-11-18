@@ -1,0 +1,53 @@
+CHANGELOG.md
+  s_c5cf29a2d26b6f::t_4b9baf8283f345 3-9
+CHANGELOG.zh.md
+  s_c5cf29a2d26b6f::t_ea3a0412ae8bad 3-9
+Sources/ComputerHistoryCore/ActivityEvidence.swift
+  s_c5cf29a2d26b6f::t_097a0df36c051a 40,105,117
+Sources/ComputerHistoryCore/ActivityReport.swift
+  s_c5cf29a2d26b6f::t_13ca743d0f2f0b 71,73-75,105-107,155-165,176-178,181-186,192,194,204,237-238,245,251,260,268-269,274
+Sources/ComputerHistoryCore/DeepSeekClient.swift
+  s_c5cf29a2d26b6f::t_d4a94d7639ab3f 88,197,202,206-208,241-242,260-290
+Sources/ComputerHistoryCore/MemoryBatchSummary.swift
+  s_c5cf29a2d26b6f::t_f76a3ff35e6703 1-69
+Sources/ComputerHistoryCore/MemoryContextRejections.swift
+  s_c5cf29a2d26b6f::t_32aabd2acc9145 30-47
+Sources/ComputerHistoryCore/MemoryGenerator.swift
+  s_c5cf29a2d26b6f::t_a5197aebac6b5e 151-154,157,434-435,480-483
+Sources/ComputerHistoryCore/NarrativeGenerator.swift
+  s_c5cf29a2d26b6f::t_2ecea7c80c2b75 55-58,357-367,373
+Sources/computer-history-menubar/ReportsPane.swift
+  s_c5cf29a2d26b6f::t_e8963e9e541af9 47-48,85,95,105,114,134-161
+Sources/computer-history-menubar/StatusModel.swift
+  s_c5cf29a2d26b6f::t_8819412e03c2c2 31,40,314,332-336,339-340,342-347,352-354,358,380-383,387-414
+Sources/computer-history/main.swift
+  s_c5cf29a2d26b6f::t_368bf883377cba 26,28,267-268,271-274,344-347,756
+VERSION
+  s_c5cf29a2d26b6f::t_57de6b5b344518 1
+docs/collector.md
+  s_c5cf29a2d26b6f::t_256015e37b0c37 178-179,184,241
+scripts/test-context-limit.py
+  s_c5cf29a2d26b6f::t_bbc0eb17e1d7f5 29-33,97-108,122-124,159-206,211
+scripts/test-menubar-reports.swift
+  s_c5cf29a2d26b6f::t_2111970f2a3255 36-57,65,68,91-93
+scripts/test-reports.py
+  s_c5cf29a2d26b6f::t_7947f78bad059a 104-121
+scripts/test-scheduling.py
+  s_c5cf29a2d26b6f::t_3509c5a02863a6 52-55,60-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7dbd76250ae5b4aa55f8b4076e12a892d8cbddb2",
+  "prompts": {},
+  "sessions": {
+    "s_c5cf29a2d26b6f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1ed56-004d-7903-8a9e-ea82227865fa",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
