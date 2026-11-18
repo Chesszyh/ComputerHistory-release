@@ -1,0 +1,183 @@
+CONTRIBUTING.md
+  s_c5cf29a2d26b6f::t_5f0c161fe2a22a 10-12,15,79,127-143
+README.md
+  s_c5cf29a2d26b6f::t_091be4c69de3a8 52,81,89
+Sources/ComputerHistoryCore/AXTreeReader.swift
+  s_c5cf29a2d26b6f::t_0762946eaaaf6a 23-24,26-32,34-39,41-53,55,77-78,82,101-102,104,108-110,119-120,122,125-126,131,148-150,158-161,163,166,170,173,176,179,182,187,190,201-202,204-206,210-212,219,221-223,227-229,234-236,241-243,257-260,262-264,270-284,312-318,320-326
+Sources/ComputerHistoryCore/AccessibilityActivation.swift
+  s_c5cf29a2d26b6f::t_c740cb2648e96b 23-26,30,34-35,38
+Sources/ComputerHistoryCore/AccessibilityMessaging.swift
+  s_c5cf29a2d26b6f::t_530111a8839f61 1-48
+Sources/ComputerHistoryCore/ActivityEvidence.swift
+  s_c5cf29a2d26b6f::t_3e097cf7f6bd6e 15-21
+Sources/ComputerHistoryCore/ActivityReport.swift
+  s_c5cf29a2d26b6f::t_bc8ecb22bc9a10 54-55,280,294-297,305
+Sources/ComputerHistoryCore/AwayPeriods.swift
+  s_c5cf29a2d26b6f::t_5c56c2f6cad8e0 18
+Sources/ComputerHistoryCore/CollectionSession.swift
+  s_c5cf29a2d26b6f::t_b9bed5298a469c 65-97,104,111,117-122,128,132-137,142-151,156,168,186-187,193-194,199-216,219-222,231-235,237-238,240,271,290-301,307-308,310-311,314,321-329,332-334,339-351,354-363,365-375,377-378,380-384,386-395,400-422,424-429,436-437,441-442,453-459,462-464,466-467,470-476,480,484-485,491,500,505,519-529,531,536,547-549,553-554,558,579-580,582-585,588-590,596,615-616,618-621,623,627-630,635-637,654-661,666,672-678,682,688-695,699,703-713,719-720,723-726,729-743,748,750,755,757-758,760,767-768,775,777,782,796-799,809,821-822,824-826,828,832-852,855,859-865,867-871,876-877,888-894,902,946-951
+Sources/ComputerHistoryCore/CollectorControl.swift
+  s_c5cf29a2d26b6f::t_20532afec93b72 2,56-59,65,70-89,149-150,158
+Sources/ComputerHistoryCore/CollectorLog.swift
+  s_c5cf29a2d26b6f::t_05e8ee550ffbcf 1-180
+Sources/ComputerHistoryCore/CollectorProcess.swift
+  s_c5cf29a2d26b6f::t_59455c0b54103b 24-47,59-67,69,84,105,107-108,114-125
+Sources/ComputerHistoryCore/CollectorSupervisor.swift
+  s_c5cf29a2d26b6f::t_4ec1d0a9cdf596 19,28-30,48,131-166,168,172-175,179-180,183,185-186
+Sources/ComputerHistoryCore/DeepSeekClient.swift
+  s_c5cf29a2d26b6f::t_93a0723fb5c700 34,39,85,87-111,123,195,217-219,221,235-237,245-246,249,281-290,294,310,312,318,321,386-389,393-396,403-405
+Sources/ComputerHistoryCore/EventArchive.swift
+  s_c5cf29a2d26b6f::t_c41a9af2f33ac2 24-38,42,100-101
+Sources/ComputerHistoryCore/FrontmostApplication.swift
+  s_c5cf29a2d26b6f::t_4d795edcc02a6c 4-33,64-98,103-107,110-120,122-125,127-129,131-133,142-146,158-163,166,168-169,172-184,186,188,199-200,203-205,208,223-224,226-227,232-247,252-253,259
+Sources/ComputerHistoryCore/GenerationPowerState.swift
+  s_c5cf29a2d26b6f::t_d89aa7800e4025 9,12,15-18,20
+Sources/ComputerHistoryCore/GitHubBackup.swift
+  s_c5cf29a2d26b6f::t_45f219b19b9d18 2,53-54,61-72,74-80,82-95
+Sources/ComputerHistoryCore/InputTap.swift
+  s_c5cf29a2d26b6f::t_54ee3fc9e4b14f 47-48,50-62,65,72-76,78-79,83-84,122,132,145-146,148,167-168,176,182-191,195-199,202-205,209-213,215-217,220,227,237-242
+Sources/ComputerHistoryCore/MemoryContextRejections.swift
+  s_c5cf29a2d26b6f::t_b02c87b05fbc6e 1-89
+Sources/ComputerHistoryCore/MemoryGenerator.swift
+  s_c5cf29a2d26b6f::t_248079df1be9cf 129,131,143,147-150,170-171,178,243-244,360-364
+Sources/ComputerHistoryCore/MemoryIndex.swift
+  s_c5cf29a2d26b6f::t_a1e31c6691327d 39
+Sources/ComputerHistoryCore/MemoryWriter.swift
+  s_c5cf29a2d26b6f::t_db0a5f88c5be1f 75
+Sources/ComputerHistoryCore/ModelAPIKey.swift
+  s_c5cf29a2d26b6f::t_2e869fbb45a70c 43-54
+Sources/ComputerHistoryCore/ModelBudgetIndex.swift
+  s_c5cf29a2d26b6f::t_e7d64a98e658ae 1-126
+Sources/ComputerHistoryCore/ModelGroups.swift
+  s_c5cf29a2d26b6f::t_754feb67f7b354 4,63-64,88,97,138-140
+Sources/ComputerHistoryCore/ModelHealth.swift
+  s_c5cf29a2d26b6f::t_fb09dac58e5907 23
+Sources/ComputerHistoryCore/ModelRequest.swift
+  s_c5cf29a2d26b6f::t_1edb471952807b 2,29,32-52,66,93
+Sources/ComputerHistoryCore/ModelRequestFilter.swift
+  s_c5cf29a2d26b6f::t_6c66a74cfe2669 8,22,24
+Sources/ComputerHistoryCore/NarrativeGenerator.swift
+  s_c5cf29a2d26b6f::t_31452ca5a49524 33
+Sources/ComputerHistoryCore/SecureInputMonitor.swift
+  s_c5cf29a2d26b6f::t_a29a4148c71eff 1-27
+Sources/ComputerHistoryCore/SummarySettings.swift
+  s_c5cf29a2d26b6f::t_f48f6805616cc3 22,85,104
+Sources/ComputerHistoryCore/SupervisedLifetime.swift
+  s_c5cf29a2d26b6f::t_cc93b4e7b3390a 1-77
+Sources/ComputerHistoryCore/SystemPowerObserver.swift
+  s_c5cf29a2d26b6f::t_db28bb5df87ceb 1-62
+Sources/ComputerHistoryCore/TimelineLayout.swift
+  s_c5cf29a2d26b6f::t_6944c4b811b80e 10,35,55
+Sources/ComputerHistoryCore/TraySnapshotLoader.swift
+  s_c5cf29a2d26b6f::t_90aa1d1b224c50 27,58-63,80-81,159,174-175,264-266,271-272,301-302,311,321,325-364,366,369-406,491
+Sources/ComputerHistoryCore/WindowTextReader.swift
+  s_c5cf29a2d26b6f::t_cd76f82c2cf9a1 23-24,29-30,32,37,41-46
+Sources/computer-history-menubar/ComputerHistoryMenuBarApp.swift
+  s_c5cf29a2d26b6f::t_79fa58d59ccf29 56-63
+Sources/computer-history-menubar/SettingsPane.swift
+  s_c5cf29a2d26b6f::t_afdff5e8ee83a8 128,294,326-327
+Sources/computer-history-menubar/StatusModel.swift
+  s_c5cf29a2d26b6f::t_2d36543309a813 212-213,817-824,1116
+Sources/computer-history-menubar/StatusPanel.swift
+  s_c5cf29a2d26b6f::t_55b2314a5cd498 528,1840,1844-1845
+Sources/computer-history/TerminationSignals.swift
+  s_c5cf29a2d26b6f::t_b81fafaf433fe4 1-31
+Sources/computer-history/main.swift
+  s_c5cf29a2d26b6f::t_ccd0c61742cea5 23,42,62-70,99-113,279-281,392-396,491-495,504-505,535-549,560-583,589-590,602-610,613-615,617,626-640,645-646,658,660-673,677,688,692,696-697,707-708,732-737,739-740,762-795,797-798,803,827-839,889-892,894-897,899-900,909,951-996,1064-1066,1070-1073,1075,1080,1083,1092-1093,1101-1109,1111,1128
+Tests/ComputerHistoryCoreTests/AsyncSnapshotTests.swift
+  s_c5cf29a2d26b6f::t_a4c1d4f71072f2 1,4,53,111,132,142-176,208-260
+Tests/ComputerHistoryCoreTests/AuditRegressionTests.swift
+  s_c5cf29a2d26b6f::t_eedd8832e305e2 335-344
+Tests/ComputerHistoryCoreTests/CollectorPowerTests.swift
+  s_c5cf29a2d26b6f::t_bb4c8e807b3c1a 1-115
+Tests/ComputerHistoryCoreTests/ConfigurationEditorTests.swift
+  s_c5cf29a2d26b6f::t_aa66fdc3dc7114 141-142,144-145,150
+Tests/ComputerHistoryCoreTests/ControlTests.swift
+  s_c5cf29a2d26b6f::t_5fca3feeeb75eb 57-123
+Tests/ComputerHistoryCoreTests/HandoffRegressionTests.swift
+  s_c5cf29a2d26b6f::t_186369893e63e5 60,80,112,139,182
+Tests/ComputerHistoryCoreTests/InputEventTests.swift
+  s_c5cf29a2d26b6f::t_bcefa392d1d860 112,114,116
+Tests/ComputerHistoryCoreTests/InputTapAuditTests.swift
+  s_c5cf29a2d26b6f::t_40a98f7cf5b1c2 1-172
+Tests/ComputerHistoryCoreTests/InteractionEvidenceTests.swift
+  s_c5cf29a2d26b6f::t_73a3c8f5a8248c 96,107
+Tests/ComputerHistoryCoreTests/MemoryGenerationTests.swift
+  s_c5cf29a2d26b6f::t_b422d4d5e76eab 271
+Tests/ComputerHistoryCoreTests/ModelBudgetIndexTests.swift
+  s_c5cf29a2d26b6f::t_9e1dc4984a0ca8 1-222
+Tests/ComputerHistoryCoreTests/ModelGroupsTests.swift
+  s_c5cf29a2d26b6f::t_7bb0f2875040d4 39-58
+Tests/ComputerHistoryCoreTests/OptimizationTests.swift
+  s_c5cf29a2d26b6f::t_f5a234422adf96 20,22,25,34,81,94,180,184,187-188,283-285,287,289-290
+Tests/ComputerHistoryCoreTests/ReviewRegressionTests.swift
+  s_c5cf29a2d26b6f::t_64d723f21ad821 1,91,130,169-172,197,218,225
+Tests/ComputerHistoryCoreTests/SecureInputTests.swift
+  s_c5cf29a2d26b6f::t_1137aa0607dffe 1-174
+Tests/ComputerHistoryCoreTests/SummarySettingsTests.swift
+  s_c5cf29a2d26b6f::t_7ce7b3f9f4a310 21,43-54
+Tests/ComputerHistoryCoreTests/TextQualityTests.swift
+  s_c5cf29a2d26b6f::t_072a961d7a2534 47,131,141,148,185,190,195
+Tests/ComputerHistoryCoreTests/TimelineLayoutTests.swift
+  s_c5cf29a2d26b6f::t_f1694f6c953bb7 31-41
+Tests/ComputerHistoryCoreTests/TraySnapshotLoaderTests.swift
+  s_c5cf29a2d26b6f::t_e5077240c6fd16 24,131,133-137,144-148,164-211
+Tests/ComputerHistoryCoreTests/WindowIdentityTests.swift
+  s_c5cf29a2d26b6f::t_4127d586b74eaf 1-192
+Tests/ComputerHistoryCoreTests/WindowTextTests.swift
+  s_c5cf29a2d26b6f::t_4d366eab14b5a6 67,80,93,114,119,121,123,129-137
+docs/collector.md
+  s_c5cf29a2d26b6f::t_f04c0525e03fc5 20,22,26,28,34,36,40,42,54,85,99-100,123,125,149,155,174-176,190,241,245,249,302,333-335
+docs/privacy.md
+  s_c5cf29a2d26b6f::t_af95d2696aa8e0 7,28
+scripts/manage-install.py
+  s_c5cf29a2d26b6f::t_ca8c33a921530c 218-219
+scripts/test-accessibility-timeout-interpose.c
+  s_c5cf29a2d26b6f::t_b8ea7e61396505 1-30
+scripts/test-accessibility-timeout.py
+  s_c5cf29a2d26b6f::t_6fe2da8ee74712 1-262
+scripts/test-accessibility-timeout.swift
+  s_c5cf29a2d26b6f::t_a36a756f92c6a5 1-126
+scripts/test-app-install.py
+  s_c5cf29a2d26b6f::t_a3061d64760b63 43-51
+scripts/test-collector-input.swift
+  s_c5cf29a2d26b6f::t_54fe33d6f459a2 3,28-30,32,39-40,42,106-137
+scripts/test-collector-logs.py
+  s_c5cf29a2d26b6f::t_64ef12c6383f54 1-198
+scripts/test-collector-power.py
+  s_c5cf29a2d26b6f::t_69e386fa1f5dce 1-161
+scripts/test-context-limit.py
+  s_c5cf29a2d26b6f::t_2c0d99485fcf87 1-150
+scripts/test-integration.py
+  s_c5cf29a2d26b6f::t_19fb6ca4e9b9a8 11
+scripts/test-menubar-panel.swift
+  s_c5cf29a2d26b6f::t_9f0b58cf210786 109-120,124-127,158
+scripts/test-menubar-settings.swift
+  s_c5cf29a2d26b6f::t_aa198e6de39fa3 143-162
+scripts/test-menubar-startup.py
+  s_c5cf29a2d26b6f::t_1214b6245edeeb 1-113
+scripts/test-model-fallback.py
+  s_c5cf29a2d26b6f::t_822f9f73472936 18,24-25,56-57,59,125-180
+scripts/test-process-control.py
+  s_c5cf29a2d26b6f::t_a1a4000b951ecc 20,58,92,103-271,351,354-355,395,406-412,454-556
+scripts/test-reports.py
+  s_c5cf29a2d26b6f::t_9de3fde02e44aa 38-41,49-93,111-112
+scripts/test-text-summary.py
+  s_c5cf29a2d26b6f::t_f5e562a1e65d27 177,180-182
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "42d1dcdb2d4f0f1b5a7a3d943f5d61bec349fa3b",
+  "prompts": {},
+  "sessions": {
+    "s_c5cf29a2d26b6f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1ed56-004d-7903-8a9e-ea82227865fa",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
