@@ -1,0 +1,89 @@
+CHANGELOG.md
+  s_c2ca481c1e4b12::t_c7ecab78c6c484 3-20
+CHANGELOG.zh.md
+  s_c2ca481c1e4b12::t_174a3fc184abdd 3-20
+CONTRIBUTING.md
+  s_c2ca481c1e4b12::t_be114cb8905dd4 37-38,153-164
+README.md
+  s_c2ca481c1e4b12::t_8ee09aa024fa7e 87
+Sources/ComputerHistoryCore/ActivityEvidence.swift
+  s_c2ca481c1e4b12::t_489677cc44ae61 38,61,69,78-81,97-121,157,162,168,171,175,207-234
+Sources/ComputerHistoryCore/ActivityFragment.swift
+  s_c2ca481c1e4b12::t_76a580f32b3f50 38
+Sources/ComputerHistoryCore/ActivityGrouping.swift
+  s_c2ca481c1e4b12::t_d518a7664d8127 2,80,109,116,124-127,140-142,148,153-155,172-184,191-193
+Sources/ComputerHistoryCore/ActivityReport.swift
+  s_c2ca481c1e4b12::t_22d428b285197b 251
+Sources/ComputerHistoryCore/ConfigurationDrafts.swift
+  s_c2ca481c1e4b12::t_e0c2d797e98692 70-71,75-76,95-97,100-102,110-116,138,148
+Sources/ComputerHistoryCore/DeepSeekClient.swift
+  s_c2ca481c1e4b12::t_d9708b9d255e19 33,37,57-68,73,78,95-98,100-104,140-141,143-158,160-161,163-164,173-174,183,189-193,201-202,210-226,228,231-232,267,269,277-278,312-332,343-349,353-354,380
+Sources/ComputerHistoryCore/GenerationPowerState.swift
+  s_c2ca481c1e4b12::t_6396dd6812d011 1-72
+Sources/ComputerHistoryCore/MemoryGenerator.swift
+  s_c2ca481c1e4b12::t_8a01802dc4443d 154-155,167-168,175-177,238-239,352,364-365,371-373,666,676,679-681,693-694,699-700,703,708-709,711-712
+Sources/ComputerHistoryCore/MemoryIndex.swift
+  s_c2ca481c1e4b12::t_c9ca6a99008bb1 36-37,39,45
+Sources/ComputerHistoryCore/ModelGroups.swift
+  s_c2ca481c1e4b12::t_36d6a82ec37f30 3-12,24-25,33,38,50,53,55,74,80,87-108,112-113,121,123
+Sources/ComputerHistoryCore/ModelRequest.swift
+  s_c2ca481c1e4b12::t_d1408af6660490 22-23,46,55-56
+Sources/ComputerHistoryCore/ModelSettings.swift
+  s_c2ca481c1e4b12::t_9a9ee70a1005a0 24-26,39-40,45-46,91-93,122-123,125-126
+Sources/ComputerHistoryCore/NarrativeGenerator.swift
+  s_c2ca481c1e4b12::t_baa3aefb452989 27,33,72,76,102-106,153,215,218-219,231,234-235,239-240,281
+Sources/ComputerHistoryCore/TraySnapshotLoader.swift
+  s_c2ca481c1e4b12::t_7e71323f6cc0d5 96-102,336-338,350,380
+Sources/computer-history-menubar/SettingsPane.swift
+  s_c2ca481c1e4b12::t_23dc32406a1323 249-251,291-317,326
+Sources/computer-history-menubar/StatusModel.swift
+  s_c2ca481c1e4b12::t_5d424f642bfea5 74,742,817,834
+Sources/computer-history-menubar/StatusPanel.swift
+  s_c2ca481c1e4b12::t_0c085400f31d15 1637-1643,1750
+Sources/computer-history/main.swift
+  s_c2ca481c1e4b12::t_d601ea3a771877 600,638-639
+Tests/ComputerHistoryCoreTests/ConfigurationEditorTests.swift
+  s_c2ca481c1e4b12::t_304bd41e3f9e85 5-21
+Tests/ComputerHistoryCoreTests/GenerationPowerTests.swift
+  s_c2ca481c1e4b12::t_1a84904ec8bdef 1-97
+Tests/ComputerHistoryCoreTests/InteractionEvidenceTests.swift
+  s_c2ca481c1e4b12::t_483c14c23e7eca 6-43
+Tests/ComputerHistoryCoreTests/MemoryGenerationTests.swift
+  s_c2ca481c1e4b12::t_293bbb887318ee 10-26
+Tests/ComputerHistoryCoreTests/ModelGroupsTests.swift
+  s_c2ca481c1e4b12::t_19d77b6ccbcf8d 5-35
+Tests/ComputerHistoryCoreTests/TraySnapshotLoaderTests.swift
+  s_c2ca481c1e4b12::t_80dee66471f4fc 6-38
+VERSION
+  s_c2ca481c1e4b12::t_20a73361665cee 1
+docs/collector.md
+  s_c2ca481c1e4b12::t_eec5262812f378 234,250-251,254-263,293,297
+scripts/evaluate-model-tokens.py
+  s_c2ca481c1e4b12::t_3a55cbcb7c14e1 1-74
+scripts/test-integration.py
+  s_c2ca481c1e4b12::t_4ce209076c67a3 11
+scripts/test-menubar-settings.swift
+  s_c2ca481c1e4b12::t_be8fa3552b20aa 90,117-121,138-142
+scripts/test-model-fallback.py
+  s_c2ca481c1e4b12::t_3709be12e89a14 29,60,65,101-120
+scripts/test-narrative-activities.py
+  s_c2ca481c1e4b12::t_db5a9390ef3604 4,125-163
+scripts/test-token-optimization.py
+  s_c2ca481c1e4b12::t_23d235c8a4fc51 1-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4034273fb66969fedf3083f1a60fdc8c30de48f6",
+  "prompts": {},
+  "sessions": {
+    "s_c2ca481c1e4b12": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a19d4a-50a1-7de2-89f4-9c143a662464",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}

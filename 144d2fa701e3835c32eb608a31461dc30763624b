@@ -1,0 +1,21 @@
+Sources/ComputerHistoryCore/DeepSeekClient.swift
+  s_c2ca481c1e4b12::t_1dd471aa5c2c75 64-75
+Tests/ComputerHistoryCoreTests/ModelGroupsTests.swift
+  s_c2ca481c1e4b12::t_675aa9b608d996 5-14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "144d2fa701e3835c32eb608a31461dc30763624b",
+  "prompts": {},
+  "sessions": {
+    "s_c2ca481c1e4b12": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a19d4a-50a1-7de2-89f4-9c143a662464",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}

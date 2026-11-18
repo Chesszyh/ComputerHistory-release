@@ -1,0 +1,30 @@
+CHANGELOG.md
+  h_a0b60935de1168 3-12
+CHANGELOG.zh.md
+  h_a0b60935de1168 3-12
+Sources/computer-history-menubar/DesignTokens.swift
+  h_a0b60935de1168 1-111
+Sources/computer-history-menubar/ReportsPane.swift
+  h_a0b60935de1168 23,27-80
+Sources/computer-history-menubar/SettingsPane.swift
+  h_a0b60935de1168 39,44,53,55,59,61,133,136,140,144,146,152,166,503,506,574-581,647-648,651,654-655,657-658,667,671,683,691-692,699
+Sources/computer-history-menubar/StatusPanel.swift
+  h_a0b60935de1168 29,86,92,95,139,141,143-144,146,151,158,164,169,171-172,174-175,402,405,411,415,418,420-423,425-445,447-486,511,513-514,517,521-522,535-563,566,570-573,575,577,582-585,587,589-594,596-621,624,626-628,662-663,665-670,673,677,680-681,683-685,690-728,732,755,766-769,990,994-998,1071-1072,1074,1080,1082,1084,1091,1229,1319,1323-1327,1649,1652-1655
+VERSION
+  h_a0b60935de1168 1
+scripts/build-menubar-tests.py
+  h_a0b60935de1168 25
+scripts/test-menubar-panel.sh
+  h_a0b60935de1168 26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "de54ccbeeb9afc2dc8a22b6468e98c046629b605",
+  "prompts": {},
+  "humans": {
+    "h_a0b60935de1168": {
+      "author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
