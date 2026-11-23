@@ -1,0 +1,39 @@
+CHANGELOG.md
+  s_d950c0dc35f0db::t_c872b3567136b4 3-14
+CHANGELOG.zh.md
+  s_d950c0dc35f0db::t_59901451628ff9 3-14
+CONTRIBUTING.md
+  s_d950c0dc35f0db::t_56e6d1b7e3ec89 3,89,101,109
+README.md
+  s_d950c0dc35f0db::t_57cc76eb315aed 97
+Sources/ComputerHistoryCore/ActivityEvidence.swift
+  s_d950c0dc35f0db::t_0891ee43f3ff04 5-25,62,73,87-98,107,131-134,162-199,201-216,220-239
+Sources/ComputerHistoryCore/ActivityReport.swift
+  s_d950c0dc35f0db::t_5666a04ae66103 89-90,130-136,161-166,186,255,257,311-315,320,322,324,328
+Sources/ComputerHistoryCore/MemoryGenerator.swift
+  s_d950c0dc35f0db::t_445c7f51023ff6 64-68,70
+Sources/ComputerHistoryCore/MemoryIndex.swift
+  s_d950c0dc35f0db::t_b0c2b79384d246 80-83,89-91,93-97,99
+Tests/ComputerHistoryCoreTests/ReportTests.swift
+  s_d950c0dc35f0db::t_53e9555f3d5b4f 63-89,164-169
+VERSION
+  s_d950c0dc35f0db::t_0695b3464e73c6 1
+docs/collector.md
+  s_d950c0dc35f0db::t_2dd4764f5928c1 151,263
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7cb9da71c40136ef563520abcb239b85545992c5",
+  "prompts": {},
+  "sessions": {
+    "s_d950c0dc35f0db": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a2074e-aa69-7c01-ae40-54fd89dd0a48",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
