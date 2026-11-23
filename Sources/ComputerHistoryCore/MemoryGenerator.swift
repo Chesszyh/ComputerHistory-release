@@ -61,7 +61,13 @@ public struct MemoryGenerator: Sendable {
     /// 当前正在写入的段会被排除——它的 metadata 尚未封口，
     /// 生成记忆会漏掉后面的内容。
     public func orderedSegments() -> [SegmentOrder] {
+        orderedSegments(reusing: [:])
+    }
+
+    func orderedSegments(reusing sealedSegments: [String: SegmentOrder]) -> [SegmentOrder] {
+        // Recheck which segments are sealed so new or pruned segments are visible during a batch.
         completedSegmentIDs().map { id in
+            if let existing = sealedSegments[id] { return existing }
             let dir = rootDirectory.appendingPathComponent("segments")
                 .appendingPathComponent(id)
             let fallback = SegmentClock.date(fromSegmentID: id) ?? Date(timeIntervalSince1970: 0)

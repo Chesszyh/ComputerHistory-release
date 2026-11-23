@@ -77,14 +77,26 @@ public struct MemoryIndex: Sendable {
 
     /// 扫描目录。文件不存在时返回空索引而非报错——应用首次启动时目录可能还没有。
     public static func load(from directory: URL) -> MemoryIndex {
+        load(from: directory, startedIn: nil)
+    }
+
+    static func load(from directory: URL, startedIn period: Range<Date>?) -> MemoryIndex {
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]) else {
             return MemoryIndex(entries: [])
         }
+        let filenameRange = period.map {
+            SegmentClock.segmentID(for: $0.lowerBound)...SegmentClock.segmentID(for: $0.upperBound)
+        }
         let entries = files
-            .filter { $0.pathExtension == "md" }
+            .filter {
+                guard $0.pathExtension == "md" else { return false }
+                // The fixed-width UTC prefix sorts in the same order as the segment timestamp.
+                return filenameRange?.contains(String($0.lastPathComponent.prefix(20))) ?? true
+            }
             .compactMap { parse(fileURL: $0) }
+            .filter { period?.contains($0.startedAt) ?? true }
             .sorted { $0.startedAt == $1.startedAt ? $0.id < $1.id : $0.startedAt > $1.startedAt }
         return MemoryIndex(entries: entries)
     }

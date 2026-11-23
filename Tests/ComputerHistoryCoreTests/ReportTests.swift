@@ -60,6 +60,33 @@ final class ReportTests: XCTestCase {
         try ActivityExport.refresh(root: root, timeZone: zone)
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("exports/activities/2026-10-18.md").path))
     }
+    func testActivityRefreshMatchesPeriodMaterialAtLocalDayBoundaries() throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let zone = TimeZone(identifier: "America/Los_Angeles")!
+        let fixtures = [
+            ("2026-03-08T07-59-59Z", "前一日的活动"),
+            ("2026-03-08T08-00-00Z", "当天开头的活动"),
+            ("2026-03-08T08-00-00Z_AAAA1111-0000-0000-0000-000000000001", "重启后的活动"),
+            ("2026-03-09T06-59-59Z", "当天结尾的活动"),
+            ("2026-03-09T07-00-00Z", "后一日的活动"),
+        ]
+        for (id, activity) in fixtures.reversed() {
+            try memory(root, id: id, activity: activity)
+        }
+        let days = ["2026-03-07", "2026-03-08", "2026-03-09"]
+        try ActivityExport.refresh(root: root, timeZone: zone)
+        for (day, expectedCount) in zip(days, [1, 3, 1]) {
+            let period = ReportPeriod(kind: .daily, date: try ReportPeriod.parseDay(day, timeZone: zone), timeZone: zone)
+            let expected = MemoryIndex.load(from: root.appendingPathComponent("memories")).entries
+                .filter { period.contains($0.startedAt) }.sorted { $0.startedAt < $1.startedAt }
+            let file = root.appendingPathComponent("exports/activities/\(day).md")
+            let material = try ActivityExport.material(entries: expected, period: period)
+            XCTAssertEqual(expected.count, expectedCount)
+            XCTAssertEqual(try ActivityExport.material(root: root, period: period), material)
+            XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), material)
+        }
+    }
+
     func testPreviewFinalizationAndLateSourcesRegenerate() throws {
         let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
         try memory(root)
@@ -134,7 +161,12 @@ final class ReportTests: XCTestCase {
         try Data("{\"eventCount\":1}".utf8).write(to: directory.appendingPathComponent("metadata.json"))
         XCTAssertGreaterThan(try ReportGenerator(root: root, client: nil).generateMissing(), 0)
         let period = ReportPeriod(kind: .daily, date: date)
-        XCTAssertNotNil(try ActivityReport.load(root: root, period: period))
+        let file = root.appendingPathComponent("memories/" + MemoryWriter.fileName(segmentID: id))
+        let report = try XCTUnwrap(ActivityReport.load(root: root, period: period))
+        let export = root.appendingPathComponent("exports/activities/\(period.key).md")
+        XCTAssertTrue(report.material.contains(file.lastPathComponent))
+        XCTAssertEqual(try String(contentsOf: export, encoding: .utf8), report.material)
+        XCTAssertEqual(try ReportGenerator(root: root, client: nil).generateMissing(), 0)
     }
     func testWeeklyRequiresCompletedDailyAndChangesWithDaily() throws {
         let root = try root(); defer { try? FileManager.default.removeItem(at: root) }

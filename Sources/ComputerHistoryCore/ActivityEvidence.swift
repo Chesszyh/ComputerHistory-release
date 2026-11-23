@@ -2,6 +2,27 @@ import Foundation
 
 /// 有界的时序材料同时保留应用上下文、编辑归属和界面结果，供各总结层复用。
 public enum ActivityEvidence {
+    private struct Observation {
+        let reference: String
+        let context: String
+        let app: EventStreamApp
+        let window: EventStreamWindow?
+        let timestamp: Date
+        let facts: [String]
+        let nodes: [String]
+        let hasContent: Bool
+        let priority: Int
+        let changedScreen: Bool
+
+        func sharesPage(with other: Observation) -> Bool {
+            guard app.bundleIdentifier == other.app.bundleIdentifier,
+                  app.processIdentifier == other.app.processIdentifier,
+                  window?.url == other.window?.url else { return false }
+            if let id = window?.windowID, let otherID = other.window?.windowID { return id == otherID }
+            return context == other.context
+        }
+    }
+
     public static let noActivityTitle = "无明显活动"
     public static let noActivitySummary = "本时段仅记录到前台界面变化，未记录到明确操作。"
     public static let inputDegradedTitle = "活动证据不足"
@@ -38,7 +59,7 @@ public enum ActivityEvidence {
     }
     public static func material(events: [EventStreamRecord], segmentID: String,
                                 characterBudget: Int? = 16000, useTextReferences: Bool = true) -> String {
-        var observations: [(reference: String, context: String, facts: [String], nodes: [String], hasContent: Bool)] = []
+        var observations: [Observation] = []
         var lastContext: String?
         let replaced = Set(events.flatMap { $0.keyboard?.textReplaces ?? [] })
         for event in events {
@@ -49,6 +70,7 @@ public enum ActivityEvidence {
             var facts: [String] = []
             var selectedNodes: [String] = []
             var hasContent = false
+            var priority = 0
             if let activity = event.activityWatch {
                 let state = activity.status == "afk" ? "空闲" : activity.status == "not-afk" ? "活动" : "状态未知"
                 let seconds = Int(max(0, activity.endedAt.timeIntervalSince(activity.startedAt)))
@@ -62,6 +84,18 @@ public enum ActivityEvidence {
                     let label = keyboard.textEvidence == .editedValue ? "编辑片段" : "控件变化"
                     facts.append("\(label)：\(MemoryWriter.truncate(text, characterBudget == nil ? Int.max : 2400))")
                     hasContent = true
+                    if keyboard.textEvidence == .editedValue { priority = 2 }
+                }
+                if characterBudget != nil {
+                    if event.kind == .keyboardSubmit {
+                        facts.append("按下回车")
+                        hasContent = true
+                        priority = 2
+                    } else if event.kind == .keyboardShortcut, let key = keyboard.keyEquivalent {
+                        facts.append("快捷键：" + (keyboard.modifiers + [key]).joined(separator: "+"))
+                        hasContent = true
+                        priority = 1
+                    }
                 }
             }
             if let target = event.mouse?.target {
@@ -70,6 +104,7 @@ public enum ActivityEvidence {
                     let action = event.kind == .mouseScroll ? "浏览滚动" : "点击"
                     facts.append("\(action)：\(MemoryWriter.truncate(label, characterBudget == nil ? Int.max : 100))")
                     hasContent = true
+                    if event.kind != .mouseScroll { priority = 1 }
                 }
             } else if event.kind == .mouseScroll {
                 facts.append("浏览滚动")
@@ -93,7 +128,10 @@ public enum ActivityEvidence {
             }
             lastContext = context
             if !facts.isEmpty || !selectedNodes.isEmpty {
-                observations.append((reference, context, facts, selectedNodes, hasContent))
+                observations.append(Observation(reference: reference, context: context, app: app, window: event.window,
+                    timestamp: event.timestamp,
+                    facts: facts, nodes: selectedNodes, hasContent: hasContent, priority: priority,
+                    changedScreen: event.ax?.mode == .diffFromPrevious))
             }
         }
         guard let characterBudget else {
@@ -121,32 +159,84 @@ public enum ActivityEvidence {
                 return text + "\n\n"
             }.joined()
         }
-        // 有正文时先覆盖正文的时序，重复的窗口与空闲元数据不能挤掉已采集内容。
-        let content = observations.filter(\.hasContent)
-        let selected = evenlySpaced(content.isEmpty ? observations : content, limit: max(1, characterBudget / 650))
-        let slotBudget = max(0, characterBudget / max(1, selected.count) - 2)
-        guard slotBudget > 0 else { return "" }
-        var out = ""
+        return compactMaterial(observations, budget: characterBudget)
+    }
+
+    private static func compactMaterial(_ observations: [Observation], budget: Int) -> String {
+        let slots = max(1, budget / 650)
+        let readingSlots = max(1, slots / 3)
+        let actionSlots = slots - readingSlots
+        let edits = observations.indices.filter { observations[$0].priority == 2 }
+        let actions = observations.indices.filter { observations[$0].priority == 1 }
+        let chosenActions = evenlySpaced(edits, limit: actionSlots)
+            + representative(actions, in: observations, limit: max(0, actionSlots - edits.count))
+
+        var results = Set<Int>()
+        for index in chosenActions.sorted(by: { observations[$0].priority > observations[$1].priority }) {
+            let action = observations[index]
+            let following = observations.indices.dropFirst(index + 1).prefix { next in
+                let observation = observations[next]
+                return observation.sharesPage(with: action) && observation.priority == 0
+                    && observation.timestamp.timeIntervalSince(action.timestamp) <= 12
+            }
+            if let result = following.first(where: { observations[$0].changedScreen && !observations[$0].nodes.isEmpty })
+                ?? following.first(where: { !observations[$0].nodes.isEmpty }) {
+                results.insert(result)
+            }
+            if results.count >= readingSlots { break }
+        }
+        let selected = Set(chosenActions).union(results)
+        let reading = observations.indices.filter { !selected.contains($0) && observations[$0].priority == 0 }
+        let available = slots - chosenActions.count
+        let readingCount = max(min(readingSlots, available), available - results.count)
+        let visible = reading.filter { !observations[$0].nodes.isEmpty }
+        let candidates = reading.filter { observations[$0].hasContent }
+        let chosenReading = representative(visible.isEmpty ? candidates : visible, in: observations, limit: readingCount)
+        let fallback = chosenReading.isEmpty && selected.isEmpty ? evenlySpaced(reading, limit: slots) : chosenReading
+        let ordered = selected.union(fallback).sorted()
+        let weight = ordered.reduce(0) { $0 + (observations[$1].priority == 2 || results.contains($1) ? 2 : 1) }
+        guard weight > 0 else { return "" }
+        var output = ""
         var seenScreen = Set<String>()
-        for item in selected {
-            var text = item.reference + "\n" + item.facts.joined(separator: "\n")
-            if !item.nodes.isEmpty {
-                let available = max(0, slotBudget - text.count - 8)
-                // 只对最终选入材料的节点去重，未入选节点留给后续快照。
-                let fresh = item.nodes.filter { !seenScreen.contains(item.context + "\n" + $0) }
-                let full = fresh.joined(separator: "；")
-                let nodes = full.count <= available ? fresh : evenlySpaced(fresh, limit: max(1, available / 80))
-                if nodes.isEmpty, item.facts.isEmpty { continue }
-                let perNode = max(1, available / max(1, nodes.count) - 1)
-                let body = full.count <= available ? full
-                    : nodes.map { MemoryWriter.truncate($0, perNode) }.joined(separator: "；")
-                if !nodes.isEmpty { text += "\n界面显示：" + body }
+        for index in ordered {
+            let item = observations[index]
+            let slot = budget / weight * (item.priority == 2 || results.contains(index) ? 2 : 1) - 2
+            guard slot > 0 else { continue }
+            let text = item.reference + "\n" + item.facts.joined(separator: "\n")
+            let space = max(0, slot - text.count - 7)
+            let fresh = item.nodes.filter { !seenScreen.contains(item.context + "\n" + $0) }
+            let full = fresh.joined(separator: "；")
+            let nodes = full.count <= space ? fresh
+                : Array(fresh.sorted { readableLength($0) > readableLength($1) }.prefix(max(1, space / 230)))
+            let perNode = max(1, space / max(1, nodes.count) - 1)
+            let body = full.count <= space ? full : nodes.map { MemoryWriter.truncate($0, perNode) }.joined(separator: "；")
+            if item.facts.isEmpty && (body.isEmpty || space == 0) { continue }
+            let rendered = text + (body.isEmpty || space == 0 ? "" : "\n界面显示：" + body)
+            output += (rendered.count <= slot ? rendered : String(rendered.prefix(slot - 1)) + "…") + "\n\n"
+            if space > 0 {
                 for node in nodes { seenScreen.insert(item.context + "\n" + node) }
             }
-            if text.count > slotBudget { text = String(text.prefix(slotBudget - 1)) + "…" }
-            out += text + "\n\n"
         }
-        return out
+        return output
+    }
+
+    private static func representative(_ candidates: [Int], in observations: [Observation], limit: Int) -> [Int] {
+        guard limit > 0 else { return [] }
+        var byContext: [String: Int] = [:]
+        for index in candidates {
+            let item = observations[index]
+            if let old = byContext[item.context], observations[old].changedScreen || !item.changedScreen { continue }
+            byContext[item.context] = index
+        }
+        let distinct = byContext.values.sorted()
+        let selected = Array(evenlySpaced(distinct, limit: limit))
+        let remaining = Set(selected)
+        return selected + evenlySpaced(candidates.filter { !remaining.contains($0) }, limit: limit - selected.count)
+    }
+
+    private static func readableLength(_ node: String) -> Int {
+        let content = node.hasPrefix("Value: ") || !node.contains(": ")
+        return min(node.count, 360) + (content ? 80 : 0)
     }
 
     static func evenlySpaced<T>(_ values: [T], limit: Int) -> [T] {

@@ -94,6 +94,7 @@ python3 scripts/test-process-control.py "$bin_dir/computer-history"
 - [隐私、外发和数据删除边界](docs/privacy.md)
 - [跨 Agent 历史查询 Skill](docs/agent-skill.md)
 - [开发与测试](CONTRIBUTING.md)
+- [更新日志](CHANGELOG.zh.md) · [Changelog (English)](CHANGELOG.md)
 - [安全问题反馈](SECURITY.md)
 - [来源与第三方内容](docs/provenance.md)
 

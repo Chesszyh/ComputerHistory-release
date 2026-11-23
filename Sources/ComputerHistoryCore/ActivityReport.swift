@@ -86,8 +86,8 @@ public struct ActivityReport: Codable, Sendable {
 
 public enum ActivityExport {
     public static func entries(root: URL, period: ReportPeriod) -> [MemoryIndex.Entry] {
-        MemoryIndex.load(from: root.appendingPathComponent("memories")).entries
-            .filter { $0.granularity == "10min" && period.contains($0.startedAt) }
+        MemoryIndex.load(from: root.appendingPathComponent("memories"), startedIn: period.start..<period.end).entries
+            .filter { $0.granularity == "10min" }
             .sorted { $0.startedAt < $1.startedAt }
     }
     public static func text(for entry: MemoryIndex.Entry) -> String {
@@ -127,9 +127,13 @@ public enum ActivityExport {
     }
     public static func refresh(root: URL, timeZone: TimeZone = .current) throws {
         let all = MemoryIndex.load(from: root.appendingPathComponent("memories")).entries.filter { $0.granularity == "10min" }
-        for day in Set(all.map { $0.dayLabel(timeZone: timeZone) }).sorted() {
-            let period = ReportPeriod(kind: .daily, date: try ReportPeriod.parseDay(day, timeZone: timeZone), timeZone: timeZone)
-            try write(material(root: root, period: period), to: root.appendingPathComponent("exports/activities/\(day).md"))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let days = Dictionary(grouping: all) { calendar.startOfDay(for: $0.startedAt) }
+        for day in days.keys.sorted() {
+            let period = ReportPeriod(kind: .daily, date: day, timeZone: timeZone)
+            let entries = days[day, default: []].sorted { $0.startedAt < $1.startedAt }
+            try write(material(entries: entries, period: period), to: root.appendingPathComponent("exports/activities/\(period.key).md"))
         }
         for kind in ReportKind.allCases {
             let directory = root.appendingPathComponent("reports/\(kind.rawValue)")
@@ -154,6 +158,12 @@ public struct ReportGenerator {
 
     public func generate(period: ReportPeriod, now: Date = Date(), overwrite: Bool = false,
                          fillDailyDependencies: Bool = true, waitForLock: TimeInterval = 0) throws -> ActivityReport {
+        try generate(period: period, now: now, overwrite: overwrite, fillDailyDependencies: fillDailyDependencies,
+                     waitForLock: waitForLock, sealedSegments: [:])
+    }
+
+    private func generate(period: ReportPeriod, now: Date, overwrite: Bool = false, fillDailyDependencies: Bool,
+                          waitForLock: TimeInterval = 0, sealedSegments: [String: MemoryGenerator.SegmentOrder]) throws -> ActivityReport {
         let lockURL = GenerationLock.lockURL("report-\(period.id)", root: root)
         let deadline = ProcessInfo.processInfo.systemUptime + waitForLock
         var lock = ProcessLock(url: lockURL)
@@ -173,7 +183,7 @@ public struct ReportGenerator {
             }
             guard !open else { throw ReportError.pending("\(period.title)仍有未封口的事件段，稍后重试。") }
         }
-        let contextLimited = try fillMemoryDependencies(period: period)
+        let contextLimited = try fillMemoryDependencies(period: period, sealedSegments: sealedSegments)
         let entries = ActivityExport.entries(root: root, period: period).filter { !contextLimited.contains($0.sourceSegmentID) }
         guard !entries.contains(where: \.generationFailed) else {
             throw ReportError.pending("\(period.title)有失败记忆缺少可重试的原始事件，请检查采集日志。")
@@ -242,9 +252,9 @@ public struct ReportGenerator {
         try ActivityExport.write(report.markdown, to: root.appendingPathComponent("exports/\(preview ? "previews/" + period.kind.rawValue : period.kind.rawValue)/\(period.key).md"))
         return report
     }
-    private func fillMemoryDependencies(period: ReportPeriod) throws -> Set<String> {
+    private func fillMemoryDependencies(period: ReportPeriod, sealedSegments: [String: MemoryGenerator.SegmentOrder]) throws -> Set<String> {
         let generator = MemoryGenerator(rootDirectory: root, memoriesDirectory: root.appendingPathComponent("memories"), client: client)
-        let segments = generator.orderedSegments().filter { period.contains($0.firstEventAt) }
+        let segments = generator.orderedSegments(reusing: sealedSegments).filter { period.contains($0.firstEventAt) }
         func needsMemory(_ id: String) -> Bool {
             !MemoryGenerator.hasUsableMemory(at: root.appendingPathComponent("memories/" + MemoryWriter.fileName(segmentID: id)))
         }
@@ -298,21 +308,24 @@ public struct ReportGenerator {
     }
     public func generateMissing(now: Date = Date(), dailyLimit: Int = 3, weeklyLimit: Int = 1) throws -> Int {
         let entries = MemoryIndex.load(from: root.appendingPathComponent("memories")).entries.filter { $0.granularity == "10min" }
-        let dates = entries.map(\.startedAt) + MemoryGenerator(rootDirectory: root, memoriesDirectory: root.appendingPathComponent("memories"))
-            .orderedSegments().map(\.firstEventAt)
+        let orderedSegments = MemoryGenerator(rootDirectory: root, memoriesDirectory: root.appendingPathComponent("memories"))
+            .orderedSegments()
+        let dates = entries.map(\.startedAt) + orderedSegments.map(\.firstEventAt)
+        let sealedSegments = Dictionary(uniqueKeysWithValues: orderedSegments.map { ($0.segmentID, $0) })
+        let timeZone = TimeZone.current
         var generated = 0
         var failures: [String] = []
         var missingModelKey = false
         for kind in ReportKind.allCases {
-            let periods = Dictionary(grouping: dates, by: { ReportPeriod(kind: kind, date: $0).key }).keys.sorted()
+            let periods = Set(dates.map { ReportPeriod(kind: kind, date: $0, timeZone: timeZone).start }).sorted()
             var count = 0
-            for key in periods {
+            for start in periods {
                 if count >= (kind == .daily ? dailyLimit : weeklyLimit) { break }
-                let period = ReportPeriod(kind: kind, date: try ReportPeriod.parseDay(key))
+                let period = ReportPeriod(kind: kind, date: start, timeZone: timeZone)
                 guard period.end <= now else { continue }
                 let before = try ActivityReport.load(root: root, period: period)?.generatedAt
                 do {
-                    let report = try generate(period: period, now: now, fillDailyDependencies: false)
+                    let report = try generate(period: period, now: now, fillDailyDependencies: false, sealedSegments: sealedSegments)
                     if before != report.generatedAt { count += 1; generated += 1 }
                 } catch ReportError.pending(let message) {
                     failures.append(message)

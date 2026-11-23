@@ -1,6 +1,6 @@
 # 开发与测试
 
-使用 macOS 和 Swift 6。核心逻辑位于 `Sources/ComputerHistoryCore`；命令行和菜单栏是独立可执行目标。Swift Package Manager 清单见 `Package.swift`。
+使用 macOS 和 Swift 6。核心逻辑位于 `Sources/ComputerHistoryCore`；命令行和菜单栏是独立可执行目标。Swift Package Manager 清单见 `Package.swift`。产品代码、测试和文档在 [ComputerHistory-release](https://github.com/Chesszyh/ComputerHistory-release) 的 `main` 分支维护。
 
 ```bash
 swift test
@@ -86,7 +86,7 @@ Agent Skill 查询测试只使用临时合成历史，覆盖摘要、时间线�
 python3 scripts/test-agent-skill.py
 ```
 
-CI 在 `main`、`master` 推送与合并请求及手动触发时运行：私有开发使用 `master`，公开产品使用 `main`。Debug、Release 和原生菜单检查在独立的 Apple Silicon macOS 任务中并行执行；每个配置中的集成测试并发运行，日志分别保留为 CI 附件。私有样本与大数据基准保持显式启用，不属于常规 CI。
+向公开仓库的 `main` 推送、提交合并请求或手动触发时运行 CI。Debug、Release 和原生菜单检查在独立的 Apple Silicon macOS 任务中并行执行；每个配置中的集成测试并发运行，日志分别保留为 CI 附件。私有样本与大数据基准保持显式启用，不属于常规 CI。
 
 本机可使用相同的并发集成入口，`--jobs 1` 可用于逐项排障：
 
@@ -98,7 +98,7 @@ python3 scripts/test-install.py
 
 原生菜单测试共用 `scripts/build-menubar-tests.py` 构建的程序，按编译器、源码、核心模块及对象文件内容复用；输入变化时重新编译。各用例在独立进程中顺序运行，避免剪贴板和原生窗口状态互相影响。CI 手动触发的 `native_case` 可只检查一个面板；这种局部检查不能用于发布。
 
-发布前更新 `VERSION` 与双语 CHANGELOG，等待相应提交的完整 CI 通过。Release 任务直接打包已测试的程序，不再重新构建。正式发布任务仅在公开仓库的 `main` 上执行；私有仓库或其他分支手动触发会跳过任务。随后在公开仓库手动运行 **Publish verified release** 工作流，填写该次完整 CI 的 `run_id`；工作流检出受测提交，验证同次 CI 的 Apple Silicon 压缩包，创建注释标签和 GitHub Release。此入口不重新运行构建或测试。普通推送只运行 CI，不创建 Release。用户下载和启动说明由 `docs/distribution.md` 维护。
+发布前更新 `VERSION` 与双语 CHANGELOG，等待相应提交的完整 CI 通过。Release 任务直接打包已测试的程序，不再重新构建。随后在公开仓库的 `main` 上手动运行 **Publish verified release** 工作流，填写该次完整 CI 的 `run_id`；工作流检出受测提交，验证同次 CI 的 Apple Silicon 压缩包，创建注释标签和 GitHub Release。此入口不重新运行构建或测试。普通推送只运行 CI，不创建 Release。用户下载和启动说明由 `docs/distribution.md` 维护。
 
 也可从公开仓库检出的受测提交执行本机检查；加上 `--publish` 才会创建标签和 Release：
 
@@ -106,7 +106,7 @@ python3 scripts/test-install.py
 python3 scripts/publish-release.py --run-id <完整CI编号> --output .build/release-publication
 ```
 
-发布入口核对仓库、提交、三个完整 CI 任务、包内文件、架构、系统依赖、最低系统版本、签名和命令行启动；已存在的 Release 不覆盖。私有源码到公开仓库的允许清单导出仍在私有工作区完成，公开工作流不读取私有开发仓库。
+发布入口核对仓库、提交、三个完整 CI 任务、包内文件、架构、系统依赖、最低系统版本、签名和命令行启动；已存在的 Release 不覆盖。
 
 报告面板交互使用独立合成材料，检查复制、TXT 导出、备份开关与返回，不访问模型或 GitHub；测试结束恢复剪贴板：
 

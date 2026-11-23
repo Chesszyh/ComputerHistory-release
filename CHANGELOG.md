@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.2 - 2026-11-23
+
+### Ten-minute summaries
+- Prioritize confirmed edits, targeted actions, and the interface changes that follow them in compact material. Skip superseded drafts and use the remaining space for representative content from distinct pages. The timeline evidence budget stays the same.
+- Full material keeps more detail from long replies and browsing sequences. Compact material uses less model input while retaining evidence of key actions and outcomes.
+
+### Reports and exports
+- Refresh daily activity exports from a single index scan. Daily and weekly report checks read only summaries in the requested period and reuse event timestamps for sealed segments. Exported Markdown retains its format and ordering.
+- In a local benchmark with 2,218 synthetic summaries across 43 days, the same exports took 4.00 seconds instead of 69.22 seconds. All 43 files matched byte for byte.
+
+The Apple Silicon package is ad-hoc signed and is not notarized. See the [installation guide](docs/distribution.md).
+
 ## 0.4.1 - 2026-11-19
 
 - Load saved daily and weekly reports when switching dates. Prepare activity material on demand for copying or export. Remove the date field stepper and keep day navigation and direct date editing.
