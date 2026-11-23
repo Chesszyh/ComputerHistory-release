@@ -10,7 +10,7 @@
 - Refresh daily activity exports from a single index scan. Daily and weekly report checks read only summaries in the requested period and reuse event timestamps for sealed segments. Exported Markdown retains its format and ordering.
 - In a local benchmark with 2,218 synthetic summaries across 43 days, the same exports took 4.00 seconds instead of 69.22 seconds. All 43 files matched byte for byte.
 
-The Apple Silicon package is ad-hoc signed and is not notarized. See the [installation guide](docs/distribution.md).
+The Apple Silicon package is ad-hoc signed and is not notarized. See the [installation guide](https://github.com/Chesszyh/ComputerHistory-release/blob/main/docs/distribution.md).
 
 ## 0.4.1 - 2026-11-19
 

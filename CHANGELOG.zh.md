@@ -10,7 +10,7 @@
 - 刷新按日活动导出时只扫描一次摘要索引。检查日报和周报时只读取对应时段的摘要，并复用已封口事件段的时间信息。导出的 Markdown 格式和顺序保持一致。
 - 本机使用跨 43 天的 2,218 份合成摘要验证，导出耗时从 69.22 秒降至 4.00 秒，43 份文件逐字节一致。
 
-Apple Silicon 安装包使用临时签名，未经过公证。详见[安装说明](docs/distribution.md)。
+Apple Silicon 安装包使用临时签名，未经过公证。详见[安装说明](https://github.com/Chesszyh/ComputerHistory-release/blob/main/docs/distribution.md)。
 
 ## 0.4.1 - 2026-11-19
 
