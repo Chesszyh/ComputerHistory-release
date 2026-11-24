@@ -1,0 +1,33 @@
+Sources/ComputerHistoryCore/SegmentWriter.swift
+  s_018f2fc8f33ecf::t_2a33790a4aa781 19
+Sources/ComputerHistoryCore/MemoryWriter.swift
+  s_018f2fc8f33ecf::t_2a33790a4aa781 60-61,87
+Sources/ComputerHistoryCore/TraySnapshotLoader.swift
+  s_018f2fc8f33ecf::t_2a33790a4aa781 171
+Sources/ComputerHistoryCore/EventArchive.swift
+  s_018f2fc8f33ecf::t_2a33790a4aa781 62-73,75-76,80-85,95,149,153
+Sources/ComputerHistoryCore/CollectorStatus.swift
+  s_018f2fc8f33ecf::t_2a33790a4aa781 120
+Sources/ComputerHistoryCore/MemoryGenerator.swift
+  s_018f2fc8f33ecf::t_2a33790a4aa781 124-125,159,197-199
+Tests/ComputerHistoryCoreTests/OptimizationTests.swift
+  s_018f2fc8f33ecf::t_35465928be8cf4 235-236,241-261
+docs/collector.md
+  s_018f2fc8f33ecf::t_6cb7280278632a 151-152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b915cbf82534f0b6d8d6144f4abaf95b05a848ec",
+  "prompts": {},
+  "sessions": {
+    "s_018f2fc8f33ecf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20bdb-c98f-7e11-b60a-a57e9bb6522b",
+        "model": "gpt-6.2-astra"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
