@@ -17,6 +17,8 @@ final class MemoryGenerationTests: XCTestCase {
         let digest = SegmentDigest.make(events: events, segmentID: "synthetic")
         let compact = MemoryGenerator.userPrompt(digest: digest, events: events, priorMemory: nil)
         let full = MemoryGenerator.userPrompt(digest: digest, events: events, priorMemory: nil, fullInput: true)
+        XCTAssertFalse(compact.contains("文本片段 T 编号"))
+        XCTAssertTrue(full.contains("文本片段 T 编号"))
         XCTAssertFalse(compact.contains("AX_TAIL_0"))
         for i in 0..<30 {
             XCTAssertTrue(full.contains("EDIT_TAIL_\(i)"))
