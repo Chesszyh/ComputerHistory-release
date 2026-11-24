@@ -36,6 +36,64 @@ final class ModelGroupsTests: XCTestCase {
         XCTAssertThrowsError(try groups.resolved())
     }
 
+    func testLegacyModelsShareOnlyAnEquivalentEndpointAndSavedKey() throws {
+        let url = URL(string: "https://model.example/v1")!
+        let groups = ModelGroups(groups: [
+            .init(id: "first", name: "First", settings: .init(baseURL: url, model: "alpha", timeoutSeconds: 90)),
+            .init(id: "second", name: "Second", settings: .init(baseURL: url, model: "beta", outputTokenBudget: 1024)),
+            .init(id: "other", name: "Other", settings: .init(baseURL: url, model: "gamma"))
+        ], primaryGroupID: "first", fallbackGroupID: "other", tasks: ["narrative": .init(groupID: "second")])
+        let root = try root()
+        try groups.save(root: root)
+        let file = root.appendingPathComponent("model.json")
+        let before = try Data(contentsOf: file)
+        let loaded = try ModelGroups.load(root: root)
+        XCTAssertEqual(try loaded.withExplicitEndpoints().endpoints?.map(\.id), ["first", "second", "other"])
+        let migrated = try loaded.withExplicitEndpoints { $0 == "other" ? "separate-synthetic-key" : "shared-synthetic-key" }
+        XCTAssertEqual(migrated.endpoints?.map(\.id), ["first", "other"])
+        XCTAssertEqual(migrated.groups.map(\.endpointID), ["first", "first", "other"])
+        XCTAssertEqual(try migrated.resolved().timeoutSeconds, 90)
+        let routed = try migrated.resolved(for: "narrative")
+        XCTAssertEqual(routed.model, "beta")
+        XCTAssertEqual(routed.outputTokenBudget, 1024)
+        XCTAssertEqual(routed.credentialGroupID, "first")
+        XCTAssertEqual(routed.fallback?.credentialGroupID, "other")
+        XCTAssertEqual(try Data(contentsOf: file), before)
+        try migrated.save(root: root)
+        let saved = try ModelGroups.load(root: root)
+        XCTAssertTrue(saved.groups.allSatisfy { $0.baseURL == nil && $0.requiresAPIKey == nil })
+        XCTAssertEqual(try saved.resolved(for: "narrative").baseURL, url)
+        var missingEndpoint = saved
+        missingEndpoint.endpoints?.removeFirst()
+        XCTAssertThrowsError(try missingEndpoint.resolved())
+    }
+
+    func testTaskTemplatesRoundTripAndApplyRoutesAndBudgetsTogether() throws {
+        let first = ModelGroup(id: "first", name: "First", settings: .init(baseURL: URL(string: "https://first.example")!,
+            model: "alpha", pricing: .init(currency: "CNY", inputPerMillion: 1, cachedInputPerMillion: 0, outputPerMillion: 1)))
+        let second = ModelGroup(id: "second", name: "Second", settings: .init(baseURL: URL(string: "https://second.example")!,
+            model: "beta", pricing: .init(currency: "USD", inputPerMillion: 1, cachedInputPerMillion: 0, outputPerMillion: 1)))
+        var template = ModelTaskTemplate(id: "route", name: "Quality", primaryGroupID: second.id,
+            tasks: ["narrative": .init(groupID: second.id, reasoningEffort: "medium", outputTokenBudget: 2048)],
+            dailyBudget: 12)
+        let root = try root()
+        let groups = ModelGroups(groups: [first, second], primaryGroupID: first.id, dailyBudget: 5, templates: [template])
+        try groups.save(root: root)
+        let loaded = try ModelGroups.load(root: root)
+        XCTAssertEqual(loaded.templates, [template])
+        XCTAssertEqual(try loaded.resolved().dailyBudget, 5)
+        let applied = try loaded.applying(template).resolved(for: "narrative")
+        XCTAssertEqual(applied.model, "beta")
+        XCTAssertEqual(applied.pricing?.currency, "USD")
+        XCTAssertEqual(applied.dailyBudget, 12)
+        XCTAssertEqual(applied.reasoningEffort, "medium")
+        XCTAssertEqual(applied.outputTokenBudget, 2048)
+        template.removeModel(second.id, replacement: first.id)
+        XCTAssertEqual(template.primaryGroupID, first.id)
+        XCTAssertNil(template.tasks["narrative"]?.groupID)
+        XCTAssertEqual(template.tasks["narrative"]?.outputTokenBudget, 2048)
+    }
+
     func testRetiredTaskDoesNotBlockActiveConfiguration() throws {
         let root = try root()
         let group = ModelGroup(id: "one", name: "One", settings: .init(

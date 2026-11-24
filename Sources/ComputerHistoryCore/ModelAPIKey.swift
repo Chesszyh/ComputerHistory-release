@@ -21,7 +21,7 @@ public enum ModelAPIKey {
     }
     public static func authorize(root: URL, fallback: Bool = false, groupID: String? = nil) throws {
         guard try request("authorize", root: root, fallback: fallback, groupID: groupID)["exists"] as? Bool == true else {
-            throw ConfigurationInputError.invalid("当前模型组没有保存密钥。")
+            throw ConfigurationInputError.invalid("当前模型端点没有保存密钥。")
         }
         // A one-time Allow only authorizes that helper process. Verify a fresh background reader.
         guard try load(root: root, fallback: fallback, groupID: groupID) != nil else {

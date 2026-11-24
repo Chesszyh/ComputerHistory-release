@@ -23,22 +23,26 @@ struct CatalogRegression {
         func fields(_ parent: NSView) -> [NSTextField] {
             (parent as? NSTextField).map { [$0] } ?? parent.subviews.flatMap(fields)
         }
-        model.fetchModelCatalog(groupID: model.editingGroupID)
+        model.fetchModelCatalog(endpointID: model.editingEndpointID)
         let deadline = Date().addingTimeInterval(5)
-        while model.modelGroups[0].catalogLoading && Date() < deadline { settle() }
+        while model.modelEndpoints[0].catalogLoading && Date() < deadline { settle() }
         settle()
-        precondition(model.modelGroups[0].availableModels.map(\.id) == ["synthetic-alpha", "synthetic-beta"])
-        precondition(model.modelGroups[0].availableModels[0].effort?.supported_levels == ["vendor-low", "vendor-max"])
+        precondition(model.modelEndpoints[0].availableModels.map(\.id) == ["synthetic-alpha", "synthetic-beta"])
+        precondition(model.modelEndpoints[0].availableModels[0].effort?.supported_levels == ["vendor-low", "vendor-max"])
         precondition(!fields(panel).contains { $0.placeholderString == "deepseek-flash" }, "Fetched models must use the model selector")
         precondition(fields(panel).contains { $0.placeholderString == "留空使用服务默认值" }, "Effort must remain freely editable")
         model.modelGroups[0].manualModel = true
         settle()
         precondition(fields(panel).contains { $0.placeholderString == "deepseek-flash" }, "Manual model entry must remain available")
-        guard let urlField = fields(panel).first(where: { $0.placeholderString == "https://api.deepseek.com" }) else { fatalError("Missing endpoint field") }
-        urlField.stringValue = endpoint.appendingPathComponent("other").absoluteString
-        urlField.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: urlField))
+        model.addModelGroup()
+        precondition(model.modelGroups[1].endpointID == model.modelGroups[0].endpointID)
+        model.modelGroups[1].settings.model = "synthetic-beta"
+        model.saveModelConfiguration()
+        let saved = try ModelGroups.load(root: root)
+        precondition(saved.endpoints?.count == 1 && saved.groups.map(\.model) == ["synthetic-alpha", "synthetic-beta"])
+        model.setModelEndpointAddress(endpoint.appendingPathComponent("other").absoluteString, at: 0)
         settle()
-        precondition(model.modelGroups[0].availableModels.isEmpty, "Changing endpoint must discard the old provider's model catalog")
+        precondition(model.modelEndpoints[0].availableModels.isEmpty, "Changing endpoint must discard the old provider's model catalog")
         print("PASS: model catalog fetch, provider effort metadata, native selector/manual fallback, and clearing metadata on endpoint changes")
     }
 }

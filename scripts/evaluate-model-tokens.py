@@ -20,20 +20,21 @@ def main():
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--timeout', type=float, default=180)
     args = p.parse_args()
-    groups = json.loads((args.root / 'model.json').read_text())['groups']
-    group = next(g for g in groups if g['id'] == args.group_id)
+    config = json.loads((args.root / 'model.json').read_text())
+    group = next(g for g in config['groups'] if g['id'] == args.group_id)
+    endpoint = next(e for e in config['endpoints'] if e['id'] == group['endpointID']) if 'endpointID' in group else group
     key = None
-    if group.get('requiresAPIKey', True):
-        result = subprocess.run([str(args.helper)], input=json.dumps({'operation': 'load', 'root': str(args.root.resolve()), 'groupID': args.group_id, 'fallback': False}), text=True, capture_output=True, check=True)
+    if endpoint.get('requiresAPIKey', True):
+        result = subprocess.run([str(args.helper)], input=json.dumps({'operation': 'load', 'root': str(args.root.resolve()), 'groupID': endpoint['id'], 'fallback': False}), text=True, capture_output=True, check=True)
         key = json.loads(result.stdout).get('key')
         if not key:
-            raise ValueError('Selected model group has no saved key.')
+            raise ValueError('Selected endpoint has no saved key.')
     args.out.mkdir(parents=True, exist_ok=False)
     profiles = []
     for profile in args.profile:
         model, effort, budget = profile.rsplit(':', 2)
         profiles.append((model, effort, int(budget)))
-    url = group['baseURL'].rstrip('/') + '/chat/completions'
+    url = endpoint['baseURL'].rstrip('/') + '/chat/completions'
     for source in args.requests:
         material = json.loads(source.read_text())
         for index, (model, effort, budget) in enumerate(profiles):

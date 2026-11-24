@@ -212,57 +212,80 @@ struct SummarySettingsPane: View {
         }
     }
 
-    private func modelGroupEditor(_ index: Int) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SettingsField("组名称", text: $model.modelGroups[index].name, placeholder: "例如：DeepSeek、工作网关、本地模型", id: "group-name")
+    private func modelEndpointEditor(_ index: Int) -> some View {
+        Group {
+            SettingsField("端点名称", text: $model.modelEndpoints[index].name, placeholder: "例如：工作网关", id: "endpoint-name")
             SettingsField("服务地址", text: Binding(get: {
-                model.modelGroups[index].settings.baseURL
+                model.modelEndpoints[index].baseURL
             }, set: { value in
-                model.modelGroups[index].settings.baseURL = value
-                model.modelGroups[index].availableModels = []
-                model.modelGroups[index].catalogMessage = nil
-                model.modelGroups[index].manualModel = false
+                model.setModelEndpointAddress(value, at: index)
             }), placeholder: "https://api.deepseek.com", id: "model-url")
-            if !model.modelGroups[index].availableModels.isEmpty && !model.modelGroups[index].manualModel {
+            Toggle("允许此服务使用明文 HTTP（活动内容和密钥可能被窃听）", isOn: $model.modelEndpoints[index].allowInsecureHTTP)
+            Toggle("服务需要密钥", isOn: $model.modelEndpoints[index].requiresAPIKey)
+            if model.modelEndpoints[index].requiresAPIKey {
+                SecureField("填写新密钥；留空保留现有密钥", text: $model.modelEndpoints[index].apiKey)
+                    .textFieldStyle(.roundedBorder).accessibilityIdentifier("model-key")
+                Text(!model.modelEndpoints[index].apiKey.isEmpty ? "保存后使用新密钥" :
+                    (model.modelEndpoints[index].removesAPIKey ? "保存后移除已存密钥" : model.apiKeyStatus(for: model.modelEndpoints[index])))
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                if model.modelEndpoints[index].hasStoredAPIKey {
+                    Button(model.modelEndpoints[index].removesAPIKey ? "取消移除" : "移除已保存的密钥") {
+                        model.modelEndpoints[index].removesAPIKey.toggle()
+                    }.buttonStyle(.plain).foregroundStyle(Color.accentColor)
+                }
+            }
+            fetchModelsButton(model.modelEndpoints[index])
+            if let message = model.modelEndpoints[index].catalogMessage {
+                Text(message).font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func fetchModelsButton(_ endpoint: ModelEndpointDraft) -> some View {
+        Button(endpoint.catalogLoading ? "正在读取…" : "从服务获取模型") {
+            model.fetchModelCatalog(endpointID: endpoint.id)
+        }.disabled(endpoint.catalogLoading).accessibilityIdentifier("model-catalog")
+    }
+
+    private func modelGroupEditor(_ index: Int) -> some View {
+        let endpoint = model.modelEndpoints.first { $0.id == model.modelGroups[index].endpointID }
+        let availableModels = endpoint?.availableModels ?? []
+        return VStack(alignment: .leading, spacing: 10) {
+            SettingsField("配置名称", text: $model.modelGroups[index].name, placeholder: "例如：Kimi 概览", id: "group-name")
+            Picker("端点", selection: Binding(get: { model.modelGroups[index].endpointID }, set: { id in
+                model.modelGroups[index].endpointID = id
+                model.modelGroups[index].manualModel = false
+            })) {
+                ForEach(model.modelEndpoints) { Text($0.name).tag($0.id) }
+            }.accessibilityIdentifier("model-endpoint-picker")
+            if !availableModels.isEmpty && !model.modelGroups[index].manualModel {
                 Picker("模型", selection: $model.modelGroups[index].settings.model) {
-                    ForEach(model.modelGroups[index].availableModels) { entry in
+                    if model.modelGroups[index].settings.model.isEmpty { Text("请选择模型").tag("") }
+                    ForEach(availableModels) { entry in
                         Text(entry.name.map { $0 + " · " + entry.id } ?? entry.id).tag(entry.id)
                     }
-                    if !model.modelGroups[index].availableModels.contains(where: { $0.id == model.modelGroups[index].settings.model }) {
-                        Text(model.modelGroups[index].settings.model + "（当前配置）").tag(model.modelGroups[index].settings.model)
+                    let current = model.modelGroups[index].settings.model
+                    if !current.isEmpty, !availableModels.contains(where: { $0.id == current }) {
+                        Text(current + "（当前配置）").tag(current)
                     }
                 }
                 Button("手动填写模型") { model.modelGroups[index].manualModel = true }.font(.system(size: 10))
             } else {
                 SettingsField("模型名称", text: $model.modelGroups[index].settings.model, placeholder: "deepseek-flash", id: "model-name")
-            }
-            Button(model.modelGroups[index].catalogLoading ? "正在读取…" : "从服务获取模型") {
-                model.fetchModelCatalog(groupID: model.modelGroups[index].id)
-            }.disabled(model.modelGroups[index].catalogLoading).accessibilityIdentifier("model-catalog")
-            if let message = model.modelGroups[index].catalogMessage {
-                Text(message).font(.system(size: 10)).foregroundStyle(.secondary)
+                if let endpoint, !model.modelGroups[index].manualModel {
+                    fetchModelsButton(endpoint)
+                    if let message = endpoint.catalogMessage {
+                        Text(message).font(.system(size: 10)).foregroundStyle(.secondary)
+                    }
+                }
             }
             requestStylePicker($model.modelGroups[index].settings.requestStyle)
             Text("参数格式不决定是否推理，需按服务接口选择。")
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
-            reasoningEditor(index)
+            reasoningEditor(index, availableModels: availableModels)
             SettingsField("输出额度（token）", text: $model.modelGroups[index].settings.outputTokenBudget, placeholder: String(ModelSettings.defaultOutputTokenBudget), id: "model-output-budget")
             Toggle("发送完整活动材料", isOn: $model.modelGroups[index].settings.fullInput)
             SettingsField("超时（秒）", text: $model.modelGroups[index].settings.timeoutSeconds, placeholder: String(Int(ModelSettings.defaultTimeoutSeconds)), id: "model-timeout")
-            Toggle("允许此服务使用明文 HTTP（活动内容和密钥可能被窃听）", isOn: $model.modelGroups[index].settings.allowInsecureHTTP)
-            Toggle("服务需要密钥", isOn: $model.modelGroups[index].settings.requiresAPIKey)
-            if model.modelGroups[index].settings.requiresAPIKey {
-                SecureField("填写新密钥；留空保留现有密钥", text: $model.modelGroups[index].apiKey)
-                    .textFieldStyle(.roundedBorder).accessibilityIdentifier("model-key")
-                Text(!model.modelGroups[index].apiKey.isEmpty ? "保存后使用新密钥" :
-                    (model.modelGroups[index].removesAPIKey ? "保存后移除已存密钥" : model.apiKeyStatus(for: model.modelGroups[index])))
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
-                Button(model.modelGroups[index].removesAPIKey ? "取消移除" : "移除已保存的密钥") {
-                    model.modelGroups[index].removesAPIKey.toggle()
-                }.buttonStyle(.plain).foregroundStyle(Color.accentColor)
-                Text("密钥跟随模型组保存在 macOS 钥匙串。")
-                    .font(.system(size: 10)).foregroundStyle(.tertiary)
-            }
             SettingsDisclosure("费用单价") {
                 Toggle("估算模型费用", isOn: $model.modelGroups[index].settings.hasPricing)
                 if model.modelGroups[index].settings.hasPricing { PricingFields(draft: $model.modelGroups[index].settings.pricing) }
@@ -270,29 +293,49 @@ struct SummarySettingsPane: View {
         }.font(.system(size: 11))
     }
 
+    private var taskTemplateEditor: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Picker("任务模板", selection: Binding(get: { model.selectedTaskTemplateID }, set: { model.selectTaskTemplate($0) })) {
+                Text("选择模板").tag("")
+                ForEach(model.modelTaskTemplates) { Text($0.name).tag($0.id) }
+            }.accessibilityIdentifier("task-template-picker")
+            SettingsField("模板名称", text: $model.taskTemplateName, placeholder: "例如：日常总结", id: "task-template-name")
+            HStack {
+                Button("套用模板") { model.applyTaskTemplate() }.disabled(model.selectedTaskTemplateID.isEmpty)
+                Button("存为新模板") { model.saveTaskTemplate() }.disabled(model.taskTemplateName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Menu("管理") {
+                    Button("用当前配置更新") { model.saveTaskTemplate(update: true) }
+                    Button("重命名") { model.saveTaskTemplate(update: true, renameOnly: true) }
+                    Button("删除模板", role: .destructive) { model.removeTaskTemplate() }
+                }.disabled(model.selectedTaskTemplateID.isEmpty)
+            }.controlSize(.small)
+        }
+    }
+
     private var modelEditor: some View {
         VStack(alignment: .leading, spacing: 8) {
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 12) {
-                    SettingsCard("使用的模型组") {
-                        Picker("主模型组", selection: Binding(get: { model.primaryGroupID }, set: { id in
+                    SettingsCard("默认模型") {
+                        Picker("主模型", selection: Binding(get: { model.primaryGroupID }, set: { id in
                             model.primaryGroupID = id
                             if model.fallbackGroupID == id { model.fallbackGroupID = "" }
                         })) {
                             ForEach(model.modelGroups) { Text($0.name).tag($0.id) }
                         }
-                        Picker("备用模型组", selection: $model.fallbackGroupID) {
+                        Picker("备用模型", selection: $model.fallbackGroupID) {
                             Text("不使用").tag("")
                             ForEach(model.modelGroups.filter { $0.id != model.primaryGroupID }) { Text($0.name).tag($0.id) }
                         }
-                        Text("主模型请求失败时尝试备用组；下次仍先使用主模型组。")
+                        Text("主模型请求失败时尝试备用模型。")
                             .font(.system(size: 10)).foregroundStyle(.secondary)
                     }
                     SettingsDisclosure("按任务选择模型") {
+                        taskTemplateEditor
                         ForEach(ModelTaskConfiguration.tasks, id: \.self) { task in
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(["10min": "十分钟记忆", "narrative-grouping": "活动归属", "narrative": "活动概览", "daily": "日报", "weekly": "周报"][task] ?? task)
-                                Picker("模型组", selection: Binding(get: { model.modelTasks[task]?.groupID ?? "" }, set: { id in
+                                Picker("模型", selection: Binding(get: { model.modelTasks[task]?.groupID ?? "" }, set: { id in
                                     var options = model.modelTasks[task] ?? .init()
                                     options.groupID = id.isEmpty ? nil : id
                                     model.modelTasks[task] = options
@@ -301,12 +344,12 @@ struct SummarySettingsPane: View {
                                     ForEach(model.modelGroups) { Text($0.name).tag($0.id) }
                                 }
                                 HStack {
-                                    TextField("推理强度：沿用模型组", text: Binding(get: { model.modelTasks[task]?.reasoningEffort ?? "" }, set: { text in
+                                    TextField("推理强度：沿用模型配置", text: Binding(get: { model.modelTasks[task]?.reasoningEffort ?? "" }, set: { text in
                                         var options = model.modelTasks[task] ?? .init()
                                         options.reasoningEffort = text.isEmpty ? nil : text
                                         model.modelTasks[task] = options
                                     }))
-                                    TextField("输出额度：沿用模型组", value: Binding<Int?>(get: { model.modelTasks[task]?.outputTokenBudget }, set: { value in
+                                    TextField("输出额度：沿用模型配置", value: Binding<Int?>(get: { model.modelTasks[task]?.outputTokenBudget }, set: { value in
                                         var options = model.modelTasks[task] ?? .init()
                                         options.outputTokenBudget = value
                                         model.modelTasks[task] = options
@@ -315,14 +358,28 @@ struct SummarySettingsPane: View {
                             }
                         }
                     }
-                    SettingsCard("管理模型组") {
+                    SettingsDisclosure("端点与认证") {
+                        Picker("端点", selection: $model.editingEndpointID) {
+                            ForEach(model.modelEndpoints) { Text($0.name).tag($0.id) }
+                        }
+                        HStack {
+                            Button("新增端点") { model.addModelEndpoint() }
+                            Spacer()
+                            Button("删除端点", role: .destructive) { model.removeEditingModelEndpoint() }
+                                .disabled(model.modelGroups.contains { $0.endpointID == model.editingEndpointID })
+                        }
+                        if let index = model.modelEndpoints.firstIndex(where: { $0.id == model.editingEndpointID }) {
+                            modelEndpointEditor(index)
+                        }
+                    }
+                    SettingsCard("模型配置") {
                         Picker("编辑", selection: $model.editingGroupID) {
                             ForEach(model.modelGroups) { Text($0.name).tag($0.id) }
                         }
                         HStack {
-                            Button("新增模型组") { model.addModelGroup() }
+                            Button("新增模型") { model.addModelGroup() }
                             Spacer()
-                            Button("删除模型组", role: .destructive) { model.removeEditingModelGroup() }
+                            Button("删除模型", role: .destructive) { model.removeEditingModelGroup() }
                                 .disabled(model.modelGroups.count < 2)
                                 .accessibilityIdentifier("model-group-delete")
                         }
@@ -333,7 +390,7 @@ struct SummarySettingsPane: View {
                     SettingsDisclosure("预算") {
                         SettingsField("每日预算", text: $model.dailyBudget, placeholder: "留空表示不限制", id: "model-daily")
                         SettingsField("每月预算", text: $model.monthlyBudget, placeholder: "留空表示不限制", id: "model-monthly")
-                        Text("预算使用主模型组的计费币种；设置预算前需填写该组单价。")
+                        Text("预算使用主模型的计费币种；设置预算前需填写该模型的单价。")
                             .font(.system(size: 10)).foregroundStyle(.tertiary)
                     }
 
@@ -450,8 +507,8 @@ struct SummarySettingsPane: View {
         }
     }
 
-    private func reasoningEditor(_ index: Int) -> some View {
-        let effort = model.modelGroups[index].availableModels.first { $0.id == model.modelGroups[index].settings.model }?.effort
+    private func reasoningEditor(_ index: Int, availableModels: [ModelCatalog.Entry]) -> some View {
+        let effort = availableModels.first { $0.id == model.modelGroups[index].settings.model }?.effort
         return VStack(alignment: .leading, spacing: 4) {
             SettingsField("推理强度", text: $model.modelGroups[index].settings.reasoningEffort,
                 placeholder: "留空使用服务默认值", id: "model-reasoning")

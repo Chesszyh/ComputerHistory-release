@@ -1,8 +1,12 @@
 # ComputerHistory
 
+本项目Idea来源：[ChatGPT Computer History](https://learn.chatgpt.com/docs/customization/computer-history)
+
+> TODO: 人工
+
 macOS 本地活动记录工具。通过 Accessibility（辅助功能，简称 AX）读取前台应用的界面文本，记录窗口变化、点击、快捷键和可归因的文本变化，按时间段保存。辅助功能缺少正文的应用可显式启用[本地窗口文字识别](docs/collector.md#采集行为与局限)。可选接入[本机 ActivityWatch](docs/collector.md#activitywatch-补充来源)补充窗口与空闲记录。支持 DeepSeek 和兼容接口的自托管模型生成记忆摘要，并在菜单栏查看时间线、逐次请求和费用。
 
-本项目为独立实现，与 OpenAI、ChatGPT 或 DeepSeek 无隶属关系，不承诺与其他产品完整兼容。
+
 
 ## 使用前了解
 
@@ -80,7 +84,7 @@ python3 scripts/test-process-control.py "$bin_dir/computer-history"
 
 菜单栏“日报、周报与导出”可生成、查看、复制报告，或复制给其他 AI 的活动材料，并导出 Markdown／TXT。监督进程自动补齐已结束时段的日报、周报。可选的 GitHub 私有备份默认关闭，在“设置 → 总结提示词与配置 → 备份”设置仓库，并可直接用设置区开关启停。详细行为与命令见[报告、导出与备份](docs/collector.md#报告导出与备份)。
 
-模型接入可在菜单栏“设置 → 总结提示词与配置 → 模型”填写服务地址、模型名称和密钥，或使用 `DEEPSEEK_API_KEY`。命令行也可用 `DEEPSEEK_MODEL` 与 `DEEPSEEK_BASE_URL` 覆盖模型和地址。默认值见 [DeepSeekClient.swift](Sources/ComputerHistoryCore/DeepSeekClient.swift) 的 `defaultModel` / `defaultBaseURL`；请按服务账户的实际可用模型设置。
+模型接入可在菜单栏“设置 → 总结提示词与配置 → 模型”保存端点地址和密钥，再从该端点配置一个或多个模型。也可使用 `DEEPSEEK_API_KEY`。命令行也可用 `DEEPSEEK_MODEL` 与 `DEEPSEEK_BASE_URL` 覆盖模型和地址。默认值见 [DeepSeekClient.swift](Sources/ComputerHistoryCore/DeepSeekClient.swift) 的 `defaultModel` / `defaultBaseURL`；请按服务账户的实际可用模型设置。
 
 自托管模型在数据目录创建 `model.json`，格式见[模型与用量配置](docs/collector.md#模型与用量配置)。可将模型部署在另一台电脑，本机只发送整理后的材料。配置文件优先于模型环境变量；`requiresAPIKey: false` 的服务不接收 DeepSeek 密钥。
 

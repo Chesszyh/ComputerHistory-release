@@ -21,7 +21,7 @@ final class ModelTransportTests: XCTestCase {
         try draft.value().validate()
         let group = ModelGroup(name: "Synthetic", settings: try draft.value())
         let decoded = try JSONDecoder().decode(ModelGroup.self, from: JSONEncoder().encode(group))
-        XCTAssertEqual(decoded.settings.allowInsecureHTTP, true)
+        XCTAssertEqual(decoded.allowInsecureHTTP, true)
         draft.allowInsecureHTTP = false
         XCTAssertThrowsError(try draft.value())
     }

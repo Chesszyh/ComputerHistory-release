@@ -10,13 +10,51 @@ public struct ModelTaskConfiguration: Codable, Sendable, Equatable {
     }
 }
 
+public struct ModelTaskTemplate: Codable, Sendable, Identifiable, Equatable {
+    public var id: String
+    public var name: String
+    public var primaryGroupID: String
+    public var fallbackGroupID: String?
+    public var tasks: [String: ModelTaskConfiguration]
+    public var dailyBudget: Double?
+    public var monthlyBudget: Double?
+
+    public init(id: String = UUID().uuidString, name: String, primaryGroupID: String, fallbackGroupID: String? = nil,
+                tasks: [String: ModelTaskConfiguration] = [:], dailyBudget: Double? = nil, monthlyBudget: Double? = nil) {
+        self.id = id; self.name = name
+        self.primaryGroupID = primaryGroupID; self.fallbackGroupID = fallbackGroupID; self.tasks = tasks
+        self.dailyBudget = dailyBudget; self.monthlyBudget = monthlyBudget
+    }
+
+    public mutating func removeModel(_ id: String, replacement: String) {
+        if primaryGroupID == id { primaryGroupID = replacement }
+        if fallbackGroupID == id || fallbackGroupID == primaryGroupID { fallbackGroupID = nil }
+        for task in Array(tasks.keys) where tasks[task]?.groupID == id { tasks[task]?.groupID = nil }
+    }
+}
+
+public struct ModelEndpoint: Codable, Sendable, Identifiable {
+    public var id: String
+    public var name: String
+    public var baseURL: URL
+    public var requiresAPIKey: Bool
+    public var allowInsecureHTTP: Bool?
+
+    public init(id: String = UUID().uuidString, name: String, baseURL: URL,
+                requiresAPIKey: Bool = true, allowInsecureHTTP: Bool = false) {
+        self.id = id; self.name = name; self.baseURL = baseURL
+        self.requiresAPIKey = requiresAPIKey; self.allowInsecureHTTP = allowInsecureHTTP
+    }
+}
+
 public struct ModelGroup: Codable, Sendable, Identifiable {
     public var id: String
     public var name: String
+    public var endpointID: String?
     public var allowInsecureHTTP: Bool?
-    public var baseURL: URL
+    public var baseURL: URL?
     public var model: String
-    public var requiresAPIKey: Bool
+    public var requiresAPIKey: Bool?
     public var reasoningEffort: String?
     public var pricing: ModelPricing?
     public var requestStyle: ChatRequestStyle?
@@ -24,35 +62,50 @@ public struct ModelGroup: Codable, Sendable, Identifiable {
     public var outputTokenBudget: Int?
     public var fullInput: Bool?
 
-    public init(id: String = UUID().uuidString, name: String, settings: ModelSettings) {
-        self.id = id; self.name = name
-        allowInsecureHTTP = settings.allowInsecureHTTP
-        baseURL = settings.baseURL; model = settings.model; requiresAPIKey = settings.requiresAPIKey
+    public init(id: String = UUID().uuidString, name: String, settings: ModelSettings, endpointID: String? = nil) {
+        self.id = id; self.name = name; self.endpointID = endpointID
+        if endpointID == nil {
+            allowInsecureHTTP = settings.allowInsecureHTTP
+            baseURL = settings.baseURL
+            requiresAPIKey = settings.requiresAPIKey
+        }
+        model = settings.model
         reasoningEffort = settings.reasoningEffort; pricing = settings.pricing
         requestStyle = settings.requestStyle; timeoutSeconds = settings.timeoutSeconds
         outputTokenBudget = settings.outputTokenBudget; fullInput = settings.fullInput
     }
 
-    public var settings: ModelSettings {
-        var value = ModelSettings(baseURL: baseURL, model: model, requiresAPIKey: requiresAPIKey,
-            reasoningEffort: reasoningEffort, pricing: pricing, requestStyle: requestStyle, timeoutSeconds: timeoutSeconds, allowInsecureHTTP: allowInsecureHTTP == true, outputTokenBudget: outputTokenBudget, fullInput: fullInput == true)
-        value.credentialGroupID = id
+    var legacyEndpoint: ModelEndpoint? {
+        guard let baseURL, let requiresAPIKey else { return nil }
+        return ModelEndpoint(id: id, name: name, baseURL: baseURL, requiresAPIKey: requiresAPIKey,
+                             allowInsecureHTTP: allowInsecureHTTP == true)
+    }
+
+    func settings(using endpoint: ModelEndpoint) -> ModelSettings {
+        var value = ModelSettings(baseURL: endpoint.baseURL, model: model, requiresAPIKey: endpoint.requiresAPIKey,
+            reasoningEffort: reasoningEffort, pricing: pricing, requestStyle: requestStyle, timeoutSeconds: timeoutSeconds,
+            allowInsecureHTTP: endpoint.allowInsecureHTTP == true, outputTokenBudget: outputTokenBudget, fullInput: fullInput == true)
+        value.credentialGroupID = endpoint.id
         return value
     }
 }
 
 public struct ModelGroups: Codable, Sendable {
     public var groups: [ModelGroup]
+    public var endpoints: [ModelEndpoint]?
     public var primaryGroupID: String
     public var fallbackGroupID: String?
     public var dailyBudget: Double?
     public var monthlyBudget: Double?
     public var tasks: [String: ModelTaskConfiguration]?
+    public var templates: [ModelTaskTemplate]?
 
     public init(groups: [ModelGroup], primaryGroupID: String, fallbackGroupID: String? = nil,
-                dailyBudget: Double? = nil, monthlyBudget: Double? = nil, tasks: [String: ModelTaskConfiguration]? = nil) {
+                dailyBudget: Double? = nil, monthlyBudget: Double? = nil, tasks: [String: ModelTaskConfiguration]? = nil,
+                endpoints: [ModelEndpoint]? = nil, templates: [ModelTaskTemplate]? = nil) {
         self.groups = groups; self.primaryGroupID = primaryGroupID; self.fallbackGroupID = fallbackGroupID
         self.dailyBudget = dailyBudget; self.monthlyBudget = monthlyBudget; self.tasks = tasks
+        self.endpoints = endpoints; self.templates = templates
     }
 
     public static func load(root: URL, environment: [String: String] = ProcessInfo.processInfo.environment) throws -> Self {
@@ -86,13 +139,53 @@ public struct ModelGroups: Codable, Sendable {
                     dailyBudget: old.dailyBudget, monthlyBudget: old.monthlyBudget)
     }
 
+    public func endpoint(for group: ModelGroup) throws -> ModelEndpoint {
+        if let id = group.endpointID, let endpoint = endpoints?.first(where: { $0.id == id }) { return endpoint }
+        if group.endpointID == nil, let legacy = group.legacyEndpoint,
+           endpoints?.contains(where: { $0.id == legacy.id }) != true { return legacy }
+        throw ModelSettings.SettingsError.invalid("model.json：模型「\(group.name)」缺少有效的端点。")
+    }
+
+    public func withExplicitEndpoints(savedKey: ((String) -> String?)? = nil) throws -> Self {
+        var value = self
+        var allEndpoints = endpoints ?? []
+        var migrated: [ModelEndpoint] = []
+        for i in value.groups.indices where value.groups[i].endpointID == nil {
+            let endpoint = try endpoint(for: value.groups[i])
+            let existing = migrated.first { candidate in
+                guard candidate.baseURL.appendingPathComponent("models") == endpoint.baseURL.appendingPathComponent("models"),
+                      candidate.requiresAPIKey == endpoint.requiresAPIKey,
+                      candidate.allowInsecureHTTP == endpoint.allowInsecureHTTP else { return false }
+                if !endpoint.requiresAPIKey { return true }
+                guard let key = savedKey?(endpoint.id), !key.isEmpty else { return false }
+                return savedKey?(candidate.id) == key
+            }
+            if existing == nil { migrated.append(endpoint) }
+            value.groups[i] = ModelGroup(id: value.groups[i].id, name: value.groups[i].name,
+                settings: value.groups[i].settings(using: endpoint), endpointID: (existing ?? endpoint).id)
+        }
+        allEndpoints.append(contentsOf: migrated)
+        value.endpoints = allEndpoints
+        return value
+    }
+
     public func resolved(for task: String? = nil) throws -> ModelSettings {
         func invalid(_ text: String) -> ModelSettings.SettingsError { .invalid("model.json：" + text) }
         guard !groups.isEmpty, Set(groups.map(\.id)).count == groups.count,
               groups.allSatisfy({ !$0.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
             throw invalid("模型组的 id 必须唯一且非空，name 不能为空。")
         }
-        for group in groups { try group.settings.validate() }
+        if let endpoints {
+            guard Set(endpoints.map(\.id)).count == endpoints.count,
+                  endpoints.allSatisfy({ !$0.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                      && !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+                throw invalid("端点的 id 必须唯一且非空，name 不能为空。")
+            }
+            for endpoint in endpoints {
+                try ModelTransport.validate(endpoint.baseURL, allowInsecureHTTP: endpoint.allowInsecureHTTP == true)
+            }
+        }
+        for group in groups { try group.settings(using: endpoint(for: group)).validate() }
         for (name, options) in tasks ?? [:] where name != "6h" {
             guard ModelTaskConfiguration.tasks.contains(name),
                   options.groupID == nil || groups.contains(where: { $0.id == options.groupID }),
@@ -117,7 +210,7 @@ public struct ModelGroups: Codable, Sendable {
         guard let primary = groups.first(where: { $0.id == selectedID }) else {
             throw invalid("primaryGroupID 必须指向已有模型组。")
         }
-        var value = primary.settings
+        var value = primary.settings(using: try endpoint(for: primary))
         if let effort = options?.reasoningEffort { value.reasoningEffort = effort }
         if let budget = options?.outputTokenBudget { value.outputTokenBudget = budget }
         value.dailyBudget = dailyBudget; value.monthlyBudget = monthlyBudget
@@ -125,18 +218,42 @@ public struct ModelGroups: Codable, Sendable {
             guard fallbackGroupID != primaryGroupID, let group = groups.first(where: { $0.id == fallbackGroupID }) else {
                 throw invalid("fallbackGroupID 必须指向另一个已有模型组，或设为 null。")
             }
-            var fallback = FallbackModelSettings(baseURL: group.baseURL, model: group.model,
-                reasoningEffort: group.reasoningEffort, pricing: group.pricing, requiresAPIKey: group.requiresAPIKey,
-                requestStyle: group.requestStyle, timeoutSeconds: group.timeoutSeconds, allowInsecureHTTP: group.allowInsecureHTTP == true, outputTokenBudget: group.outputTokenBudget, fullInput: group.fullInput == true)
-            fallback.credentialGroupID = group.id
+            let endpoint = try endpoint(for: group)
+            var fallback = FallbackModelSettings(baseURL: endpoint.baseURL, model: group.model,
+                reasoningEffort: group.reasoningEffort, pricing: group.pricing, requiresAPIKey: endpoint.requiresAPIKey,
+                requestStyle: group.requestStyle, timeoutSeconds: group.timeoutSeconds, allowInsecureHTTP: endpoint.allowInsecureHTTP == true,
+                outputTokenBudget: group.outputTokenBudget, fullInput: group.fullInput == true)
+            fallback.credentialGroupID = endpoint.id
             if fallbackGroupID != selectedID { value.fallback = fallback }
         }
         try value.validate()
         return value
     }
 
-    public func save(root: URL) throws {
+    public func applying(_ template: ModelTaskTemplate) -> Self {
+        var value = self
+        value.primaryGroupID = template.primaryGroupID
+        value.fallbackGroupID = template.fallbackGroupID
+        value.tasks = template.tasks.isEmpty ? nil : template.tasks
+        value.dailyBudget = template.dailyBudget
+        value.monthlyBudget = template.monthlyBudget
+        return value
+    }
+
+    public func validateForSaving() throws {
         _ = try resolved()
+        if let templates {
+            guard Set(templates.map(\.id)).count == templates.count,
+                  Set(templates.map(\.name)).count == templates.count,
+                  templates.allSatisfy({ !$0.id.isEmpty && !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+                throw ConfigurationInputError.invalid("任务模板的名称和标识必须唯一且非空。")
+            }
+            for template in templates { _ = try applying(template).resolved() }
+        }
+    }
+
+    public func save(root: URL) throws {
+        try validateForSaving()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -146,25 +263,58 @@ public struct ModelGroups: Codable, Sendable {
     }
 }
 
-public struct ModelGroupDraft: Identifiable, Sendable {
+public struct ModelEndpointDraft: Identifiable, Sendable {
     public var id: String
     public var name: String
-    public var settings: ModelSettingsDraft
+    public var baseURL: String
+    public var requiresAPIKey: Bool
+    public var allowInsecureHTTP: Bool
     public var apiKey = ""
     public var removesAPIKey = false
     public var hasStoredAPIKey = false
     public var availableModels: [ModelCatalog.Entry] = []
-    public var manualModel = false
     public var catalogMessage: String?
     public var catalogLoading = false
 
-    public init(_ group: ModelGroup) {
-        id = group.id; name = group.name; settings = ModelSettingsDraft(group.settings, environment: [:])
+    public init(_ endpoint: ModelEndpoint) {
+        id = endpoint.id; name = endpoint.name; baseURL = endpoint.baseURL.absoluteString
+        requiresAPIKey = endpoint.requiresAPIKey; allowInsecureHTTP = endpoint.allowInsecureHTTP == true
     }
 
-    public func value() throws -> ModelGroup {
+    public func value() throws -> ModelEndpoint {
         let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !label.isEmpty else { throw ConfigurationInputError.invalid("请填写模型组名称。") }
-        return try ModelGroup(id: id, name: label, settings: settings.value())
+        guard !label.isEmpty else { throw ConfigurationInputError.invalid("请填写端点名称。") }
+        guard let url = URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)), url.host != nil else {
+            throw ConfigurationInputError.invalid("请为「\(label)」填写完整的服务地址。")
+        }
+        return ModelEndpoint(id: id, name: label, baseURL: url, requiresAPIKey: requiresAPIKey, allowInsecureHTTP: allowInsecureHTTP)
+    }
+}
+
+public struct ModelGroupDraft: Identifiable, Sendable {
+    public var id: String
+    public var name: String
+    public var endpointID: String
+    public var settings: ModelSettingsDraft
+    public var manualModel = false
+
+    public init(_ group: ModelGroup, endpoint: ModelEndpoint? = nil) {
+        id = group.id; name = group.name
+        let connection = endpoint ?? group.legacyEndpoint ?? ModelEndpoint(id: group.id, name: group.name,
+            baseURL: DeepSeekClient.defaultBaseURL)
+        endpointID = connection.id
+        settings = ModelSettingsDraft(group.settings(using: connection), environment: [:])
+    }
+
+    public func value(endpoint: ModelEndpoint? = nil) throws -> ModelGroup {
+        let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !label.isEmpty else { throw ConfigurationInputError.invalid("请填写模型配置名称。") }
+        var draft = settings
+        if let endpoint {
+            draft.baseURL = endpoint.baseURL.absoluteString
+            draft.requiresAPIKey = endpoint.requiresAPIKey
+            draft.allowInsecureHTTP = endpoint.allowInsecureHTTP == true
+        }
+        return try ModelGroup(id: id, name: label, settings: draft.value(), endpointID: endpoint?.id)
     }
 }

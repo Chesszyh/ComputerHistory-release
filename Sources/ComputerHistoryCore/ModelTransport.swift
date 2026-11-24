@@ -9,7 +9,7 @@ final class ModelTransport: NSObject, URLSessionTaskDelegate {
         }
         let loopback = host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host == "::1"
         guard scheme == "https" || loopback || allowInsecureHTTP else {
-            throw ModelSettings.SettingsError.invalid("非本机模型服务须使用 HTTPS。若确认接受明文传输活动内容和密钥的风险，可为此模型组设置 allowInsecureHTTP: true。")
+            throw ModelSettings.SettingsError.invalid("非本机模型服务须使用 HTTPS。若确认接受明文传输活动内容和密钥的风险，可为此端点设置 allowInsecureHTTP: true。")
         }
     }
 

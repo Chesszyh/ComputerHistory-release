@@ -103,6 +103,25 @@ with tempfile.TemporaryDirectory(prefix='fallback-test-') as d:
         (root/'model.json').write_text(json.dumps(groups))
         run();assert calls[-1][0]['reasoning_effort']=='provider-custom-level'
         assert 'max_tokens' in calls[-1][0], 'standard parameter format must not disable reasoning effort'
+        shared = {
+            'endpoints': [dict(id='local-gateway', name='Local gateway', baseURL=config['baseURL'], requiresAPIKey=True)],
+            'groups': [dict(id='default', name='Default', endpointID='local-gateway', model='synthetic-default'),
+                       dict(id='memory', name='Memory', endpointID='local-gateway', model='synthetic-primary',
+                            reasoningEffort='medium', outputTokenBudget=8192),
+                       dict(id='spare', name='Spare', endpointID='local-gateway', model='synthetic-fallback',
+                            reasoningEffort='none', outputTokenBudget=4096)],
+            'primaryGroupID': 'default',
+            'fallbackGroupID': 'spare',
+            'tasks': {'10min': {'groupID': 'memory'}},
+        }
+        (root/'model.json').write_text(json.dumps(shared))
+        before = len(calls)
+        run()
+        attempts = calls[before:]
+        assert [data['model'] for data, _ in attempts] == ['synthetic-primary', 'synthetic-fallback']
+        assert [key for _, key in attempts] == ['Bearer synthetic-primary-key'] * 2
+        assert [data['max_tokens'] for data, _ in attempts] == [8192, 4096]
+        assert [data['reasoning_effort'] for data, _ in attempts] == ['medium', 'none']
         primary='needs_budget';secondary='ok'
         config['outputTokenBudget']=16000
         config['fallback']=fallback

@@ -125,7 +125,6 @@ struct SettingsRegression {
         let newID = model.editingGroupID
         model.modelGroups[1].name = "Synthetic second source"
         model.modelGroups[1].settings.model = "second-source"
-        model.modelGroups[1].settings.requiresAPIKey = false
         model.primaryGroupID = newID
         model.fallbackGroupID = originalID
         model.saveModelConfiguration()
@@ -140,6 +139,21 @@ struct SettingsRegression {
         model.loadConfigurationDrafts()
         precondition(model.modelTasks["narrative"]?.groupID == originalID)
         precondition(try! ModelGroups.load(root: root).resolved(for: "narrative").outputTokenBudget == 2048)
+        model.taskTemplateName = "Synthetic template"
+        model.saveTaskTemplate()
+        let templateID = model.selectedTaskTemplateID
+        model.primaryGroupID = originalID
+        model.fallbackGroupID = ""
+        model.modelTasks = [:]
+        model.applyTaskTemplate()
+        precondition(model.primaryGroupID == newID && model.fallbackGroupID == originalID)
+        precondition(model.modelTasks["narrative"]?.outputTokenBudget == 2048)
+        model.taskTemplateName = "Renamed synthetic template"
+        model.saveTaskTemplate(update: true, renameOnly: true)
+        model.saveModelConfiguration()
+        model.loadConfigurationDrafts()
+        precondition(model.modelTaskTemplates.first?.name == "Renamed synthetic template")
+        precondition(model.selectedTaskTemplateID == templateID)
         stage("delete saved referenced model groups")
         model.editingGroupID = originalID
         model.removeEditingModelGroup()
@@ -147,11 +161,14 @@ struct SettingsRegression {
         precondition(model.fallbackGroupID.isEmpty)
         precondition(model.modelTasks["narrative"]?.groupID == nil)
         precondition(model.modelTasks["narrative"]?.outputTokenBudget == 2048)
+        precondition(model.modelTaskTemplates.first?.fallbackGroupID == nil)
+        precondition(model.modelTaskTemplates.first?.tasks["narrative"]?.groupID == nil)
+        model.removeTaskTemplate()
         model.saveModelConfiguration()
         model.loadConfigurationDrafts()
         precondition(model.modelGroups.count == 1)
         model.addModelGroup()
-        model.modelGroups[1].settings.requiresAPIKey = false
+        model.modelGroups[1].settings.model = "replacement"
         let replacementID = model.editingGroupID
         model.editingGroupID = newID
         model.removeEditingModelGroup()

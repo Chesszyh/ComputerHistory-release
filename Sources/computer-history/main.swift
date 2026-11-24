@@ -196,10 +196,11 @@ if flags.contains("model-key") {
     do {
         if flags.contains("--all"), flags.contains("--authorize") {
             let groups = try ModelGroups.load(root: outputRoot())
-            for group in groups.groups where try ModelAPIKey.contains(root: outputRoot(), groupID: group.id) {
-                try ModelAPIKey.authorize(root: outputRoot(), groupID: group.id)
+            for endpoint in try groups.withExplicitEndpoints().endpoints ?? []
+                where try ModelAPIKey.contains(root: outputRoot(), groupID: endpoint.id) {
+                try ModelAPIKey.authorize(root: outputRoot(), groupID: endpoint.id)
             }
-            print("已恢复已保存模型组的密钥访问。")
+            print("已恢复已保存端点的密钥访问。")
             exit(0)
         }
         let settings = try ModelSettings.load(root: outputRoot())
@@ -218,7 +219,7 @@ if flags.contains("model-key") {
                 exit(0)
             }
             guard let key = try ModelAPIKey.load(root: outputRoot(), fallback: fallback, groupID: groupID), !key.isEmpty else {
-                throw ReportError.invalid("当前模型组没有保存密钥。")
+                throw ReportError.invalid("当前模型端点没有保存密钥。")
             }
             print("模型密钥可读取。")
             exit(0)

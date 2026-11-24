@@ -190,8 +190,11 @@ public struct DeepSeekClient: Sendable {
                 key = try ModelAPIKey.load(root: credentialRoot, groupID: config.credentialGroupID)
                     ?? (config.credentialGroupID == settings?.fallback?.credentialGroupID ? fallbackAPIKey : "")
             } else { key = "" }
+            let fallbackEndpointID = config.fallback?.credentialGroupID
+            let routedFallbackKey = fallbackEndpointID != nil && fallbackEndpointID == settings?.credentialGroupID ? apiKey : fallbackAPIKey
             var routed = DeepSeekClient(apiKey: key, baseURL: config.baseURL, model: config.model,
-                timeout: config.timeoutSeconds ?? ModelSettings.defaultTimeoutSeconds, settings: config, fallbackAPIKey: fallbackAPIKey)
+                timeout: config.timeoutSeconds ?? ModelSettings.defaultTimeoutSeconds, settings: config, fallbackAPIKey: routedFallbackKey)
+            routed.credentialRoot = credentialRoot
             routed.powerState = powerState
             routed.memoryContextRejections = memoryContextRejections
             routed.memoryMaterial = memoryMaterial
@@ -231,7 +234,8 @@ public struct DeepSeekClient: Sendable {
             do {
                 let key: String
                 if secondary.requiresAPIKey == false { key = "" }
-                else if let root { key = try ModelAPIKey.load(root: root, fallback: true, groupID: secondary.credentialGroupID) ?? fallbackAPIKey }
+                else if let id = secondary.credentialGroupID, id == settings?.credentialGroupID, !apiKey.isEmpty { key = apiKey }
+                else if let source = credentialRoot ?? root { key = try ModelAPIKey.load(root: source, fallback: true, groupID: secondary.credentialGroupID) ?? fallbackAPIKey }
                 else { key = fallbackAPIKey }
                 var fallback = DeepSeekClient(apiKey: key, baseURL: secondary.baseURL, model: secondary.model,
                     timeout: secondary.timeoutSeconds ?? ModelSettings.defaultTimeoutSeconds, settings: config)

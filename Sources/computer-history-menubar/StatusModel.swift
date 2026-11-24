@@ -69,10 +69,15 @@ final class StatusModel: ObservableObject {
     private var timelineTask: Task<Void, Never>?
     @Published var settingsTab: SettingsTab = .prompts
     @Published var modelGroups: [ModelGroupDraft] = []
+    @Published var modelEndpoints: [ModelEndpointDraft] = []
+    @Published var editingEndpointID = ""
     @Published var editingGroupID = ""
     @Published var primaryGroupID = ""
     @Published var fallbackGroupID = ""
     @Published var modelTasks: [String: ModelTaskConfiguration] = [:]
+    @Published var modelTaskTemplates: [ModelTaskTemplate] = []
+    @Published var selectedTaskTemplateID = ""
+    @Published var taskTemplateName = ""
     @Published var dailyBudget = ""
     @Published var monthlyBudget = ""
     @Published var isSelectingSummaries = false
@@ -792,16 +797,30 @@ final class StatusModel: ObservableObject {
             catch ModelSettings.SettingsError.fallbackPricing {
                 modelSettingsError = ModelSettings.SettingsError.fallbackPricing.description
             }
-            modelGroups = try groups.groups.map { group in
-                var draft = ModelGroupDraft(group)
-                if try ModelAPIKey.contains(root: root, groupID: group.id) {
-                    draft.hasStoredAPIKey = true
+            let editable = try groups.withExplicitEndpoints { [root] id in
+                try? ModelAPIKey.load(root: root, groupID: id)
+            }
+            let previousEndpoints = modelEndpoints
+            modelEndpoints = try (editable.endpoints ?? []).map { endpoint in
+                var draft = ModelEndpointDraft(endpoint)
+                draft.hasStoredAPIKey = try ModelAPIKey.contains(root: root, groupID: endpoint.id)
+                if let previous = previousEndpoints.first(where: { $0.id == draft.id && $0.baseURL == draft.baseURL && $0.requiresAPIKey == draft.requiresAPIKey }) {
+                    draft.availableModels = previous.availableModels
                 }
                 return draft
             }
+            modelGroups = try editable.groups.map { group in
+                ModelGroupDraft(group, endpoint: try editable.endpoint(for: group))
+            }
+            editingEndpointID = modelGroups.first { $0.id == groups.primaryGroupID }?.endpointID ?? ""
             primaryGroupID = groups.primaryGroupID
             fallbackGroupID = groups.fallbackGroupID ?? ""
             modelTasks = groups.tasks ?? [:]
+            modelTaskTemplates = groups.templates ?? []
+            selectTaskTemplate(modelTaskTemplates.first {
+                $0.primaryGroupID == groups.primaryGroupID && $0.fallbackGroupID == groups.fallbackGroupID
+                    && $0.tasks == modelTasks && $0.dailyBudget == groups.dailyBudget && $0.monthlyBudget == groups.monthlyBudget
+            }?.id ?? "")
             editingGroupID = groups.primaryGroupID
             dailyBudget = groups.dailyBudget.map(String.init(describing:)) ?? ""
             monthlyBudget = groups.monthlyBudget.map(String.init(describing:)) ?? ""
@@ -814,63 +833,79 @@ final class StatusModel: ObservableObject {
         catch { collectorSettingsError = String(describing: error) }
     }
 
-    func fetchModelCatalog(groupID: String) {
-        guard let index = modelGroups.firstIndex(where: { $0.id == groupID }), !modelGroups[index].catalogLoading else { return }
-        modelGroups[index].catalogLoading = true
-        modelGroups[index].catalogMessage = nil
-        let draft = modelGroups[index]
-        let primary = primaryGroupID, fallback = fallbackGroupID, root = root
+    func setModelEndpointAddress(_ address: String, at index: Int) {
+        modelEndpoints[index].baseURL = address
+        modelEndpoints[index].availableModels = []
+        modelEndpoints[index].catalogMessage = nil
+    }
+
+    func fetchModelCatalog(endpointID: String) {
+        guard let index = modelEndpoints.firstIndex(where: { $0.id == endpointID }),
+              !modelEndpoints[index].catalogLoading else { return }
+        modelEndpoints[index].catalogLoading = true
+        modelEndpoints[index].catalogMessage = nil
+        let draft = modelEndpoints[index]
+        let primary = modelGroups.first { $0.id == primaryGroupID }?.endpointID
+        let fallback = modelGroups.first { $0.id == fallbackGroupID }?.endpointID
+        let root = root
         Task {
             do {
-                guard let url = URL(string: draft.settings.baseURL), ["http", "https"].contains(url.scheme), url.host != nil else {
-                    throw ConfigurationInputError.invalid("请先填写完整的服务地址。")
-                }
+                let endpoint = try draft.value()
                 let key = try await Task.detached {
-                    if !draft.settings.requiresAPIKey { return "" }
+                    if !draft.requiresAPIKey { return "" }
                     if !draft.apiKey.isEmpty { return draft.apiKey }
                     if !draft.removesAPIKey, let saved = try ModelAPIKey.load(root: root, groupID: draft.id) { return saved }
                     let env = ProcessInfo.processInfo.environment
-                    return draft.id == primary ? env["DEEPSEEK_API_KEY"] ?? "" :
-                        (draft.id == fallback ? env["COMPUTER_HISTORY_FALLBACK_API_KEY"] ?? "" : "")
+                    if draft.id == primary, let key = env["DEEPSEEK_API_KEY"], !key.isEmpty { return key }
+                    return draft.id == fallback ? env["COMPUTER_HISTORY_FALLBACK_API_KEY"] ?? "" : ""
                 }.value
-                let catalog = try await ModelCatalog.fetch(baseURL: url, apiKey: key, allowInsecureHTTP: draft.settings.allowInsecureHTTP)
-                guard let current = modelGroups.firstIndex(where: { $0.id == groupID }),
-                      modelGroups[current].settings.baseURL == draft.settings.baseURL else {
-                    if let current = modelGroups.firstIndex(where: { $0.id == groupID }) { modelGroups[current].catalogLoading = false }
-                    return
-                }
+                let catalog = try await ModelCatalog.fetch(baseURL: endpoint.baseURL, apiKey: key, allowInsecureHTTP: draft.allowInsecureHTTP)
+                guard let current = modelEndpoints.firstIndex(where: { $0.id == endpointID }) else { return }
+                modelEndpoints[current].catalogLoading = false
+                guard modelEndpoints[current].baseURL == draft.baseURL else { return }
                 var seen: Set<String> = []
                 let entries = catalog.data.filter { !$0.id.isEmpty && seen.insert($0.id).inserted }
-                modelGroups[current].availableModels = entries
-                modelGroups[current].manualModel = entries.isEmpty
-                modelGroups[current].catalogMessage = entries.isEmpty ? "服务未返回模型，可手动填写。" : "已读取 \(entries.count) 个模型"
-                modelGroups[current].catalogLoading = false
-                if !entries.isEmpty, modelGroups[current].settings.model.isEmpty { modelGroups[current].settings.model = entries[0].id }
+                modelEndpoints[current].availableModels = entries
+                modelEndpoints[current].catalogMessage = entries.isEmpty ? "服务未返回模型，可手动填写。" : "已读取 \(entries.count) 个模型"
             } catch {
-                guard let current = modelGroups.firstIndex(where: { $0.id == groupID }) else { return }
-                modelGroups[current].catalogLoading = false
-                modelGroups[current].manualModel = true
-                modelGroups[current].catalogMessage = "未能读取模型列表，可手动填写：\(error)"
+                guard let current = modelEndpoints.firstIndex(where: { $0.id == endpointID }) else { return }
+                modelEndpoints[current].catalogLoading = false
+                guard modelEndpoints[current].baseURL == draft.baseURL else { return }
+                modelEndpoints[current].catalogMessage = "未能读取模型列表，可手动填写：\(error)"
             }
         }
     }
 
-    func apiKeyStatus(for group: ModelGroupDraft) -> String {
-        if group.hasStoredAPIKey { return "已保存到系统钥匙串" }
+    func apiKeyStatus(for endpoint: ModelEndpointDraft) -> String {
+        if endpoint.hasStoredAPIKey { return "已保存到系统钥匙串" }
         let environment = ProcessInfo.processInfo.environment
-        if group.id == primaryGroupID, environment["DEEPSEEK_API_KEY"]?.isEmpty == false {
-            return "当前从主模型环境变量读取密钥"
-        }
-        if group.id == fallbackGroupID, environment["COMPUTER_HISTORY_FALLBACK_API_KEY"]?.isEmpty == false {
-            return "当前从备用模型环境变量读取密钥"
-        }
+        if modelGroups.first(where: { $0.id == primaryGroupID })?.endpointID == endpoint.id,
+           environment["DEEPSEEK_API_KEY"]?.isEmpty == false { return "当前从主模型环境变量读取密钥" }
+        if modelGroups.first(where: { $0.id == fallbackGroupID })?.endpointID == endpoint.id,
+           environment["COMPUTER_HISTORY_FALLBACK_API_KEY"]?.isEmpty == false { return "当前从备用模型环境变量读取密钥" }
         return "尚未填写密钥"
     }
 
+    func addModelEndpoint() {
+        var draft = ModelEndpointDraft(ModelEndpoint(name: "新端点", baseURL: DeepSeekClient.defaultBaseURL))
+        draft.baseURL = ""
+        modelEndpoints.append(draft)
+        editingEndpointID = draft.id
+    }
+
+    func removeEditingModelEndpoint() {
+        guard !modelGroups.contains(where: { $0.endpointID == editingEndpointID }) else { return }
+        modelEndpoints.removeAll { $0.id == editingEndpointID }
+        editingEndpointID = modelEndpoints.first?.id ?? ""
+    }
+
     func addModelGroup() {
-        let group = ModelGroup(name: "新模型组", settings: ModelSettings(
-            baseURL: DeepSeekClient.defaultBaseURL, model: DeepSeekClient.defaultModel))
-        modelGroups.append(ModelGroupDraft(group))
+        guard let endpoint = modelEndpoints.first(where: { $0.id == editingEndpointID }) ?? modelEndpoints.first else { return }
+        let group = ModelGroup(name: "新模型", settings: ModelSettings(baseURL: DeepSeekClient.defaultBaseURL,
+            model: endpoint.availableModels.first?.id ?? ""))
+        var draft = ModelGroupDraft(group)
+        draft.endpointID = endpoint.id
+        modelGroups.append(draft)
         editingGroupID = group.id
     }
 
@@ -883,36 +918,99 @@ final class StatusModel: ObservableObject {
         for task in Array(modelTasks.keys) where modelTasks[task]?.groupID == removedID {
             modelTasks[task]?.groupID = nil
         }
+        for index in modelTaskTemplates.indices {
+            modelTaskTemplates[index].removeModel(removedID, replacement: modelGroups[0].id)
+        }
         editingGroupID = primaryGroupID
+    }
+
+    func selectTaskTemplate(_ id: String) {
+        selectedTaskTemplateID = id
+        taskTemplateName = modelTaskTemplates.first { $0.id == id }?.name ?? ""
+    }
+
+    func applyTaskTemplate() {
+        guard let template = modelTaskTemplates.first(where: { $0.id == selectedTaskTemplateID }) else { return }
+        primaryGroupID = template.primaryGroupID
+        fallbackGroupID = template.fallbackGroupID ?? ""
+        modelTasks = template.tasks
+        dailyBudget = template.dailyBudget.map(String.init(describing:)) ?? ""
+        monthlyBudget = template.monthlyBudget.map(String.init(describing:)) ?? ""
+        modelSettingsError = nil
+        modelSettingsMessage = "已套用「\(template.name)」，保存后生效"
+    }
+
+    func saveTaskTemplate(update: Bool = false, renameOnly: Bool = false) {
+        do {
+            let name = taskTemplateName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let existing = update ? modelTaskTemplates.firstIndex { $0.id == selectedTaskTemplateID } : nil
+            guard !name.isEmpty, !modelTaskTemplates.indices.contains(where: { $0 != existing && modelTaskTemplates[$0].name == name }) else {
+                throw ConfigurationInputError.invalid("请填写未使用的模板名称。")
+            }
+            let id: String
+            if renameOnly, let existing {
+                modelTaskTemplates[existing].name = name
+                id = modelTaskTemplates[existing].id
+            } else {
+                id = existing.map { modelTaskTemplates[$0].id } ?? UUID().uuidString
+                let template = try ModelTaskTemplate(id: id, name: name, primaryGroupID: primaryGroupID,
+                    fallbackGroupID: fallbackGroupID.isEmpty ? nil : fallbackGroupID, tasks: modelTasks,
+                    dailyBudget: modelBudget(dailyBudget), monthlyBudget: modelBudget(monthlyBudget))
+                if let existing { modelTaskTemplates[existing] = template }
+                else { modelTaskTemplates.append(template) }
+            }
+            selectTaskTemplate(id)
+            modelSettingsError = nil
+            modelSettingsMessage = "点击保存以保留模板更改"
+        } catch { modelSettingsError = String(describing: error); modelSettingsMessage = nil }
+    }
+
+    func removeTaskTemplate() {
+        modelTaskTemplates.removeAll { $0.id == selectedTaskTemplateID }
+        selectTaskTemplate("")
+        modelSettingsError = nil
+        modelSettingsMessage = "点击保存以移除模板"
+    }
+
+    private func modelBudget(_ text: String) throws -> Double? {
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
+        guard let value = Double(text), value.isFinite, value >= 0 else {
+            throw ConfigurationInputError.invalid("预算请填写非负数字，或留空表示不限制。")
+        }
+        return value
     }
 
     func saveModelConfiguration() {
         guard modelConfigurationLoaded else { return }
         do {
-            func budget(_ text: String) throws -> Double? {
-                if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
-                guard let value = Double(text), value.isFinite, value >= 0 else {
-                    throw ConfigurationInputError.invalid("预算请填写非负数字，或留空表示不限制。")
+            let endpoints = try modelEndpoints.map { try $0.value() }
+            let groups = try modelGroups.map { draft in
+                guard let endpoint = endpoints.first(where: { $0.id == draft.endpointID }) else {
+                    throw ConfigurationInputError.invalid("请为「\(draft.name)」选择端点。")
                 }
-                return value
+                return try draft.value(endpoint: endpoint)
             }
-            let settings = try ModelGroups(groups: modelGroups.map { try $0.value() },
+            let settings = try ModelGroups(groups: groups,
                 primaryGroupID: primaryGroupID, fallbackGroupID: fallbackGroupID.isEmpty ? nil : fallbackGroupID,
-                dailyBudget: budget(dailyBudget), monthlyBudget: budget(monthlyBudget), tasks: modelTasks.isEmpty ? nil : modelTasks)
-            _ = try settings.resolved()
-            for group in modelGroups {
-                if !group.apiKey.isEmpty { try ModelAPIKey.save(group.apiKey, root: root, groupID: group.id) }
-                else if group.removesAPIKey { try ModelAPIKey.remove(root: root, groupID: group.id) }
+                dailyBudget: modelBudget(dailyBudget), monthlyBudget: modelBudget(monthlyBudget),
+                tasks: modelTasks.isEmpty ? nil : modelTasks, endpoints: endpoints,
+                templates: modelTaskTemplates.isEmpty ? nil : modelTaskTemplates)
+            try settings.validateForSaving()
+            for index in modelEndpoints.indices {
+                let endpoint = modelEndpoints[index]
+                if !endpoint.apiKey.isEmpty {
+                    try ModelAPIKey.save(endpoint.apiKey, root: root, groupID: endpoint.id)
+                    modelEndpoints[index].hasStoredAPIKey = true
+                } else if endpoint.removesAPIKey {
+                    try ModelAPIKey.remove(root: root, groupID: endpoint.id)
+                    modelEndpoints[index].hasStoredAPIKey = false
+                }
+                modelEndpoints[index].apiKey = ""
+                modelEndpoints[index].removesAPIKey = false
             }
             try settings.save(root: root)
-            for index in modelGroups.indices {
-                if !modelGroups[index].apiKey.isEmpty { modelGroups[index].hasStoredAPIKey = true }
-                else if modelGroups[index].removesAPIKey { modelGroups[index].hasStoredAPIKey = false }
-                modelGroups[index].apiKey = ""
-                modelGroups[index].removesAPIKey = false
-            }
             modelSettingsError = nil
-            modelSettingsMessage = "已保存，下一次总结使用所选模型组"
+            modelSettingsMessage = "已保存，下一次总结使用所选模型"
         } catch { modelSettingsError = String(describing: error); modelSettingsMessage = nil }
     }
 
