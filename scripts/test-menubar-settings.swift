@@ -60,6 +60,22 @@ struct SettingsRegression {
         precondition(model.collectorDraft.windowTextDisabledApplications.isEmpty, "OCR checkbox must re-enable the application")
         model.saveCollectorConfiguration()
         precondition(try! CollectorConfig.load(rootDirectory: root).windowTextApplications == ["example.synthetic-ocr"])
+        stage("settings disclosure inserts fields without animation")
+        var insertionAnimations: [Bool] = []
+        let disclosureHost = NSHostingView(rootView: VStack {
+            SettingsDisclosure("端点与认证", animatesExpansion: false) {
+                TextField("服务地址", text: .constant("https://example.invalid"))
+                    .transaction { insertionAnimations.append($0.animation != nil) }
+            }
+            Spacer()
+        }.padding(14))
+        window.contentView = disclosureHost
+        window.setContentSize(NSSize(width: 380, height: 640))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        click(NSPoint(x: 80, y: 612))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        precondition(!insertionAnimations.isEmpty, "The endpoint field must appear after clicking the disclosure")
+        precondition(!insertionAnimations.contains(true), "Endpoint fields must appear without an animated insertion")
         stage("native model form")
         model.openSummarySettings()
         model.settingsTab = .model
@@ -87,6 +103,9 @@ struct SettingsRegression {
         func fields(_ parent: NSView) -> [NSTextField] {
             (parent as? NSTextField).map { [$0] } ?? parent.subviews.flatMap(fields)
         }
+        func popups(_ parent: NSView) -> [NSPopUpButton] {
+            (parent as? NSPopUpButton).map { [$0] } ?? parent.subviews.flatMap(popups)
+        }
         func edit(_ id: String, value: String) {
             let placeholders = ["model-name": "deepseek-flash", "model-output-budget": "32768", "model-reasoning": "留空使用服务默认值", "collector-days": "0 表示不按天数清理"]
             guard let field = fields(panel).first(where: { $0.placeholderString == placeholders[id] }) else {
@@ -102,6 +121,22 @@ struct SettingsRegression {
         }
         settle()
         stage("model form settled")
+        try snapshot("model-library")
+        let modelField = fields(panel).first { $0.placeholderString == "deepseek-flash" }!
+        let fieldFrame = modelField.convert(modelField.bounds, to: panel)
+        for popup in popups(panel) {
+            let popupFrame = popup.convert(popup.bounds, to: panel)
+            precondition(abs(fieldFrame.minX - popupFrame.minX) <= 1 && abs(fieldFrame.maxX - popupFrame.maxX) <= 1,
+                         "Popups and input fields must share both edges")
+        }
+        model.modelEndpoints[0].requiresAPIKey = true
+        click(NSPoint(x: 80, y: 538))
+        settle()
+        precondition(fields(panel).contains { $0.placeholderString == "https://api.deepseek.com" })
+        try snapshot("model-endpoint")
+        click(NSPoint(x: 80, y: 538))
+        model.modelEndpoints[0].requiresAPIKey = false
+        settle()
         edit("model-name", value: "edited-in-form")
         precondition(model.modelGroups[0].settings.model == "edited-in-form", "Native model field must update the draft")
         stage("model name edited")
@@ -135,6 +170,18 @@ struct SettingsRegression {
         model.loadConfigurationDrafts()
         precondition(model.modelGroups.count == 2 && model.primaryGroupID == newID)
         precondition(model.modelGroups[0].settings.model == "edited-in-form", "Changing selection must retain other groups")
+        model.settingsTab = .routing
+        settle()
+        precondition(!fields(panel).contains { $0.placeholderString == "deepseek-flash" }, "Model fields must stay on the Model tab")
+        try snapshot("model-routing")
+        let primaryPopup = popups(panel).first { $0.accessibilityLabel() == "主模型" }!
+        primaryPopup.menu?.performActionForItem(at: 0)
+        settle()
+        precondition(model.primaryGroupID == originalID, "The native popup must apply a chosen item")
+        primaryPopup.menu?.performActionForItem(at: 1)
+        settle()
+        precondition(model.primaryGroupID == newID)
+        model.fallbackGroupID = originalID
         stage("native task template editor")
         var submitted: ModelTaskTemplate?
         let templateHost = NSHostingView(rootView: TaskTemplateForm(draft: model.newTaskTemplate(),
@@ -162,6 +209,9 @@ struct SettingsRegression {
         model.saveModelConfiguration()
         precondition(try! ModelGroups.load(root: root).resolved(for: "narrative").model == "second-source")
         precondition(try! ModelGroups.load(root: root).resolved(for: "narrative").outputTokenBudget != 2048)
+        model.loadConfigurationDrafts()
+        precondition(model.modelRoutingMode == .unified && model.selectedTaskTemplateID == route.id)
+        precondition(model.modelTaskTemplates.map(\.id) == [route.id], "Changing modes does not create a migration template")
         route.name = "Renamed synthetic template"
         model.storeTaskTemplate(route)
         model.modelRoutingMode = .template

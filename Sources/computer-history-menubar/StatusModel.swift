@@ -48,7 +48,7 @@ final class StatusModel: ObservableObject {
     @Published var summaryDraft = ""
     @Published var summaryMessage: String?
     @Published var summarySettingsError: String?
-    enum SettingsTab: String, CaseIterable { case timeline = "时间线", prompts = "提示词", model = "模型", collector = "采集", backup = "备份", access = "授权" }
+    enum SettingsTab: String, CaseIterable { case timeline = "时间线", prompts = "提示词", model = "模型", routing = "分配", collector = "采集", backup = "备份", access = "授权" }
     enum TimelineRecalculation: CaseIterable {
         case today, all, none
         var label: String {
@@ -823,7 +823,7 @@ final class StatusModel: ObservableObject {
             }
             selectedTaskTemplateID = groups.activeTemplateID ?? ""
             if selectedTaskTemplateID.isEmpty, let tasks = groups.tasks, !tasks.isEmpty {
-                var legacy = ModelTaskTemplate(name: "当前任务分配", primaryGroupID: groups.primaryGroupID,
+                var legacy = ModelTaskTemplate(name: "旧版任务分配", primaryGroupID: groups.primaryGroupID,
                     fallbackGroupID: groups.fallbackGroupID, tasks: tasks, dailyBudget: groups.dailyBudget,
                     monthlyBudget: groups.monthlyBudget)
                 legacy.fillTaskModels()
@@ -839,7 +839,10 @@ final class StatusModel: ObservableObject {
                 }
             }
             modelRoutingMode = selectedTaskTemplateID.isEmpty ? .unified : .template
-            if selectedTaskTemplateID.isEmpty { selectedTaskTemplateID = modelTaskTemplates.first?.id ?? "" }
+            if selectedTaskTemplateID.isEmpty, let last = groups.lastTemplateID,
+               modelTaskTemplates.contains(where: { $0.id == last }) {
+                selectedTaskTemplateID = last
+            }
             editingGroupID = groups.primaryGroupID
             dailyBudget = groups.dailyBudget.map(String.init(describing:)) ?? ""
             monthlyBudget = groups.monthlyBudget.map(String.init(describing:)) ?? ""
@@ -1004,7 +1007,8 @@ final class StatusModel: ObservableObject {
                 primaryGroupID: primaryGroupID, fallbackGroupID: fallbackGroupID.isEmpty ? nil : fallbackGroupID,
                 dailyBudget: modelBudget(dailyBudget), monthlyBudget: modelBudget(monthlyBudget),
                 endpoints: endpoints, templates: modelTaskTemplates.isEmpty ? nil : modelTaskTemplates,
-                activeTemplateID: modelRoutingMode == .template ? selectedTaskTemplateID : nil)
+                activeTemplateID: modelRoutingMode == .template ? selectedTaskTemplateID : nil,
+                lastTemplateID: selectedTaskTemplate?.id)
             try settings.validateForSaving()
             for index in modelEndpoints.indices {
                 let endpoint = modelEndpoints[index]
@@ -1141,7 +1145,7 @@ final class StatusModel: ObservableObject {
             switch settingsTab {
             case .timeline: timelineSettingsError = message
             case .prompts: summarySettingsError = message
-            case .model: modelSettingsError = message
+            case .model, .routing: modelSettingsError = message
             case .collector: collectorSettingsError = message
             case .backup: reportError = message
             case .access: permissionMessage = message

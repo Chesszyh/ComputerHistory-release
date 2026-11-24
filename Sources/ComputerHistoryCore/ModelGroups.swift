@@ -108,6 +108,7 @@ public struct ModelGroups: Codable, Sendable {
     public var tasks: [String: ModelTaskConfiguration]?
     public var templates: [ModelTaskTemplate]?
     public var activeTemplateID: String?
+    public var lastTemplateID: String?
 
     public var activeTemplate: ModelTaskTemplate? {
         templates?.first { $0.id == activeTemplateID }
@@ -119,10 +120,10 @@ public struct ModelGroups: Codable, Sendable {
 
     public init(groups: [ModelGroup], primaryGroupID: String, fallbackGroupID: String? = nil,
                 dailyBudget: Double? = nil, monthlyBudget: Double? = nil, tasks: [String: ModelTaskConfiguration]? = nil,
-                endpoints: [ModelEndpoint]? = nil, templates: [ModelTaskTemplate]? = nil, activeTemplateID: String? = nil) {
+                endpoints: [ModelEndpoint]? = nil, templates: [ModelTaskTemplate]? = nil, activeTemplateID: String? = nil, lastTemplateID: String? = nil) {
         self.groups = groups; self.primaryGroupID = primaryGroupID; self.fallbackGroupID = fallbackGroupID
         self.dailyBudget = dailyBudget; self.monthlyBudget = monthlyBudget; self.tasks = tasks
-        self.endpoints = endpoints; self.templates = templates; self.activeTemplateID = activeTemplateID
+        self.endpoints = endpoints; self.templates = templates; self.activeTemplateID = activeTemplateID; self.lastTemplateID = lastTemplateID
     }
 
     public static func load(root: URL, environment: [String: String] = ProcessInfo.processInfo.environment) throws -> Self {

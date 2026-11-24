@@ -47,6 +47,7 @@ struct SummarySettingsPane: View {
                 case .timeline: timelineEditor
                 case .prompts: promptEditor
                 case .model: modelEditor
+                case .routing: routingEditor
                 case .collector: collectorEditor
                 case .backup: backupEditor
                 case .access: PermissionSetupPane(model: model)
@@ -199,9 +200,7 @@ struct SummarySettingsPane: View {
     }
 
     private func requestStylePicker(_ style: Binding<ChatRequestStyle>) -> some View {
-        Picker("请求格式", selection: style) {
-            ForEach(ChatRequestStyle.allCases, id: \.self) { Text($0.label).tag($0) }
-        }.font(.system(size: 11))
+        SettingsPicker("请求格式", selection: style, choices: ChatRequestStyle.allCases.map { ($0, $0.label) })
     }
 
     private var backupEditor: some View {
@@ -269,23 +268,15 @@ struct SummarySettingsPane: View {
         let availableModels = endpoint?.availableModels ?? []
         return VStack(alignment: .leading, spacing: 10) {
             SettingsField("配置名称", text: $model.modelGroups[index].name, placeholder: "例如：Kimi 概览", id: "group-name")
-            Picker("端点", selection: Binding(get: { model.modelGroups[index].endpointID }, set: { id in
+            SettingsPicker("端点", selection: Binding(get: { model.modelGroups[index].endpointID }, set: { id in
                 model.modelGroups[index].endpointID = id
                 model.modelGroups[index].manualModel = false
-            })) {
-                ForEach(model.modelEndpoints) { Text($0.name).tag($0.id) }
-            }.accessibilityIdentifier("model-endpoint-picker")
+            }), choices: model.modelEndpoints.map { ($0.id, $0.name) }).accessibilityIdentifier("model-endpoint-picker")
             if !availableModels.isEmpty && !model.modelGroups[index].manualModel {
-                Picker("模型", selection: $model.modelGroups[index].settings.model) {
-                    if model.modelGroups[index].settings.model.isEmpty { Text("请选择模型").tag("") }
-                    ForEach(availableModels) { entry in
-                        Text(entry.name.map { $0 + " · " + entry.id } ?? entry.id).tag(entry.id)
-                    }
-                    let current = model.modelGroups[index].settings.model
-                    if !current.isEmpty, !availableModels.contains(where: { $0.id == current }) {
-                        Text(current + "（当前配置）").tag(current)
-                    }
-                }
+                let current = model.modelGroups[index].settings.model
+                let available = availableModels.map { entry in (entry.id, entry.name.map { $0 + " · " + entry.id } ?? entry.id) }
+                let choices = availableModels.contains { $0.id == current } ? available : [(current, current.isEmpty ? "请选择模型" : current + "（当前配置）")] + available
+                SettingsPicker("模型名称", selection: $model.modelGroups[index].settings.model, choices: choices)
                 Button("手动填写模型") { model.modelGroups[index].manualModel = true }.font(.system(size: 10))
             } else {
                 SettingsField("模型名称", text: $model.modelGroups[index].settings.model, placeholder: "deepseek-flash", id: "model-name")
@@ -313,9 +304,9 @@ struct SummarySettingsPane: View {
     private var taskTemplates: some View {
         SettingsCard("任务模板") {
             if !model.modelTaskTemplates.isEmpty {
-                Picker("当前模板", selection: $model.selectedTaskTemplateID) {
-                    ForEach(model.modelTaskTemplates) { Text($0.name).tag($0.id) }
-                }.accessibilityIdentifier("task-template-picker")
+                SettingsPicker("当前模板", selection: $model.selectedTaskTemplateID,
+                    choices: [("", "选择模板")] + model.modelTaskTemplates.map { ($0.id, $0.name) })
+                    .accessibilityIdentifier("task-template-picker")
             }
             HStack {
                 if let template = model.selectedTaskTemplate {
@@ -351,73 +342,77 @@ struct SummarySettingsPane: View {
     }
 
     private func templateRouteRow(_ label: String, id: String?) -> some View {
-        LabeledContent(label, value: model.modelGroups.first { $0.id == id }?.name ?? "无")
-            .font(DesignTokens.Typography.footnote)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(label).foregroundStyle(.secondary).frame(width: 64, alignment: .leading)
+            Text(model.modelGroups.first { $0.id == id }?.name ?? "无")
+        }.font(DesignTokens.Typography.footnote)
+    }
+
+    private var routingEditor: some View {
+        modelSettingsPage {
+            Picker("分配方式", selection: $model.modelRoutingMode) {
+                ForEach(StatusModel.ModelRoutingMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }.pickerStyle(.segmented).labelsHidden()
+                .accessibilityIdentifier("model-routing-mode")
+            if model.modelRoutingMode == .unified {
+                SettingsCard("主备模型") {
+                    SettingsPicker("主模型", selection: Binding(get: { model.primaryGroupID }, set: { id in
+                        model.primaryGroupID = id
+                        if model.fallbackGroupID == id { model.fallbackGroupID = "" }
+                    }), choices: model.modelGroups.map { ($0.id, $0.name) })
+                    SettingsPicker("备用模型", selection: $model.fallbackGroupID,
+                        choices: [("", "不使用")] + model.modelGroups.filter { $0.id != model.primaryGroupID }.map { ($0.id, $0.name) })
+                }
+            } else {
+                taskTemplates
+            }
+            if model.modelRoutingMode == .unified {
+                SettingsDisclosure("预算") {
+                    SettingsField("每日预算", text: $model.dailyBudget, placeholder: "留空表示不限制", id: "model-daily")
+                    SettingsField("每月预算", text: $model.monthlyBudget, placeholder: "留空表示不限制", id: "model-monthly")
+                }
+            }
+        }
     }
 
     private var modelEditor: some View {
+        modelSettingsPage {
+            SettingsDisclosure("端点与认证", animatesExpansion: false) {
+                SettingsPicker("端点", selection: $model.editingEndpointID, choices: model.modelEndpoints.map { ($0.id, $0.name) })
+                HStack {
+                    Button("新增端点") { model.addModelEndpoint() }
+                    Spacer()
+                    Button("删除端点", role: .destructive) { model.removeEditingModelEndpoint() }
+                        .disabled(model.modelGroups.contains { $0.endpointID == model.editingEndpointID })
+                }
+                if let index = model.modelEndpoints.firstIndex(where: { $0.id == model.editingEndpointID }) {
+                    modelEndpointEditor(index)
+                }
+            }
+            SettingsDisclosure("模型配置", isExpanded: $model.showsModelLibrary, animatesExpansion: false) {
+                SettingsPicker("编辑模型", selection: $model.editingGroupID, choices: model.modelGroups.map { ($0.id, $0.name) })
+                HStack {
+                    Button("新增模型") { model.addModelGroup() }
+                    Spacer()
+                    Button("删除模型", role: .destructive) { model.removeEditingModelGroup() }
+                        .disabled(model.modelGroups.count < 2)
+                        .accessibilityIdentifier("model-group-delete")
+                }
+                if let index = model.modelGroups.firstIndex(where: { $0.id == model.editingGroupID }) {
+                    modelGroupEditor(index)
+                }
+            }
+            SettingsDisclosure("高级选项") {
+                advancedFile("model.json")
+            }
+        }
+    }
+
+    private func modelSettingsPage<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Picker("分配方式", selection: $model.modelRoutingMode) {
-                        ForEach(StatusModel.ModelRoutingMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                    }.pickerStyle(.segmented).labelsHidden()
-                        .accessibilityIdentifier("model-routing-mode")
-                    if model.modelRoutingMode == .unified {
-                        SettingsCard("主备模型") {
-                            Picker("主模型", selection: Binding(get: { model.primaryGroupID }, set: { id in
-                                model.primaryGroupID = id
-                                if model.fallbackGroupID == id { model.fallbackGroupID = "" }
-                            })) {
-                                ForEach(model.modelGroups) { Text($0.name).tag($0.id) }
-                            }
-                            Picker("备用模型", selection: $model.fallbackGroupID) {
-                                Text("不使用").tag("")
-                                ForEach(model.modelGroups.filter { $0.id != model.primaryGroupID }) { Text($0.name).tag($0.id) }
-                            }
-                        }
-                    } else {
-                        taskTemplates
-                    }
-                    SettingsDisclosure("端点与认证") {
-                        Picker("端点", selection: $model.editingEndpointID) {
-                            ForEach(model.modelEndpoints) { Text($0.name).tag($0.id) }
-                        }
-                        HStack {
-                            Button("新增端点") { model.addModelEndpoint() }
-                            Spacer()
-                            Button("删除端点", role: .destructive) { model.removeEditingModelEndpoint() }
-                                .disabled(model.modelGroups.contains { $0.endpointID == model.editingEndpointID })
-                        }
-                        if let index = model.modelEndpoints.firstIndex(where: { $0.id == model.editingEndpointID }) {
-                            modelEndpointEditor(index)
-                        }
-                    }
-                    DisclosureGroup("模型配置", isExpanded: $model.showsModelLibrary) {
-                        Picker("编辑", selection: $model.editingGroupID) {
-                            ForEach(model.modelGroups) { Text($0.name).tag($0.id) }
-                        }
-                        HStack {
-                            Button("新增模型") { model.addModelGroup() }
-                            Spacer()
-                            Button("删除模型", role: .destructive) { model.removeEditingModelGroup() }
-                                .disabled(model.modelGroups.count < 2)
-                                .accessibilityIdentifier("model-group-delete")
-                        }
-                        if let index = model.modelGroups.firstIndex(where: { $0.id == model.editingGroupID }) {
-                            modelGroupEditor(index)
-                        }
-                    }
-                    if model.modelRoutingMode == .unified {
-                        SettingsDisclosure("预算") {
-                            SettingsField("每日预算", text: $model.dailyBudget, placeholder: "留空表示不限制", id: "model-daily")
-                            SettingsField("每月预算", text: $model.monthlyBudget, placeholder: "留空表示不限制", id: "model-monthly")
-                        }
-                    }
-
-                    SettingsDisclosure("高级选项") {
-                        advancedFile("model.json")
-                    }
+                    content()
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 6)
@@ -716,6 +711,68 @@ struct ApplicationListEditor: View {
     }
 }
 
+private struct SettingsPicker<Selection: Hashable>: View {
+    let title: String
+    @Binding var selection: Selection
+    let choices: [(Selection, String)]
+
+    init(_ title: String, selection: Binding<Selection>, choices: [(Selection, String)]) {
+        self.title = title
+        _selection = selection
+        self.choices = choices
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(DesignTokens.Typography.footnoteMedium).foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            SettingsPopUp(title: title, selection: $selection, choices: choices)
+                .frame(maxWidth: .infinity)
+                .frame(height: 22)
+        }
+    }
+}
+
+private struct SettingsPopUp<Selection: Hashable>: NSViewRepresentable {
+    let title: String
+    @Binding var selection: Selection
+    let choices: [(Selection, String)]
+
+    @MainActor final class Coordinator: NSObject {
+        var picker: SettingsPopUp
+        init(_ picker: SettingsPopUp) { self.picker = picker }
+        @objc func select(_ sender: NSPopUpButton) {
+            guard picker.choices.indices.contains(sender.indexOfSelectedItem) else { return }
+            picker.selection = picker.choices[sender.indexOfSelectedItem].0
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let button = NSPopUpButton()
+        button.controlSize = .small
+        button.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        button.lineBreakMode = .byTruncatingTail
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.select(_:))
+        button.setAccessibilityLabel(title)
+        return button
+    }
+
+    func updateNSView(_ button: NSPopUpButton, context: Context) {
+        context.coordinator.picker = self
+        let titles = choices.map { $0.1 }
+        if button.itemTitles != titles {
+            button.removeAllItems()
+            for title in titles {
+                button.menu?.addItem(NSMenuItem(title: title, action: nil, keyEquivalent: ""))
+            }
+        }
+        button.selectItem(at: choices.firstIndex { $0.0 == selection } ?? -1)
+    }
+}
+
 private struct SettingsCard<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content
@@ -820,17 +877,27 @@ struct SettingsDisclosure<Content: View>: View {
     let title: String
     @State private var expanded = false
     @State private var isHovered = false
+    private let expandedBinding: Binding<Bool>?
+    private let animatesExpansion: Bool
     @ViewBuilder let content: Content
-    init(_ title: String, @ViewBuilder content: () -> Content) { self.title = title; self.content = content() }
+
+    init(_ title: String, isExpanded: Binding<Bool>? = nil, animatesExpansion: Bool = true, @ViewBuilder content: () -> Content) {
+        self.title = title
+        expandedBinding = isExpanded
+        self.animatesExpansion = animatesExpansion
+        self.content = content()
+    }
+
     var body: some View {
+        let expansion = expandedBinding ?? $expanded
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
             Button {
-                withAnimation(.easeInOut(duration: 0.16)) {
-                    expanded.toggle()
+                withAnimation(animatesExpansion ? .easeInOut(duration: 0.16) : nil) {
+                    expansion.wrappedValue.toggle()
                 }
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    Image(systemName: expansion.wrappedValue ? "chevron.down" : "chevron.right")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(.secondary)
                         .frame(width: 10)
@@ -850,10 +917,10 @@ struct SettingsDisclosure<Content: View>: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(title)
-            .accessibilityValue(expanded ? "已展开" : "已收起")
+            .accessibilityValue(expansion.wrappedValue ? "已展开" : "已收起")
             .onHover { isHovered = $0 }
 
-            if expanded {
+            if expansion.wrappedValue {
                 VStack(alignment: .leading, spacing: 8) {
                     content
                 }

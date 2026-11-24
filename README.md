@@ -86,7 +86,7 @@ python3 scripts/test-process-control.py "$bin_dir/computer-history"
 
 菜单栏“日报、周报与导出”可生成、查看、复制报告，或复制给其他 AI 的活动材料，并导出 Markdown／TXT。监督进程自动补齐已结束时段的日报、周报。可选的 GitHub 私有备份默认关闭，在“设置 → 总结提示词与配置 → 备份”设置仓库，并可直接用设置区开关启停。详细行为与命令见[报告、导出与备份](docs/collector.md#报告导出与备份)。
 
-在菜单栏打开“设置 → 总结提示词与配置 → 模型”。先添加端点，再从该端点配置模型。想让所有总结共用同一对主备模型，选「统一模型」。需要给活动归属、日报等任务分配不同模型，选「按任务分配」并保存模板。配置步骤见[选择模型和任务模板](docs/collector.md#选择模型和任务模板)。
+在菜单栏打开“设置 → 总结提示词与配置 → 模型”。先在「模型」添加端点和模型，再切到「分配」。想让所有总结共用同一对主备模型，选「统一模型」。需要给活动归属、日报等任务分配不同模型，选「按任务分配」并保存模板。配置步骤见[选择模型和任务模板](docs/collector.md#选择模型和任务模板)。
 
 命令行可以通过数据目录中的 [`model.json`](docs/collector.md#modeljson-配置示例)配置模型。未配置服务时，也可用 `DEEPSEEK_API_KEY` 接入，并通过 `DEEPSEEK_MODEL` 与 `DEEPSEEK_BASE_URL` 指定模型和地址。默认值见 [DeepSeekClient.swift](Sources/ComputerHistoryCore/DeepSeekClient.swift) 的 `defaultModel` 和 `defaultBaseURL`。
 
