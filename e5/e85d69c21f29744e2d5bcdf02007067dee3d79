@@ -1,0 +1,27 @@
+Sources/ComputerHistoryCore/TraySnapshotLoader.swift
+  s_018f2fc8f33ecf::t_27695c3ce1c196 142-181
+Sources/computer-history-menubar/StatusModel.swift
+  s_018f2fc8f33ecf::t_e80bebd7ffcbd5 203,208-214,228,234,239,254,265-266,273-274,276-292,320,324-328,352,354
+Sources/computer-history-menubar/StatusPanel.swift
+  s_018f2fc8f33ecf::t_5a2ecde7b76cfb 5-30,56
+docs/collector.md
+  s_018f2fc8f33ecf::t_389f881884f101 215
+scripts/test-menubar-panel.swift
+  s_018f2fc8f33ecf::t_5c01dd790ac434 18-39,137
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e5e85d69c21f29744e2d5bcdf02007067dee3d79",
+  "prompts": {},
+  "sessions": {
+    "s_018f2fc8f33ecf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20bdb-c98f-7e11-b60a-a57e9bb6522b",
+        "model": "gpt-6.2-astra"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
