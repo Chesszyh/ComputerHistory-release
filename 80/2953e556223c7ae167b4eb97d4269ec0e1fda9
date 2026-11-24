@@ -1,0 +1,42 @@
+Tests/ComputerHistoryCoreTests/ModelGroupsTests.swift
+  s_b8e3b834b91716::t_2c894929418e65 97-122
+Sources/ComputerHistoryCore/DeepSeekClient.swift
+  s_b8e3b834b91716::t_59ce42871c2025 136,141
+Sources/computer-history-menubar/SettingsPane.swift
+  s_b8e3b834b91716::t_c0777fd895c9a3 396
+  s_b8e3b834b91716::t_8761aee0081db0 745
+  s_b8e3b834b91716::t_23db5549115798 768-769
+  s_b8e3b834b91716::t_b04f8f7e13d8d2 8-9,12-27,313-319,321-336,338-349,353-357,362-376,379-380,411-415,741-744,746-767,770-818
+Sources/ComputerHistoryCore/ModelGroups.swift
+  s_b8e3b834b91716::t_23db5549115798 39
+  s_b8e3b834b91716::t_59ce42871c2025 29-36,110-118,122,125,190-199,245,262,272,280
+scripts/test-menubar-settings.swift
+  s_b8e3b834b91716::t_2c894929418e65 154-156,159,161-167,170-171,178
+  s_b8e3b834b91716::t_c0777fd895c9a3 66
+  s_b8e3b834b91716::t_8761aee0081db0 138-153
+Sources/computer-history-menubar/StatusModel.swift
+  s_b8e3b834b91716::t_59ce42871c2025 78-79,819-842,949,954-955,958-962,965-973,978-979,1000-1002,1006-1007
+  s_b8e3b834b91716::t_c0777fd895c9a3 72,867-868,898-907,911,913
+docs/collector.md
+  s_b8e3b834b91716::t_2c894929418e65 251,253
+scripts/test-menubar-catalog.swift
+  s_b8e3b834b91716::t_c0777fd895c9a3 17
+scripts/test-model-fallback.py
+  s_b8e3b834b91716::t_fc751bcc85a8c3 115-117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "802953e556223c7ae167b4eb97d4269ec0e1fda9",
+  "prompts": {},
+  "sessions": {
+    "s_b8e3b834b91716": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20eba-41e9-7ed0-9097-4322c687a7e0",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
