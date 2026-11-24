@@ -1,0 +1,23 @@
+Sources/ComputerHistoryCore/ActivityGrouping.swift
+  s_b8e3b834b91716::t_9d0b15297ce182 40,44-59,76-77
+docs/collector.md
+  s_b8e3b834b91716::t_37c486e7b2d158 163
+scripts/test-narrative-activities.py
+  s_b8e3b834b91716::t_0efccac560eb84 35-39,50-51,97,101-102
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1bd6427662ee37a1f467153f7783e7ace08e5aee",
+  "prompts": {},
+  "sessions": {
+    "s_b8e3b834b91716": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20eba-41e9-7ed0-9097-4322c687a7e0",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
