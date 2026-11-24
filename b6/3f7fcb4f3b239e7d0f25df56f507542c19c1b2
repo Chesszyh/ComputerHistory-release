@@ -1,0 +1,21 @@
+Sources/ComputerHistoryCore/MemoryGenerator.swift
+  s_018f2fc8f33ecf::t_2a33790a4aa781 490
+Tests/ComputerHistoryCoreTests/MemoryGenerationTests.swift
+  s_018f2fc8f33ecf::t_ce52cde174b723 20-21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b63f7fcb4f3b239e7d0f25df56f507542c19c1b2",
+  "prompts": {},
+  "sessions": {
+    "s_018f2fc8f33ecf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20bdb-c98f-7e11-b60a-a57e9bb6522b",
+        "model": "gpt-6.2-astra"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
