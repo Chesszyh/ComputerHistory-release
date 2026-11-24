@@ -15,6 +15,28 @@ struct HistoryRegression {
         }).save(root: root)
         _ = NSApplication.shared
         let model = StatusModel(root: root)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        precondition(model.timelineCount == 0, "Hidden startup must defer history")
+        let view = NSHostingView(rootView: StatusPanel(model: model).environment(\.colorScheme, .dark))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 640), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = view
+        window.orderFront(nil)
+        view.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        precondition(model.panelVisible && model.timelineCount == 120, "Window visible \(window.isVisible), model visible \(model.panelVisible), loaded \(model.timelineCount)")
+        window.orderOut(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        precondition(!model.panelVisible)
+        let narrative = ActivityNarrative.load(root: root)
+        try! ActivityNarrative().save(root: root)
+        RunLoop.main.run(until: Date().addingTimeInterval(3.3))
+        precondition(model.timelineCount == 120, "Hidden timer must not fetch changed history")
+        window.orderFront(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        precondition(model.timelineCount == 0, "Reopening must fetch changes immediately")
+        try! narrative.save(root: root)
+        model.refreshSlow()
         let clock = Date(timeIntervalSince1970: 1_600_000_000)
         precondition(model.relativeLabel(clock, now: clock.addingTimeInterval(13)) == "13 秒前")
         precondition(model.relativeLabel(clock, now: clock.addingTimeInterval(14)) == "14 秒前")
@@ -42,13 +64,6 @@ struct HistoryRegression {
         precondition(baseline == cached, "Formatter reuse must preserve displayed times")
         print("PERF: 1000 row times, new formatter \(baselineTime)s, reused formatter \(cachedTime)s; unchanged publications \(redundantPublications)")
         model.shutdown()
-        let view = NSHostingView(rootView: StatusPanel(model: model).environment(\.colorScheme, .dark))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 640), styleMask: [.borderless], backing: .buffered, defer: false)
-        window.appearance = NSAppearance(named: .darkAqua)
-        window.contentView = view
-        window.orderFront(nil)
-        view.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
         func scrollView(_ parent: NSView) -> NSScrollView? {
             if let scroll = parent as? NSScrollView { return scroll }
             return parent.subviews.compactMap { scrollView($0) }.first
@@ -119,6 +134,7 @@ struct HistoryRegression {
         ]]
         try! JSONSerialization.data(withJSONObject: away).write(to: root.appendingPathComponent("away.json"))
         let detailsModel = StatusModel(root: root)
+        detailsModel.refreshAll()
         defer { detailsModel.shutdown() }
         RunLoop.main.run(until: Date().addingTimeInterval(1))
         let detailRows = detailsModel.timelineGroups.flatMap(\.items)

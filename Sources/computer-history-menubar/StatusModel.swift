@@ -200,10 +200,18 @@ final class StatusModel: ObservableObject {
     private let loader = TraySnapshotLoader()
     private var refreshTask: Task<Void, Never>?
     private var refreshState = TrayRefreshState()
+    private var historyRequested = false
     private var liveTask: Task<Void, Never>?
     private var detailTask: Task<Void, Never>?
     private var detailRequest = UUID()
     private var stopped = false
+    private(set) var panelVisible = false
+
+    func setPanelVisible(_ visible: Bool) {
+        guard panelVisible != visible else { return }
+        panelVisible = visible
+        if visible { refreshAll() }
+    }
 
     init(root: URL = CollectorStatus.defaultRoot, commandExecutable: URL? = nil) {
         self.root = root
@@ -217,18 +225,18 @@ final class StatusModel: ObservableObject {
         NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
             .sink { [weak self] _ in MainActor.assumeIsolated { self?.shutdown() } }
             .store(in: &cancellables)
-        refreshAll()
+        refreshAll(forceHistory: false)
     }
 
     private func startTimers() {
         // 前台身份留在主线程，跨进程窗口查询由后台 actor 完成。
         Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-            .sink { [weak self] _ in self?.refreshLive() }
+            .sink { [weak self] _ in if self?.panelVisible == true { self?.refreshLive() } }
             .store(in: &cancellables)
 
         // 采集状态与记忆在后台刷新，复用未变化文件的缓存。
         Timer.publish(every: 3, on: .main, in: .common).autoconnect()
-            .sink { [weak self] _ in self?.refreshSlow() }
+            .sink { [weak self] _ in self?.refreshSlow(forceHistory: false) }
             .store(in: &cancellables)
     }
 
@@ -243,6 +251,7 @@ final class StatusModel: ObservableObject {
         }
         if name != frontApp { frontApp = name }
         if AwayPeriods.isLoginWindow(app) { frontWindow = "登录界面 · 暂停采集"; return }
+        guard panelVisible else { return }
         let pid = app?.processIdentifier
         liveTask = Task { [weak self] in
             let window = await TrayWindowReader.shared.read(pid: pid)
@@ -253,14 +262,34 @@ final class StatusModel: ObservableObject {
         }
     }
 
-    func refreshSlow() {
+    func refreshSlow(forceHistory: Bool = true) {
+        historyRequested = historyRequested || forceHistory
         guard !stopped, refreshState.request() else { return }
         startLoad()
     }
 
     private func startLoad() {
         let root = root, loader = loader
+        let showHistory = panelVisible || historyRequested
+        historyRequested = false
         refreshTask = Task { [weak self] in
+            if !showHistory {
+                let indicator = await loader.indicatorStatus(root: root)
+                let control = await Task.detached { CollectorControl.load(root: root) }.value
+                guard let self, !self.stopped else { return }
+                if !self.panelVisible {
+                    var status = self.status
+                    status.process = indicator.process
+                    status.inputListening = indicator.inputListening
+                    status.awayReason = indicator.awayReason
+                    status.data.lastWriteAt = indicator.data.lastWriteAt
+                    if status != self.status { self.status = status }
+                    if self.control != control { self.control = control }
+                    self.refreshLive()
+                }
+                self.finishRefresh()
+                return
+            }
             let snapshot = await loader.load(root: root)
             let requests = await self?.requestLoader.load(root: root) ?? []
             let health = await Task.detached { ModelHealth.load(root: root) }.value
@@ -288,9 +317,13 @@ final class StatusModel: ObservableObject {
             if self.lastEventAt != snapshot.status.data.lastWriteAt { self.lastEventAt = snapshot.status.data.lastWriteAt }
             let login = LoginItem.isEnabled
             if self.loginItemEnabled != login { self.loginItemEnabled = login }
-            self.refreshTask = nil
-            if self.refreshState.finished() { self.startLoad() }
+            self.finishRefresh()
         }
+    }
+
+    private func finishRefresh() {
+        refreshTask = nil
+        if refreshState.finished() { startLoad() }
     }
 
     private func applyTimelineLimit() {
@@ -316,9 +349,9 @@ final class StatusModel: ObservableObject {
         cancellables.removeAll()
     }
 
-    func refreshAll() {
+    func refreshAll(forceHistory: Bool = true) {
         refreshLive()
-        refreshSlow()
+        refreshSlow(forceHistory: forceHistory)
     }
 
     func openReports() {

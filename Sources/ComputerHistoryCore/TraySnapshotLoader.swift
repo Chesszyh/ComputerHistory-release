@@ -139,6 +139,46 @@ public actor TraySnapshotLoader {
 
     private func stamp(_ url: URL) -> Stamp? { FileStamp(url) }
 
+    private var indicatorAwayStamp: Stamp?
+    private var indicatorAwayReason: AwayPeriods.Reason?
+    private var segmentDirectoryStamp: Stamp?
+    private var newestSegmentDirectories: [URL] = []
+
+    /// 图标只需要最近一段的写入时间。同一时间窗重启可留下多个带后缀的段。
+    public func indicatorStatus(root: URL) -> CollectorStatus {
+        var status = CollectorStatus.empty(root: root)
+        status.process = CollectorStatus.readProcess(root: root, fileManager: .default)
+        guard status.process.running else { return status }
+        let directory = root.appendingPathComponent("segments")
+        let current = stamp(directory)
+        if current != segmentDirectoryStamp {
+            let directories = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+            let buckets = directories.compactMap { url in
+                SegmentClock.date(fromSegmentID: url.lastPathComponent).map { ($0, url) }
+            }
+            let latest = buckets.map(\.0).max()
+            newestSegmentDirectories = buckets.filter { $0.0 == latest }.map(\.1)
+            segmentDirectoryStamp = current
+        }
+        status.data.lastWriteAt = newestSegmentDirectories.compactMap { dir in
+            let url = EventArchive.eventsURL(in: dir)
+            if url.pathExtension == "gz",
+               let data = try? Data(contentsOf: dir.appendingPathComponent("metadata.json")),
+               let meta = try? EventStreamJSON.makeDecoder().decode(EventStreamMetadata.self, from: data),
+               let ended = meta.endedAt { return ended }
+            return stamp(url)?.modified
+        }.max()
+        let awayStamp = stamp(root.appendingPathComponent("away.json"))
+        if awayStamp != indicatorAwayStamp {
+            let away = AwayPeriods.load(root: root)
+            indicatorAwayReason = away.startedAt.map { _ in away.startedReason ?? .locked }
+            indicatorAwayStamp = awayStamp
+        }
+        status.awayReason = indicatorAwayReason
+        status.inputListening = InputListeningStatus.load(root: root)
+        return status
+    }
+
     public func load(root: URL, timeZone: TimeZone = .current) -> TraySnapshot {
         let fm = FileManager.default
         var bytesRead = 0, parsed = 0

@@ -2,6 +2,32 @@ import SwiftUI
 import AppKit
 import ComputerHistoryCore
 
+// MenuBarExtra may retain its SwiftUI hierarchy while its window is ordered out.
+private struct PanelVisibility: NSViewRepresentable {
+    let model: StatusModel
+    final class Observer: NSView {
+        weak var model: StatusModel?
+        private var visibility: NSKeyValueObservation?
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            visibility = window?.observe(\.isVisible, options: [.initial, .new]) { [weak self] _, _ in
+                Task { @MainActor in self?.updateVisibility() }
+            }
+            if window == nil { updateVisibility() }
+        }
+
+        private func updateVisibility() {
+            model?.setPanelVisible(window?.isVisible == true)
+        }
+    }
+    func makeNSView(context: Context) -> Observer {
+        let view = Observer()
+        view.model = model
+        return view
+    }
+    func updateNSView(_ view: Observer, context: Context) {}
+}
+
 /// 菜单栏下拉面板。
 struct StatusPanel: View {
     @ObservedObject var model: StatusModel
@@ -27,6 +53,7 @@ struct StatusPanel: View {
             }
         }
         .frame(width: DesignTokens.Dimensions.panelWidth, height: DesignTokens.Dimensions.panelHeight)
+        .background(PanelVisibility(model: model))
     }
 
     private var listBody: some View {
