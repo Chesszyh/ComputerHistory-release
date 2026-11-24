@@ -1,0 +1,63 @@
+scripts/test-menubar-settings.swift
+  s_b8e3b834b91716::t_bc3fdc48436a1f 171
+  s_b8e3b834b91716::t_483ab0221365e1 142-156,164-166
+Sources/ComputerHistoryCore/DeepSeekClient.swift
+  s_b8e3b834b91716::t_9a3378ad3d8624 193-194,196-197,237-238
+docs/collector.md
+  s_b8e3b834b91716::t_f9585855d2c52c 93,239,249,251-253,263,265,273,275,279-292,297,305,316-318,320,324
+Tests/ComputerHistoryCoreTests/ModelTransportTests.swift
+  s_b8e3b834b91716::t_904b65e3d4b47c 24
+Tests/ComputerHistoryCoreTests/ModelGroupsTests.swift
+  s_b8e3b834b91716::t_a99c2dd628c05e 39-70,79,81-82,95
+  s_b8e3b834b91716::t_2eb66b02b859e8 71-78,80,83-94,96
+scripts/test-menubar-catalog.swift
+  s_b8e3b834b91716::t_bc3fdc48436a1f 26,28,30-31,37-43,45
+Sources/computer-history-menubar/SettingsPane.swift
+  s_b8e3b834b91716::t_d0191103eb65a7 241-242,248,296-314,319-320,326,330,334
+  s_b8e3b834b91716::t_bc3fdc48436a1f 221
+  s_b8e3b834b91716::t_baa86dae191bc8 215-217,219,223-240,243-247,249-261,263-264,267-269,275-280,285,338,347,352,361-375,380,382,393,510-511
+Sources/computer-history/main.swift
+  s_b8e3b834b91716::t_9a3378ad3d8624 199-201,203
+  s_b8e3b834b91716::t_f9585855d2c52c 222
+scripts/evaluate-model-tokens.py
+  s_b8e3b834b91716::t_9a3378ad3d8624 23-25,27-28,31,37
+Sources/ComputerHistoryCore/ModelGroups.swift
+  s_b8e3b834b91716::t_d0191103eb65a7 13-35,101,105,108,233-243,245-252
+  s_b8e3b834b91716::t_bc3fdc48436a1f 144-145,149,152,155-163,165,167
+  s_b8e3b834b91716::t_9a3378ad3d8624 266
+  s_b8e3b834b91716::t_0ca6fac6c0b4e5 36-49,53,55,57,65-72,78-88,95,104,142-143,146-148,150-151,153-154,164,166,168-171,178-188,213,221-226,253,269-271,279-306,309,311-318
+  s_b8e3b834b91716::t_909364142c97a6 254-256
+docs/privacy.md
+  s_b8e3b834b91716::t_f9585855d2c52c 30
+README.md
+  s_b8e3b834b91716::t_f9585855d2c52c 87
+  s_b8e3b834b91716::t_e0bf8baacc338f 3-6,9
+Sources/ComputerHistoryCore/ModelTransport.swift
+  s_b8e3b834b91716::t_f9585855d2c52c 12
+Sources/computer-history-menubar/StatusModel.swift
+  s_b8e3b834b91716::t_bc3fdc48436a1f 801-802,836-839,905
+  s_b8e3b834b91716::t_9a3378ad3d8624 72-73,804-808,812-815,842-850,853,855,859-860,862-865,868-869,871-874,879-880,882-885,889-901,903-904,906-908,986-989,991,993,999-1009,1013
+  s_b8e3b834b91716::t_9fea2b18c155ed 800
+  s_b8e3b834b91716::t_d0191103eb65a7 78-80,819-823,840,921-923,927-982,995-997
+  s_b8e3b834b91716::t_d5e0ed56b1e157 803,841,998
+scripts/test-model-fallback.py
+  s_b8e3b834b91716::t_bc3fdc48436a1f 106-124
+Sources/ComputerHistoryCore/ModelAPIKey.swift
+  s_b8e3b834b91716::t_9fea2b18c155ed 24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c1222cf3e37a7f947c66070a86739017e3552095",
+  "prompts": {},
+  "sessions": {
+    "s_b8e3b834b91716": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20eba-41e9-7ed0-9097-4322c687a7e0",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
