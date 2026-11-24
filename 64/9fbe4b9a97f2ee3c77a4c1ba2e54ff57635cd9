@@ -1,0 +1,38 @@
+CONTRIBUTING.md
+  s_b8e3b834b91716::t_8a7725db5d2fe8 119,175
+docs/collector.md
+  s_b8e3b834b91716::t_fa748c770cd2be 251,285
+  s_b8e3b834b91716::t_8a7725db5d2fe8 93,249,252-253,255-263,283,287-291,328-344,350,385
+  s_b8e3b834b91716::t_b7055768155a50 284
+docs/distribution.md
+  s_b8e3b834b91716::t_8a7725db5d2fe8 17
+CHANGELOG.md
+  s_b8e3b834b91716::t_fa748c770cd2be 7
+  s_b8e3b834b91716::t_8a7725db5d2fe8 3-6,8
+CHANGELOG.zh.md
+  s_b8e3b834b91716::t_fa748c770cd2be 7
+  s_b8e3b834b91716::t_8a7725db5d2fe8 3-6,8
+README.md
+  s_b8e3b834b91716::t_8a7725db5d2fe8 38,91
+  s_b8e3b834b91716::t_fa748c770cd2be 89,93
+  s_b8e3b834b91716::t_7609ac779dad57 5
+  s_b8e3b834b91716::t_d8d2898106735f 3,6-7,9,11
+docs/privacy.md
+  s_b8e3b834b91716::t_8a7725db5d2fe8 30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "649fbe4b9a97f2ee3c77a4c1ba2e54ff57635cd9",
+  "prompts": {},
+  "sessions": {
+    "s_b8e3b834b91716": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20eba-41e9-7ed0-9097-4322c687a7e0",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
