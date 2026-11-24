@@ -124,7 +124,24 @@ struct HistoryRegression {
         let sourceStart = SegmentClock.date(fromSegmentID: "2020-01-01T10-00-00Z")!
         let passive = ActivityNarrative.Item(id: "passive", timestamp: sourceStart.addingTimeInterval(-80),
             title: ActivityEvidence.noActivityTitle, summary: ActivityEvidence.noActivitySummary, apps: [], sourceMemories: [])
-        try! ActivityNarrative(items: [activity, paper, passive]).save(root: root)
+        let nextID = "2020-01-01T10-10-00Z"
+        let nextStart = sourceStart.addingTimeInterval(600)
+        let nextMemory = memoryDirectory.appendingPathComponent(nextID + "-EFGH-10min-memory-summary.md")
+        try! "- **核对归档结果**：确认示例项目迁移完成。".write(to: nextMemory, atomically: true, encoding: .utf8)
+        let nextSegment = root.appendingPathComponent("segments").appendingPathComponent(nextID)
+        try! FileManager.default.createDirectory(at: nextSegment, withIntermediateDirectories: true)
+        let events = nextSegment.appendingPathComponent("events.jsonl")
+        try! Data().write(to: events)
+        let nextEnd = nextStart.addingTimeInterval(600)
+        let metadata: [String: Any] = ["id": nextID, "startedAt": EventStreamJSON.timestampString(from: nextStart),
+            "endedAt": EventStreamJSON.timestampString(from: nextEnd), "eventCount": 0,
+            "suppressedEventCount": 0, "eventsPath": events.path]
+        try! JSONSerialization.data(withJSONObject: metadata).write(to: nextSegment.appendingPathComponent("metadata.json"))
+        activity.sourceMemories.append(nextMemory.lastPathComponent)
+        activity.sourceActivities?[nextMemory.lastPathComponent] = [1]
+        let booking = ActivityNarrative.Item(id: "booking", timestamp: nextStart, title: "核对预约名额",
+            summary: "查询周末场次的余位。", apps: [], sourceMemories: [nextMemory.lastPathComponent])
+        try! ActivityNarrative(items: [activity, paper, booking, passive]).save(root: root)
         func time(_ offset: TimeInterval) -> String {
             EventStreamJSON.timestampString(from: sourceStart.addingTimeInterval(offset))
         }
@@ -138,10 +155,13 @@ struct HistoryRegression {
         defer { detailsModel.shutdown() }
         RunLoop.main.run(until: Date().addingTimeInterval(1))
         let detailRows = detailsModel.timelineGroups.flatMap(\.items)
-        precondition(detailRows.map(\.isAway) == [false, true], "One activity row and one coalesced away row are expected")
+        precondition(detailRows.map(\.isAway) == [false, false, true], "Distinct activity starts and coalesced away each need a row")
         precondition(detailRows.last?.summary == "长时间无操作、锁屏或休眠")
-        let row = detailRows.first!
+        precondition(detailRows.first?.id == booking.id && detailRows.first?.summary == booking.summary)
+        let row = detailRows[1]
         precondition(row.children?.count == 2, "Same-time activities must share one container")
+        precondition(row.title == "2 项活动" && row.endTimestamp == row.timestamp)
+        precondition(row.children?.first?.endTimestamp == nextEnd, "Cross-window source coverage must stay with the child")
         detailsModel.copySummary(of: row)
         let groupCopy = NSPasteboard.general.string(forType: .string)!
         precondition(groupCopy.contains("迁移示例项目") && groupCopy.contains("阅读示例论文"), "Copy must retain all folded activities")

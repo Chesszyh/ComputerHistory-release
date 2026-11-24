@@ -305,7 +305,8 @@ final class TraySnapshotLoaderTests: XCTestCase {
         XCTAssertTrue(rows[2].summary.contains("合成任务 2"))
         XCTAssertEqual(rows[1].summary, "Independent B")
         let containers = separated.groups.flatMap(\.items).sorted { $0.timestamp < $1.timestamp }
-        XCTAssertTrue(zip(containers, containers.dropFirst()).allSatisfy { $0.endTimestamp <= $1.timestamp })
+        XCTAssertEqual(containers.map(\.id), rows.map(\.id))
+        XCTAssertGreaterThan(containers[0].endTimestamp, containers[1].timestamp)
         try ActivityNarrative(items: [.init(id: "merged", timestamp: start, title: "Continuous A",
             summary: "A specific continuous activity", apps: [], sourceMemories: names)]).save(root: root)
         let original = try Data(contentsOf: ActivityNarrative.fileURL(root: root))

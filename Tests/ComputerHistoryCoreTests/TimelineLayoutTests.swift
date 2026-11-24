@@ -9,16 +9,30 @@ final class TimelineLayoutTests: XCTestCase {
               endTimestamp: Date(timeIntervalSince1970: end))
     }
 
-    func testSameTimeAndIntersectingActivitiesFoldWithoutClippingSources() {
-        let input = [item("later", 40, 50), item("first", 0, 20), item("nested", 5, 10), item("bridge", 15, 30), item("same", 0, 0)]
+    func testCrossWindowActivitiesDoNotFoldLaterStartTimes() {
+        let base = 13 * 3600.0 + 50 * 60
+        let counts = [5, 5, 8, 5, 7, 6, 4, 3]
+        let input = counts.enumerated().flatMap { window, count in
+            let start = base + Double(window * 600)
+            return (0..<count).map { offset in
+                item("\(window)-\(offset)", start, start + (offset == 0 ? 1200 : 600))
+            }
+        }
         let cards = TimelineLayout.cards(input)
-        XCTAssertEqual(cards.count, 2)
-        XCTAssertEqual(cards.last?.timestamp, Date(timeIntervalSince1970: 0))
-        XCTAssertEqual(cards.last?.endTimestamp, Date(timeIntervalSince1970: 30))
-        XCTAssertEqual(cards.last?.children?.count, 4)
-        XCTAssertEqual(cards.last!.title, "first(...等4项活动)")
-        XCTAssertEqual(cards.flatMap(\.leafItems).first { $0.id == "bridge" }?.endTimestamp, Date(timeIntervalSince1970: 30))
+        XCTAssertEqual(cards.map(\.timestamp), counts.indices.reversed().map {
+            Date(timeIntervalSince1970: base + Double($0 * 600))
+        })
+        XCTAssertEqual(cards.map { $0.leafItems.count }, Array(counts.reversed()))
+        XCTAssertEqual(cards.last?.title, "5 项活动")
+        XCTAssertEqual(cards.last?.summary, "0-0；0-1；0-2")
+        XCTAssertEqual(cards.last?.endTimestamp, cards.last?.timestamp)
+        XCTAssertEqual(cards.last?.leafItems.first, input.first)
         XCTAssertEqual(TimelineLayout.cards(cards), cards)
+    }
+
+    func testNestedActivitiesKeepTheirOwnCardsAndOriginalTimeRanges() {
+        let input = [item("outer", 0, 30), item("inner", 5, 10), item("intersecting", 15, 40)]
+        XCTAssertEqual(TimelineLayout.cards(input), Array(input.reversed()))
     }
 
     func testTouchingIntervalsRemainSeparateButZeroLengthTiesFold() {
@@ -37,25 +51,25 @@ final class TimelineLayoutTests: XCTestCase {
         degraded.title = ActivityEvidence.inputDegradedTitle
         let active = item("active", 105, 120)
         let cards = TimelineLayout.cards([passive, legacy, degraded, active])
-        XCTAssertEqual(cards.flatMap(\.leafItems).map(\.id), ["degraded", "active"])
-        XCTAssertEqual(cards.first?.children?.count, 2)
+        XCTAssertEqual(cards.map(\.id), ["active", "degraded"])
     }
 
-    func testContainerIdentitySurvivesAnAdditionalOverlappingActivity() {
-        let initial = TimelineLayout.cards([item("A", 0, 20), item("B", 5, 10)])
-        let updated = TimelineLayout.cards([item("A", 0, 20), item("B", 5, 10), item("C", 10, 25)])
+    func testContainerIdentitySurvivesAddingAnActivityWithTheSameStart() {
+        let initial = TimelineLayout.cards([item("A", 0, 20), item("B", 0, 10)])
+        let updated = TimelineLayout.cards([item("A", 0, 20), item("B", 0, 10), item("C", 0, 25)])
         XCTAssertEqual(initial[0].id, updated[0].id)
+        XCTAssertEqual(updated[0].leafItems.count, 3)
     }
 
-    func testSameTimeHeadingUsesFirstSourceOrderRatherThanAFutureSourceFragment() {
+    func testSameTimePreviewUsesSourceOrder() {
         var first = item("Z-first", 0, 10)
         first.sourceActivities = ["source-a": [1]]
         var later = item("A-later", 0, 20)
         later.sourceActivities = ["source-a": [2], "source-b": [1]]
-        XCTAssertTrue(TimelineLayout.cards([later, first])[0].title.hasPrefix("Z-first"))
+        XCTAssertEqual(TimelineLayout.cards([later, first])[0].summary, "Z-first；A-later")
     }
 
-    func testDeterministicGeneratedIntervalsKeepUniqueIncreasingNonOverlappingTimeAndEveryActivity() {
+    func testGeneratedIntervalsKeepUniqueIncreasingStartsAndEveryActivity() {
         var state: UInt64 = 12345
         func random(_ limit: UInt64) -> Double {
             state = state &* 6364136223846793005 &+ 1
@@ -70,7 +84,9 @@ final class TimelineLayoutTests: XCTestCase {
             XCTAssertEqual(Set(ascending.map(\.timestamp)).count, ascending.count)
             for (left, right) in zip(ascending, ascending.dropFirst()) {
                 XCTAssertLessThan(left.timestamp, right.timestamp)
-                XCTAssertLessThanOrEqual(left.endTimestamp, right.timestamp)
+            }
+            for card in ascending {
+                XCTAssertTrue(card.leafItems.allSatisfy { $0.timestamp == card.timestamp })
             }
             XCTAssertEqual(Set(ascending.flatMap(\.leafItems).map(\.id)), Set(input.map(\.id)))
             XCTAssertEqual(ascending.flatMap(\.leafItems).count, input.count)
@@ -81,7 +97,7 @@ final class TimelineLayoutTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         var away = item("away", 0, 10); away.isAway = true
-        let card = try XCTUnwrap(TimelineLayout.cards([away, item("A", 0, 0), item("B", 1, 2)]).first)
+        let card = try XCTUnwrap(TimelineLayout.cards([away, item("A", 0, 0), item("B", 0, 2)]).first)
         try TimelineDeletions.delete(card, root: root)
         let trash = try TimelineDeletions.load(root: root)
         XCTAssertEqual(trash.ids, ["narrative:A", "narrative:B"])

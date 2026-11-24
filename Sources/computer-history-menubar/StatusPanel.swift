@@ -878,7 +878,11 @@ struct SummaryDetails: View {
             Button("删除总结", role: .destructive) { model.deleteTimelineItem(item) }
                 .font(.system(size: 10)).help("从时间线删除；保留原始记录和来源记忆")
             DetailLine("层级", item.isNarrative ? "活动整理" : "记忆层（原始记录）")
-            DetailLine(item.sharesSourcePeriod == true ? "来源起点" : "时刻", fullTime)
+            if item.coveredCount > 1, item.endTimestamp > item.timestamp {
+                DetailLine("来源时段", fullTime + " – " + Self.fullTimeFormatter.string(from: item.endTimestamp))
+            } else {
+                DetailLine(item.sharesSourcePeriod == true ? "来源起点" : "时刻", fullTime)
+            }
             DetailLine("覆盖", item.coveredCount > 1
                        ? "\(item.coveredCount) 段记忆" : "1 段记忆")
             if let count = item.eventCount {

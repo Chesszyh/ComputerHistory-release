@@ -1,6 +1,6 @@
 import Foundation
 
-/// 时间容器只按区间排布；任务主题和重要性不参与时间轴计算。
+/// 时间容器按来源起点排列。来源覆盖范围可以相交，不能用来推断活动持续时间。
 public enum TimelineLayout {
     public static func cards(_ items: [TrayTimelineItem]) -> [TrayTimelineItem] {
         func sourceOrder(_ item: TrayTimelineItem) -> Int {
@@ -17,7 +17,6 @@ public enum TimelineLayout {
             return left == right ? $0.id < $1.id : left < right
         }
         var result: [TrayTimelineItem] = [], members: [TrayTimelineItem] = []
-        var end = Date.distantPast
         func flush() {
             guard let first = members.first else { return }
             defer { members = [] }
@@ -29,11 +28,12 @@ public enum TimelineLayout {
                 card.title = ActivityEvidence.inputDegradedTitle
                 card.summary = ActivityEvidence.inputDegradedSummary
             } else {
-                card.title = "\(first.title)(...等\(members.count)项活动)"
-                card.summary = members.dropFirst().prefix(3).map(\.title).joined(separator: "；")
+                card.title = members.contains(where: \.isAway)
+                    ? "\(members.count) 条记录" : "\(members.count) 项活动"
+                card.summary = members.prefix(3).map(\.title).joined(separator: "；")
             }
             card.noClearActivity = nil
-            card.endTimestamp = end
+            card.endTimestamp = first.timestamp
             card.children = members
             card.isAway = false
             card.isNarrative = true
@@ -51,11 +51,7 @@ public enum TimelineLayout {
             result.append(card)
         }
         for item in ordered {
-            if let first = members.first, item.timestamp != first.timestamp, item.timestamp >= end {
-                flush()
-            }
-            if members.isEmpty { end = max(item.timestamp, item.endTimestamp) }
-            else { end = max(end, item.endTimestamp) }
+            if let first = members.first, item.timestamp != first.timestamp { flush() }
             members.append(item)
         }
         flush()

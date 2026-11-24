@@ -7,7 +7,7 @@ public struct SummarySettings: Codable, Sendable, Equatable {
         public var label: String { self == .fixedTenMinutes ? "固定十分钟，不合并" : "按任务连续性合并" }
         public var explanation: String {
             self == .fixedTenMinutes ? "每段十分钟记忆单独总结，保留该时段的活动细节。"
-                : "按具体目标整理活动，同一任务的步骤归组；重叠时段折叠展示，保留各项摘要和完整明细。"
+                : "按具体目标整理活动，连续的同任务步骤归组，同一任务的其他时段可关联查看。"
         }
     }
     public var timelineMode: TimelineMode = .continuous

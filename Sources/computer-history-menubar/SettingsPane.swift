@@ -51,7 +51,7 @@ struct SummarySettingsPane: View {
             .disabled(!model.timelineSettingsLoaded || model.timelineRebuilding)
             Text(model.timelineMode.explanation)
                 .font(DesignTokens.Typography.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Text("时间线按先后顺序排列，活动时段互不重叠。")
+            Text("时间线按来源起点排列，起点相同的活动可展开查看。")
                 .font(DesignTokens.Typography.caption).foregroundStyle(.tertiary)
             feedback(error: model.timelineSettingsError, message: model.timelineSettingsMessage)
             if model.showsTimelineRecalculation {
