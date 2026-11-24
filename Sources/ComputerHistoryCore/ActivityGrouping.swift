@@ -33,32 +33,30 @@ struct ActivityGrouping: Codable, Equatable {
         }
         for i in groups.indices {
             let group = groups[i]
-            if let task = group.task {
-                if task.hasPrefix("T"), let n = Int(task.dropFirst()), n > 0, task == "T\(n)", tasks.indices.contains(n - 1) {
-                    items[i].taskID = tasks[n - 1].taskID ?? tasks[n - 1].id
-                    items[i].taskTitle = tasks[n - 1].taskTitle ?? tasks[n - 1].title
-                } else if task.hasPrefix("G"), let n = Int(task.dropFirst()), task == "G\(n)", n > 0, n <= i {
-                    items[i].taskID = items[n - 1].taskID
-                    items[i].taskTitle = items[n - 1].taskTitle
-                } else { throw NarrativeGenerator.GenerateError.modelFailed("活动关联引用无效。") }
-            }
             if group.continuesPrevious {
                 guard i == 0, let previous = prior.first else {
                     throw NarrativeGenerator.GenerateError.modelFailed("只有首组可以续接紧邻活动。")
                 }
-                let id = previous.taskID ?? previous.id
-                guard items[i].taskID == nil || items[i].taskID == id else {
-                    throw NarrativeGenerator.GenerateError.modelFailed("续接与任务关联冲突。")
-                }
-                items[i].taskID = id
+                items[i].taskID = previous.taskID ?? previous.id
                 items[i].title = previous.title
                 items[i].taskTitle = previous.taskTitle ?? previous.title
                 items[i].isPreferredTimelineTitle = previous.isPreferredTimelineTitle
-            } else if let first = group.references.first {
-                let source = String(first.prefix { $0 != "." })
-                if let selected = timelineTitles?[source], selected.hasPrefix(source + "."),
-                   group.references.contains(selected) {
-                    items[i].isPreferredTimelineTitle = true
+            } else {
+                if let task = group.task {
+                    if task.hasPrefix("T"), let n = Int(task.dropFirst()), n > 0, task == "T\(n)", tasks.indices.contains(n - 1) {
+                        items[i].taskID = tasks[n - 1].taskID ?? tasks[n - 1].id
+                        items[i].taskTitle = tasks[n - 1].taskTitle ?? tasks[n - 1].title
+                    } else if task.hasPrefix("G"), let n = Int(task.dropFirst()), task == "G\(n)", n > 0, n <= i {
+                        items[i].taskID = items[n - 1].taskID
+                        items[i].taskTitle = items[n - 1].taskTitle
+                    } else { throw NarrativeGenerator.GenerateError.modelFailed("活动关联引用无效。") }
+                }
+                if let first = group.references.first {
+                    let source = String(first.prefix { $0 != "." })
+                    if let selected = timelineTitles?[source], selected.hasPrefix(source + "."),
+                       group.references.contains(selected) {
+                        items[i].isPreferredTimelineTitle = true
+                    }
                 }
             }
             if items[i].taskID == nil { items[i].taskID = UUID().uuidString }
@@ -75,7 +73,8 @@ struct ActivityGrouping: Codable, Equatable {
     同目标的询问、查阅、核对和执行步骤应归组；不同目标、聊天、阅读和休闲独立保留。
     同应用、同网站、同仓库或宽泛主题不证明同任务。不要按重要性隐藏内容。
     仅首组可用 continuesPrevious:true 续接提供的 P1；没有 P1 时禁止续接。
-    task 可为 T1 等已有任务编号，或 G1 等本批较早组编号；同目标恢复可关联，但不得跨另一活动合成一组。
+    续接组沿用 P1 的任务，填写 task:null。
+    其余组的 task 可为 T1 等已有任务编号，或 G1 等本批较早组编号；同目标恢复可关联，但不得跨另一活动合成一组。
     无充分依据时 task:null。A→B→A 输出三组，第三组可关联第一组。
     原文编号不是精确时序或耗时；不得由它构造分钟级边界。
     """

@@ -32,6 +32,11 @@ class Model(http.server.BaseHTTPRequestHandler):
                 groups[-1]['task'] = 'G1'
             if mode == 'continue' and '## 紧邻且可续接的 P1' in user:
                 groups[0]['continuesPrevious'] = True
+            if mode == 'continue_conflict':
+                assert '## 紧邻且可续接的 P1' in user
+                unrelated_task = re.search(r'^### (T\d+)\n核对合成解析$', user, re.M)
+                assert unrelated_task
+                groups[0].update(continuesPrevious=True, task=unrelated_task[1])
             if mode == 'invalid':
                 groups = groups[:1]
             timeline_titles = {
@@ -42,7 +47,8 @@ class Model(http.server.BaseHTTPRequestHandler):
         elif '分组已确定' in user:
             if fail_summary and 'SYNTHETIC_B' in user:
                 self.send_response(503); self.end_headers(); return
-            content = json.dumps(dict(title='核对合成事项。', summary='核对合成材料及其结果。'), ensure_ascii=False)
+            title = '核对合成解析。' if 'SYNTHETIC_A。' in user else '核对合成事项。'
+            content = json.dumps(dict(title=title, summary='核对合成材料及其结果。'), ensure_ascii=False)
         else:
             refs = re.findall(r'^### 来源 (S\d+)', user, re.M)
             content = '\n\n'.join(f'## [{ref}] 核对合成事项\n保留该时段的活动。' for ref in refs)
@@ -88,10 +94,12 @@ def main():
             before=len(requests); generate()
             assert len(requests)==before, 'unchanged input caused inference'
             second=memory(10,'- **继续交流**：SYNTHETIC_B_NEXT。')
-            mode='continue'; continued=generate()
+            mode='continue_conflict'; continued=generate()
             assert len(continued['items'])==2
             task=next(i for i in continued['items'] if second.name in i['sourceMemories'])
             assert first.name in task['sourceMemories'] and task['sourceActivities'][first.name]==[2]
+            previous=next(i for i in grouped['items'] if i['sourceActivities'][first.name]==[2])
+            assert task['taskID']==previous['taskID'] and task['title']==previous['title'], 'unrelated task overrode continuation'
             assert task['isPreferredTimelineTitle'], 'continuation lost the selection for its original start'
             assert first.read_bytes()==original
             saved=(root/'narrative.json').read_bytes()
