@@ -1,12 +1,14 @@
 # ComputerHistory
 
-本项目Idea来源：[ChatGPT Computer History](https://learn.chatgpt.com/docs/customization/computer-history)
+- 核心Idea来源：[ChatGPT Computer History](https://learn.chatgpt.com/docs/customization/computer-history)
 
-> TODO: 人工
+> TODO：项目实际演示、README等文档去除GPT味
+> 核心开发动力：想看看自己每天玩电脑的时间都浪费在哪里了呀，好让AI大人视奸和鞭策我呀
+> 以下均由deepseek-v4.1-flash, gpt-6.1-sol/6.1-astra/6.2-sol, gemini-3.8-flash等编写，开发周期比较长了我也记不清都哪些模型改过文档了，也许我需要一个agent git blame
+
+---
 
 macOS 本地活动记录工具。通过 Accessibility（辅助功能，简称 AX）读取前台应用的界面文本，记录窗口变化、点击、快捷键和可归因的文本变化，按时间段保存。辅助功能缺少正文的应用可显式启用[本地窗口文字识别](docs/collector.md#采集行为与局限)。可选接入[本机 ActivityWatch](docs/collector.md#activitywatch-补充来源)补充窗口与空闲记录。支持 DeepSeek 和兼容接口的自托管模型生成记忆摘要，并在菜单栏查看时间线、逐次请求和费用。
-
-
 
 ## 使用前了解
 
@@ -33,7 +35,7 @@ python3 scripts/test-process-control.py "$bin_dir/computer-history"
 
 常规测试使用合成数据，不需要模型密钥。三项私有兼容性样本测试默认跳过；集成测试使用临时目录和测试进程，以本地模拟接口验证生成路径，不操作真实运行服务。
 
-菜单栏可[删除时间线中的总结](docs/collector.md#删除时间线总结)，并在[模型设置](docs/collector.md#模型与用量配置)中管理模型组、切换主模型与备用模型。
+菜单栏可[删除时间线中的总结](docs/collector.md#删除时间线总结)，并在[模型设置](docs/collector.md#模型与用量配置)中配置总结使用的模型。
 
 ## 开始记录
 
@@ -84,11 +86,11 @@ python3 scripts/test-process-control.py "$bin_dir/computer-history"
 
 菜单栏“日报、周报与导出”可生成、查看、复制报告，或复制给其他 AI 的活动材料，并导出 Markdown／TXT。监督进程自动补齐已结束时段的日报、周报。可选的 GitHub 私有备份默认关闭，在“设置 → 总结提示词与配置 → 备份”设置仓库，并可直接用设置区开关启停。详细行为与命令见[报告、导出与备份](docs/collector.md#报告导出与备份)。
 
-模型接入可在菜单栏“设置 → 总结提示词与配置 → 模型”保存端点地址和密钥，再从该端点配置一个或多个模型。也可使用 `DEEPSEEK_API_KEY`。命令行也可用 `DEEPSEEK_MODEL` 与 `DEEPSEEK_BASE_URL` 覆盖模型和地址。默认值见 [DeepSeekClient.swift](Sources/ComputerHistoryCore/DeepSeekClient.swift) 的 `defaultModel` / `defaultBaseURL`；请按服务账户的实际可用模型设置。
+在菜单栏打开“设置 → 总结提示词与配置 → 模型”。先添加端点，再从该端点配置模型。想让所有总结共用同一对主备模型，选「统一模型」。需要给活动归属、日报等任务分配不同模型，选「按任务分配」并保存模板。配置步骤见[选择模型和任务模板](docs/collector.md#选择模型和任务模板)。
 
-自托管模型在数据目录创建 `model.json`，格式见[模型与用量配置](docs/collector.md#模型与用量配置)。可将模型部署在另一台电脑，本机只发送整理后的材料。配置文件优先于模型环境变量；`requiresAPIKey: false` 的服务不接收 DeepSeek 密钥。
+命令行可以通过数据目录中的 [`model.json`](docs/collector.md#modeljson-配置示例)配置模型。未配置服务时，也可用 `DEEPSEEK_API_KEY` 接入，并通过 `DEEPSEEK_MODEL` 与 `DEEPSEEK_BASE_URL` 指定模型和地址。默认值见 [DeepSeekClient.swift](Sources/ComputerHistoryCore/DeepSeekClient.swift) 的 `defaultModel` 和 `defaultBaseURL`。
 
-不带 `--no-model` 的生成任务会发送活动材料；`supervise` 在事件段封口后尽快执行记忆生成，日报和备份使用独立后台队列。模型失败与重试规则见[模型与用量配置](docs/collector.md#模型与用量配置)。菜单栏的“总结用量与费用”可查看每次请求的实际输入、输出、token 用量和费用估算。可配置 `fallback` 降级模型：主模型请求失败、超时或输出不可用时，仅为该次请求尝试降级；下一次仍先请求主模型。成功的降级结果写入正式总结，各次尝试的输入、输出及关联均可在请求详情中查看。旧版本没有保存的用量不会补算。
+已配置模型时，生成任务会向所选模型发送活动材料。可用 `--no-model` 禁用模型请求。菜单栏的“总结用量与费用”可查看每次请求的实际输入、输出、token 用量和费用估算。备用模型、失败重试和计费规则见[模型与用量配置](docs/collector.md#模型与用量配置)。
 
 用量页支持今天、昨天、本周（周一起）和本月筛选，并可选择任务类型及主模型／降级请求。合计随筛选范围变化，请求按日期和任务分组展开。详情先显示模型输出，原始来源、系统提示词和原始输入默认折叠。分组和请求详情的折叠标题整行可点击展开，查看请求详情后返回保留展开状态和浏览位置。菜单栏“设置 → 总结提示词与配置”提供提示词、模型和采集表单；配置文件编辑位于高级选项，生效方式见[模型与用量配置](docs/collector.md#模型与用量配置)。
 

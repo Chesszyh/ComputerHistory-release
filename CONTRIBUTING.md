@@ -116,7 +116,7 @@ bash scripts/test-menubar-panel.sh scripts/test-menubar-reports.swift
 
 `test-reports.py` 使用本地模拟模型和临时 Git 远端，验证日报／周报、分批续跑、失败保留、导出范围及私有备份的启停、失败和远端提交确认。
 
-`test-model-fallback.py` 使用本地模拟接口验证按次降级、独立鉴权、超时和失败提示状态；`test-scheduling.py` 验证新段不等待定时周期，且日报请求阻塞时实时总结仍能完成。合成测试通过 `COMPUTER_HISTORY_NOTIFICATIONS=0` 禁用真实系统通知。
+`test-model-fallback.py` 使用本地模拟接口验证模板按任务选择模型、共享端点鉴权、按次降级、超时和失败提示状态；`test-scheduling.py` 验证新段不等待定时周期，且日报请求阻塞时实时总结仍能完成。合成测试通过 `COMPUTER_HISTORY_NOTIFICATIONS=0` 禁用真实系统通知。
 
 辅助功能连接与正文识别的单元回归包含应用重启、启动尚未完成、工具栏误判和 OCR 开关。可在图形会话中额外启动独立 Chrome 配置及合成网页，连续重启两次验证正文，不关闭现有浏览器实例：
 
@@ -172,7 +172,7 @@ python3 scripts/test-app-upgrade.py /你的合成测试应用.app --adhoc
 
 ## 模型用量对照
 
-`scripts/evaluate-model-tokens.py` 对显式指定的请求材料逐个调用所选服务，保存各模型的输出、推理强度、用量、格式检查和耗时，不改写正式记忆或时间线。它使用所选模型组的独立密钥助手，不自动发现活动样本。真实材料和结果放在仓库外；这些调用使用真实额度，不属于常规测试。
+`scripts/evaluate-model-tokens.py` 对显式指定的请求材料逐个调用所选服务，保存各模型的输出、推理强度、用量、格式检查和耗时，不改写正式记忆或时间线。它通过密钥助手读取所选模型配置对应端点的密钥，不自动发现活动样本。真实材料和结果放在仓库外；这些调用使用真实额度，不属于常规测试。
 
 ```bash
 python3 scripts/evaluate-model-tokens.py --root "$data_root" --group-id "$group_id" \
