@@ -86,8 +86,62 @@ public final class TextInputTracker {
         var emittedFragment: Int? = nil
         var originalRange: Range<Int>? = nil
     }
-    private var cells: [Cell] = []
-    private var baselineCells: [Cell] = []
+    // Unedited text shares the baseline string. Only edited characters need provenance.
+    private enum Span {
+        case original(Range<Int>)
+        case edited(Cell)
+
+        var count: Int {
+            if case let .original(range) = self { return range.count }
+            return 1
+        }
+        var originalRange: Range<Int>? {
+            switch self {
+            case .original(let range): return range
+            case .edited(let cell): return cell.originalRange
+            }
+        }
+        var cell: Cell? {
+            if case let .edited(cell) = self { return cell }
+            return nil
+        }
+    }
+    private var spans: [Span] = []
+    private var baselineSpans: [Span] = []
+
+    private static func split(_ spans: inout [Span], at offset: Int) -> Int {
+        var position = 0
+        for i in spans.indices {
+            if position == offset { return i }
+            let end = position + spans[i].count
+            if offset < end, case .original(let range) = spans[i] {
+                let middle = range.lowerBound + offset - position
+                spans.replaceSubrange(i...i, with: [.original(range.lowerBound..<middle), .original(middle..<range.upperBound)])
+                return i + 1
+            }
+            position = end
+        }
+        return spans.endIndex
+    }
+
+    private func baselineSlice(_ range: Range<Int>) -> [Span] {
+        // Baseline spans are rebased into ascending, disjoint ranges on every flush.
+        var low = 0, high = baselineSpans.count
+        while low < high {
+            let mid = low + (high - low) / 2
+            if baselineSpans[mid].originalRange!.upperBound <= range.lowerBound { low = mid + 1 }
+            else { high = mid }
+        }
+        var result: [Span] = []
+        for span in baselineSpans[low...] {
+            let source = span.originalRange!
+            guard source.lowerBound < range.upperBound else { break }
+            if case .original = span { result.append(.original(source.clamped(to: range))) }
+            else { result.append(span) }
+        }
+        return result
+    }
+
     private var nextEdit = 0
     private var nextEmission = 0
     private var composing = false
@@ -111,58 +165,104 @@ public final class TextInputTracker {
         if let marked = obs.hasMarkedText {
             composing = marked
             if !marked {
-                for i in cells.indices where cells[i].marked {
-                    cells[i].marked = false
-                    if obs.hasInputActivity == true { cells[i].evidence = .editedValue }
+                for i in spans.indices {
+                    guard var cell = spans[i].cell, cell.marked else { continue }
+                    cell.marked = false
+                    if obs.hasInputActivity == true { cell.evidence = .editedValue }
+                    spans[i] = .edited(cell)
                 }
             }
         }
         guard previous != value else { return flushIfIdle(now: now) }
-        let old = Array(previous), new = Array(value)
-        var prefix = 0, suffix = 0
-        while prefix < old.count, prefix < new.count, old[prefix] == new[prefix] { prefix += 1 }
-        while suffix < old.count - prefix, suffix < new.count - prefix,
-              old[old.count - suffix - 1] == new[new.count - suffix - 1] { suffix += 1 }
-        let removed = prefix..<(old.count - suffix)
-        let inserted = new[prefix..<(new.count - suffix)]
-        // 沿用相邻待输出区域的身份；既有正文仍保留 nil，不会夹入输入片段。
-        let nearby = cells[removed].compactMap(\.edit).first
-            ?? (prefix > 0 ? cells[prefix - 1].edit : nil)
-            ?? (removed.upperBound < cells.count ? cells[removed.upperBound].edit : nil)
+        var left = previous.startIndex, right = value.startIndex, prefix = 0
+        while left < previous.endIndex, right < value.endIndex, previous[left] == value[right] {
+            previous.formIndex(after: &left)
+            value.formIndex(after: &right)
+            prefix += 1
+        }
+        var oldEnd = previous.endIndex, newEnd = value.endIndex
+        while oldEnd > left, newEnd > right {
+            let oldLast = previous.index(before: oldEnd), newLast = value.index(before: newEnd)
+            guard previous[oldLast] == value[newLast] else { break }
+            oldEnd = oldLast
+            newEnd = newLast
+        }
+        let removedCount = previous.distance(from: left, to: oldEnd)
+        let first = Self.split(&spans, at: prefix)
+        let end = Self.split(&spans, at: prefix + removedCount)
+        let removed = spans[first..<end]
+        let nearby = removed.lazy.compactMap { $0.cell?.edit }.first
+            ?? spans[..<first].last?.cell?.edit ?? spans[end...].first?.cell?.edit
         nextEdit += 1
         let edit = nearby ?? nextEdit
         let evidence: TextEvidence = obs.hasInputActivity == true && !composing
             ? .editedValue : .uncertainValueChange
-        let replaced = Set(cells[removed].compactMap(\.reference))
-            .union(cells[removed].flatMap(\.replaces))
-        let oldCells = Array(cells[removed])
-        let ranges = oldCells.compactMap(\.originalRange)
-        var originalRange = ranges.isEmpty ? nil : ranges.map(\.lowerBound).min()!..<ranges.map(\.upperBound).max()!
-        if oldCells.isEmpty {
-            let lower = cells[..<prefix].compactMap(\.originalRange).last?.upperBound ?? 0
-            let upper = cells[removed.upperBound...].compactMap(\.originalRange).first?.lowerBound ?? baselineCells.count
+        var replaced: Set<String> = []
+        for case let .edited(cell) in removed {
+            if let reference = cell.reference { replaced.insert(reference) }
+            replaced.formUnion(cell.replaces)
+        }
+        let ranges = removed.compactMap(\.originalRange)
+        var originalRange: Range<Int>?
+        if let lower = ranges.map(\.lowerBound).min(), let upper = ranges.map(\.upperBound).max() {
+            originalRange = lower..<upper
+        } else if removed.isEmpty {
+            let lower = spans[..<first].reversed().lazy.compactMap(\.originalRange).first?.upperBound ?? 0
+            let upper = spans[end...].lazy.compactMap(\.originalRange).first?.lowerBound ?? baselineValue?.count ?? 0
             if lower < upper { originalRange = lower..<upper }
         }
-        var replacement = inserted.enumerated().map { index, character -> Cell in
-            let range = oldCells.count == inserted.count ? oldCells[index].originalRange : originalRange
-            if let range, range.count == 1, baselineCells[range.lowerBound].character == character {
-                return baselineCells[range.lowerBound]
+        let inserted = value[right..<newEnd]
+        let baseline = baselineValue ?? ""
+        var baselineOffset = 0, baselineIndex = baseline.startIndex
+        func originalText(_ range: Range<Int>) -> Substring {
+            baseline.formIndex(&baselineIndex, offsetBy: range.lowerBound - baselineOffset)
+            baselineOffset = range.lowerBound
+            return baseline[baselineIndex..<baseline.index(baselineIndex, offsetBy: range.count)]
+        }
+        var replacement: [Span] = []
+        if let range = originalRange, range.count == inserted.count,
+           !spans[..<first].contains(where: { $0.originalRange == range }),
+           !spans[end...].contains(where: { $0.originalRange == range }),
+           originalText(range) == inserted {
+            replacement = baselineSlice(range)
+        } else {
+            // A same-length replacement can restore individual previously emitted characters.
+            let aligned = removedCount == inserted.count
+            var cursor = inserted.startIndex
+            func append(_ character: Character, range: Range<Int>?) {
+                if let range, range.count == 1, originalText(range).first == character {
+                    let restored = baselineSlice(range)
+                    if case .original = restored.first, case .original(let last) = replacement.last,
+                       last.upperBound == range.lowerBound {
+                        replacement[replacement.count - 1] = .original(last.lowerBound..<range.upperBound)
+                    } else {
+                        replacement += restored
+                    }
+                } else {
+                    replacement.append(.edited(Cell(character: character, edit: edit, evidence: evidence,
+                        marked: composing, replaces: replaced, originalRange: range)))
+                }
             }
-            return Cell(character: character, edit: edit, evidence: evidence, marked: composing,
-                        replaces: replaced, originalRange: range)
+            if aligned {
+                for span in removed {
+                    switch span {
+                    case .original(let range):
+                        for offset in range {
+                            append(inserted[cursor], range: offset..<(offset + 1))
+                            inserted.formIndex(after: &cursor)
+                        }
+                    case .edited(let cell):
+                        append(inserted[cursor], range: cell.originalRange)
+                        inserted.formIndex(after: &cursor)
+                    }
+                }
+            } else {
+                for character in inserted { append(character, range: originalRange) }
+            }
         }
-        // 同一替换区域整体撤销时恢复原有身份，不能把原正文重新记为输入。
-        if let range = originalRange,
-           !cells[..<removed.lowerBound].contains(where: { $0.originalRange == range }),
-           !cells[removed.upperBound...].contains(where: { $0.originalRange == range }),
-           String(baselineCells[range].map(\.character)) == String(inserted) {
-            replacement = Array(baselineCells[range])
-        }
-        cells.replaceSubrange(removed, with: replacement)
+        spans.replaceSubrange(first..<end, with: replacement)
         lastValue = value
-        if value == baselineValue {
-            cells = baselineCells
-        }
+        if value == baselineValue { spans = baselineSpans }
         lastChangeAt = now
         return []
     }
@@ -171,10 +271,9 @@ public final class TextInputTracker {
         lastFocusIdentity = obs.focusIdentity
         lastValue = obs.isEditableBuffer && !obs.isPlaceholder ? obs.value : nil
         baselineValue = lastValue
-        cells = (lastValue ?? "").enumerated().map {
-            Cell(character: $0.element, edit: nil, evidence: .uncertainValueChange, originalRange: $0.offset..<($0.offset + 1))
-        }
-        baselineCells = cells
+        let count = lastValue?.count ?? 0
+        spans = count == 0 ? [] : [.original(0..<count)]
+        baselineSpans = spans
         composing = obs.hasMarkedText == true
         lastChangeAt = now
     }
@@ -213,16 +312,20 @@ public final class TextInputTracker {
             if !clean.isEmpty, let currentID {
                 nextEmission += 1
                 runs.append((currentID, .init(text: clean, evidence: evidence, replaces: replaces.sorted(), emissionID: nextEmission)))
-                for index in indices { cells[index].emittedFragment = nextEmission }
             }
-            for index in indices { cells[index].edit = nil }
+            for index in indices {
+                guard var cell = spans[index].cell else { continue }
+                if !clean.isEmpty { cell.emittedFragment = nextEmission }
+                cell.edit = nil
+                spans[index] = .edited(cell)
+            }
             indices = []
             text = ""
             replaces = []
             evidence = .editedValue
         }
-        for index in cells.indices {
-            let cell = cells[index]
+        for index in spans.indices {
+            guard let cell = spans[index].cell else { emit(); currentID = nil; continue }
             // A segment boundary may flush committed text, but cannot commit the marked tail.
             if cell.marked { emit(); currentID = nil; continue }
             if cell.edit != currentID { emit(); currentID = cell.edit }
@@ -236,8 +339,22 @@ public final class TextInputTracker {
         let fragments = runs.enumerated().sorted {
             $0.element.id == $1.element.id ? $0.offset < $1.offset : $0.element.id < $1.element.id
         }.map { $0.element.fragment }
-        for index in cells.indices { cells[index].originalRange = index..<(index + 1) }
-        baselineCells = cells
+        var rebased: [Span] = []
+        var offset = 0
+        for span in spans {
+            let end = offset + span.count
+            if var cell = span.cell, cell.edit != nil || cell.emittedFragment != nil || cell.reference != nil {
+                cell.originalRange = offset..<end
+                rebased.append(.edited(cell))
+            } else if case .original(let previous) = rebased.last {
+                rebased[rebased.count - 1] = .original(previous.lowerBound..<end)
+            } else {
+                rebased.append(.original(offset..<end))
+            }
+            offset = end
+        }
+        spans = rebased
+        baselineSpans = spans
         baselineValue = lastValue
         lastChangeAt = nil
         return fragments
@@ -245,12 +362,14 @@ public final class TextInputTracker {
 
     /// 事件写出后登记来源，后续覆盖可在派生摘要中降低旧片段的归因强度。
     func acknowledge(_ fragment: Fragment, reference: String) {
-        for index in cells.indices where cells[index].emittedFragment == fragment.emissionID {
-            cells[index].reference = reference
-            cells[index].replaces = []
-            cells[index].emittedFragment = nil
+        for index in spans.indices {
+            guard var cell = spans[index].cell, cell.emittedFragment == fragment.emissionID else { continue }
+            cell.reference = reference
+            cell.replaces = []
+            cell.emittedFragment = nil
+            spans[index] = .edited(cell)
         }
-        baselineCells = cells
+        baselineSpans = spans
     }
 
     /// 暂停与上下文边界丢弃待输出编辑；恢复时只建立新基线。
@@ -259,8 +378,8 @@ public final class TextInputTracker {
         baselineValue = nil
         lastChangeAt = nil
         lastFocusIdentity = nil
-        cells = []
-        baselineCells = []
+        spans = []
+        baselineSpans = []
         composing = false
     }
 

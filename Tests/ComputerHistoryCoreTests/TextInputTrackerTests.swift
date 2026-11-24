@@ -13,6 +13,21 @@ final class TextInputTrackerTests: XCTestCase {
         .init(value: v, caret: c, isEditableBuffer: true, focusIdentity: 1)
     }
 
+    func testDistantEditsInLargeBufferRetainOrderAndReplacementReferences() {
+        let tracker = TextInputTracker()
+        let body = String(repeating: "界", count: 100_000)
+        _ = tracker.observe(obs(body), at: t0)
+        _ = tracker.observe(obs(body + "👩🏽‍💻"), at: t0)
+        _ = tracker.observe(obs("首" + body + "👩🏽‍💻"), at: t0)
+        let fragments = tracker.flush()
+        XCTAssertEqual(fragments.map(\.text), ["👩🏽‍💻", "首"])
+        for fragment in fragments { tracker.acknowledge(fragment, reference: fragment.text) }
+        _ = tracker.observe(obs("首" + body + "末"), at: t0)
+        let changed = tracker.flush()
+        XCTAssertEqual(changed.map(\.text), ["末"])
+        XCTAssertEqual(changed.first?.replaces, ["👩🏽‍💻"])
+    }
+
     /// 首次观察只建立基线——字段里已有的内容不是本次输入。
     func testFirstObservationEstablishesBaselineOnly() {
         let tr = TextInputTracker()
