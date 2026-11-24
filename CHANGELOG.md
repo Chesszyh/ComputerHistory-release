@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 - 2026-11-25
 
 - Configure an endpoint once and share its credentials across model configurations.
 - Choose one primary and fallback for all summaries, or save named templates with per-task models and one shared fallback. The Allocation tab shows the selected template’s assignments before saving.
 - When continuing an activity on the timeline, keep its existing task even if the model also supplies a conflicting task link.
+- Remember the last selected task template when switching allocation modes, and align native model controls without an unexpected disclosure animation.
 
 ## 0.4.2 - 2026-11-23
 
