@@ -63,6 +63,7 @@ struct SettingsRegression {
         stage("native model form")
         model.openSummarySettings()
         model.settingsTab = .model
+        model.showsModelLibrary = true
         let panel = NSHostingView(rootView: StatusPanel(model: model).environment(\.colorScheme, .dark))
         window.contentView = panel
         window.setContentSize(NSSize(width: 380, height: 640))
@@ -134,35 +135,47 @@ struct SettingsRegression {
         model.loadConfigurationDrafts()
         precondition(model.modelGroups.count == 2 && model.primaryGroupID == newID)
         precondition(model.modelGroups[0].settings.model == "edited-in-form", "Changing selection must retain other groups")
-        model.modelTasks = ["narrative": .init(groupID: originalID, reasoningEffort: "none", outputTokenBudget: 2048)]
+        stage("native task template editor")
+        var submitted: ModelTaskTemplate?
+        let templateHost = NSHostingView(rootView: TaskTemplateForm(draft: model.newTaskTemplate(),
+            models: model.modelGroups, templates: []) { submitted = $0 } cancel: {})
+        window.contentView = templateHost
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        let nameField = fields(templateHost).first { $0.placeholderString == "例如：日常总结" }!
+        nameField.stringValue = "Synthetic template"
+        nameField.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: nameField))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        click(NSPoint(x: 342, y: 615))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        var route = submitted!
+        precondition(route.name == "Synthetic template" && route.tasks.count == 5)
+        window.contentView = panel
+        settle()
+        route.tasks["narrative"] = .init(groupID: originalID, reasoningEffort: "none", outputTokenBudget: 2048)
+        model.storeTaskTemplate(route)
+        model.modelRoutingMode = .template
         model.saveModelConfiguration()
         model.loadConfigurationDrafts()
-        precondition(model.modelTasks["narrative"]?.groupID == originalID)
+        precondition(model.modelRoutingMode == .template && model.selectedTaskTemplateID == route.id)
         precondition(try! ModelGroups.load(root: root).resolved(for: "narrative").outputTokenBudget == 2048)
-        model.taskTemplateName = "Synthetic template"
-        model.saveTaskTemplate()
-        let templateID = model.selectedTaskTemplateID
-        model.primaryGroupID = originalID
-        model.fallbackGroupID = ""
-        model.modelTasks = [:]
-        model.applyTaskTemplate()
-        precondition(model.primaryGroupID == newID && model.fallbackGroupID == originalID)
-        precondition(model.modelTasks["narrative"]?.outputTokenBudget == 2048)
-        model.taskTemplateName = "Renamed synthetic template"
-        model.saveTaskTemplate(update: true, renameOnly: true)
+        model.modelRoutingMode = .unified
+        model.saveModelConfiguration()
+        precondition(try! ModelGroups.load(root: root).resolved(for: "narrative").model == "second-source")
+        precondition(try! ModelGroups.load(root: root).resolved(for: "narrative").outputTokenBudget != 2048)
+        route.name = "Renamed synthetic template"
+        model.storeTaskTemplate(route)
+        model.modelRoutingMode = .template
         model.saveModelConfiguration()
         model.loadConfigurationDrafts()
-        precondition(model.modelTaskTemplates.first?.name == "Renamed synthetic template")
-        precondition(model.selectedTaskTemplateID == templateID)
+        precondition(model.selectedTaskTemplate?.name == "Renamed synthetic template")
+        precondition(model.primaryGroupID == newID && model.fallbackGroupID == originalID)
         stage("delete saved referenced model groups")
         model.editingGroupID = originalID
         model.removeEditingModelGroup()
         precondition(model.modelGroups.count == 1, "Saved fallback and task model groups must be deletable")
         precondition(model.fallbackGroupID.isEmpty)
-        precondition(model.modelTasks["narrative"]?.groupID == nil)
-        precondition(model.modelTasks["narrative"]?.outputTokenBudget == 2048)
         precondition(model.modelTaskTemplates.first?.fallbackGroupID == nil)
-        precondition(model.modelTaskTemplates.first?.tasks["narrative"]?.groupID == nil)
+        precondition(model.modelTaskTemplates.first?.tasks["narrative"]?.groupID == newID)
         model.removeTaskTemplate()
         model.saveModelConfiguration()
         model.loadConfigurationDrafts()

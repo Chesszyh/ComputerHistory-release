@@ -133,12 +133,12 @@ public struct DeepSeekClient: Sendable {
             let key = config.requiresAPIKey
                 ? (try ModelAPIKey.load(root: rootDirectory, groupID: config.credentialGroupID) ?? environment["DEEPSEEK_API_KEY"] ?? "") : ""
             let groups = try ModelGroups.load(root: rootDirectory, environment: environment)
-            if config.requiresAPIKey, key.isEmpty, config.fallback == nil, groups.tasks?.isEmpty != false { throw ClientError.missingAPIKey }
+            if config.requiresAPIKey, key.isEmpty, config.fallback == nil, groups.effectiveTasks?.isEmpty != false { throw ClientError.missingAPIKey }
             var client = DeepSeekClient(apiKey: config.requiresAPIKey ? key : "", baseURL: config.baseURL,
                                   model: config.model, timeout: config.timeoutSeconds ?? ModelSettings.defaultTimeoutSeconds, settings: config,
                                   fallbackAPIKey: environment["COMPUTER_HISTORY_FALLBACK_API_KEY"] ?? "")
             client.credentialRoot = rootDirectory
-            for task in groups.tasks?.keys.sorted() ?? [] {
+            for task in groups.effectiveTasks?.keys.sorted() ?? [] {
                 client.taskSettings[task] = try groups.resolved(for: task)
             }
             return client

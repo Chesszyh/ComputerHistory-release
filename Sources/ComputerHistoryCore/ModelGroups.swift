@@ -26,9 +26,17 @@ public struct ModelTaskTemplate: Codable, Sendable, Identifiable, Equatable {
         self.dailyBudget = dailyBudget; self.monthlyBudget = monthlyBudget
     }
 
+    public mutating func fillTaskModels() {
+        for task in ModelTaskConfiguration.tasks {
+            var options = tasks[task] ?? .init()
+            if options.groupID == nil { options.groupID = primaryGroupID }
+            tasks[task] = options
+        }
+    }
+
     public mutating func removeModel(_ id: String, replacement: String) {
         if primaryGroupID == id { primaryGroupID = replacement }
-        if fallbackGroupID == id || fallbackGroupID == primaryGroupID { fallbackGroupID = nil }
+        if fallbackGroupID == id { fallbackGroupID = nil }
         for task in Array(tasks.keys) where tasks[task]?.groupID == id { tasks[task]?.groupID = nil }
     }
 }
@@ -99,13 +107,22 @@ public struct ModelGroups: Codable, Sendable {
     public var monthlyBudget: Double?
     public var tasks: [String: ModelTaskConfiguration]?
     public var templates: [ModelTaskTemplate]?
+    public var activeTemplateID: String?
+
+    public var activeTemplate: ModelTaskTemplate? {
+        templates?.first { $0.id == activeTemplateID }
+    }
+
+    public var effectiveTasks: [String: ModelTaskConfiguration]? {
+        activeTemplate?.tasks ?? tasks
+    }
 
     public init(groups: [ModelGroup], primaryGroupID: String, fallbackGroupID: String? = nil,
                 dailyBudget: Double? = nil, monthlyBudget: Double? = nil, tasks: [String: ModelTaskConfiguration]? = nil,
-                endpoints: [ModelEndpoint]? = nil, templates: [ModelTaskTemplate]? = nil) {
+                endpoints: [ModelEndpoint]? = nil, templates: [ModelTaskTemplate]? = nil, activeTemplateID: String? = nil) {
         self.groups = groups; self.primaryGroupID = primaryGroupID; self.fallbackGroupID = fallbackGroupID
         self.dailyBudget = dailyBudget; self.monthlyBudget = monthlyBudget; self.tasks = tasks
-        self.endpoints = endpoints; self.templates = templates
+        self.endpoints = endpoints; self.templates = templates; self.activeTemplateID = activeTemplateID
     }
 
     public static func load(root: URL, environment: [String: String] = ProcessInfo.processInfo.environment) throws -> Self {
@@ -170,6 +187,16 @@ public struct ModelGroups: Codable, Sendable {
     }
 
     public func resolved(for task: String? = nil) throws -> ModelSettings {
+        if activeTemplateID != nil {
+            guard let activeTemplate else {
+                throw ModelSettings.SettingsError.invalid("model.json：当前模板不存在。")
+            }
+            return try applying(activeTemplate).resolveRoute(for: task, allowsMatchingFallback: true)
+        }
+        return try resolveRoute(for: task)
+    }
+
+    private func resolveRoute(for task: String? = nil, allowsMatchingFallback: Bool = false) throws -> ModelSettings {
         func invalid(_ text: String) -> ModelSettings.SettingsError { .invalid("model.json：" + text) }
         guard !groups.isEmpty, Set(groups.map(\.id)).count == groups.count,
               groups.allSatisfy({ !$0.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
@@ -215,7 +242,7 @@ public struct ModelGroups: Codable, Sendable {
         if let budget = options?.outputTokenBudget { value.outputTokenBudget = budget }
         value.dailyBudget = dailyBudget; value.monthlyBudget = monthlyBudget
         if let fallbackGroupID {
-            guard fallbackGroupID != primaryGroupID, let group = groups.first(where: { $0.id == fallbackGroupID }) else {
+            guard (allowsMatchingFallback || fallbackGroupID != primaryGroupID), let group = groups.first(where: { $0.id == fallbackGroupID }) else {
                 throw invalid("fallbackGroupID 必须指向另一个已有模型组，或设为 null。")
             }
             let endpoint = try endpoint(for: group)
@@ -232,6 +259,7 @@ public struct ModelGroups: Codable, Sendable {
 
     public func applying(_ template: ModelTaskTemplate) -> Self {
         var value = self
+        value.activeTemplateID = nil
         value.primaryGroupID = template.primaryGroupID
         value.fallbackGroupID = template.fallbackGroupID
         value.tasks = template.tasks.isEmpty ? nil : template.tasks
@@ -241,6 +269,7 @@ public struct ModelGroups: Codable, Sendable {
     }
 
     public func validateForSaving() throws {
+        _ = try resolveRoute()
         _ = try resolved()
         if let templates {
             guard Set(templates.map(\.id)).count == templates.count,
@@ -248,7 +277,7 @@ public struct ModelGroups: Codable, Sendable {
                   templates.allSatisfy({ !$0.id.isEmpty && !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
                 throw ConfigurationInputError.invalid("任务模板的名称和标识必须唯一且非空。")
             }
-            for template in templates { _ = try applying(template).resolved() }
+            for template in templates { _ = try applying(template).resolveRoute(allowsMatchingFallback: true) }
         }
     }
 

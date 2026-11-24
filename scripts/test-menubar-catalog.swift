@@ -14,6 +14,7 @@ struct CatalogRegression {
         defer { model.shutdown() }
         model.openSummarySettings()
         model.settingsTab = .model
+        model.showsModelLibrary = true
         let panel = NSHostingView(rootView: StatusPanel(model: model))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 640), styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = panel

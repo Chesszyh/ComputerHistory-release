@@ -69,15 +69,16 @@ final class StatusModel: ObservableObject {
     private var timelineTask: Task<Void, Never>?
     @Published var settingsTab: SettingsTab = .prompts
     @Published var modelGroups: [ModelGroupDraft] = []
+    @Published var showsModelLibrary = false
     @Published var modelEndpoints: [ModelEndpointDraft] = []
     @Published var editingEndpointID = ""
     @Published var editingGroupID = ""
     @Published var primaryGroupID = ""
     @Published var fallbackGroupID = ""
-    @Published var modelTasks: [String: ModelTaskConfiguration] = [:]
+    enum ModelRoutingMode: String, CaseIterable { case unified = "统一模型", template = "按任务分配" }
+    @Published var modelRoutingMode: ModelRoutingMode = .unified
     @Published var modelTaskTemplates: [ModelTaskTemplate] = []
     @Published var selectedTaskTemplateID = ""
-    @Published var taskTemplateName = ""
     @Published var dailyBudget = ""
     @Published var monthlyBudget = ""
     @Published var isSelectingSummaries = false
@@ -815,12 +816,30 @@ final class StatusModel: ObservableObject {
             editingEndpointID = modelGroups.first { $0.id == groups.primaryGroupID }?.endpointID ?? ""
             primaryGroupID = groups.primaryGroupID
             fallbackGroupID = groups.fallbackGroupID ?? ""
-            modelTasks = groups.tasks ?? [:]
-            modelTaskTemplates = groups.templates ?? []
-            selectTaskTemplate(modelTaskTemplates.first {
-                $0.primaryGroupID == groups.primaryGroupID && $0.fallbackGroupID == groups.fallbackGroupID
-                    && $0.tasks == modelTasks && $0.dailyBudget == groups.dailyBudget && $0.monthlyBudget == groups.monthlyBudget
-            }?.id ?? "")
+            modelTaskTemplates = (groups.templates ?? []).map { template in
+                var template = template
+                template.fillTaskModels()
+                return template
+            }
+            selectedTaskTemplateID = groups.activeTemplateID ?? ""
+            if selectedTaskTemplateID.isEmpty, let tasks = groups.tasks, !tasks.isEmpty {
+                var legacy = ModelTaskTemplate(name: "当前任务分配", primaryGroupID: groups.primaryGroupID,
+                    fallbackGroupID: groups.fallbackGroupID, tasks: tasks, dailyBudget: groups.dailyBudget,
+                    monthlyBudget: groups.monthlyBudget)
+                legacy.fillTaskModels()
+                if let match = modelTaskTemplates.first(where: {
+                    $0.tasks == legacy.tasks && $0.fallbackGroupID == legacy.fallbackGroupID
+                    && $0.dailyBudget == legacy.dailyBudget && $0.monthlyBudget == legacy.monthlyBudget
+                }) {
+                    selectedTaskTemplateID = match.id
+                } else {
+                    while modelTaskTemplates.contains(where: { $0.name == legacy.name }) { legacy.name += "（旧版）" }
+                    modelTaskTemplates.append(legacy)
+                    selectedTaskTemplateID = legacy.id
+                }
+            }
+            modelRoutingMode = selectedTaskTemplateID.isEmpty ? .unified : .template
+            if selectedTaskTemplateID.isEmpty { selectedTaskTemplateID = modelTaskTemplates.first?.id ?? "" }
             editingGroupID = groups.primaryGroupID
             dailyBudget = groups.dailyBudget.map(String.init(describing:)) ?? ""
             monthlyBudget = groups.monthlyBudget.map(String.init(describing:)) ?? ""
@@ -845,8 +864,8 @@ final class StatusModel: ObservableObject {
         modelEndpoints[index].catalogLoading = true
         modelEndpoints[index].catalogMessage = nil
         let draft = modelEndpoints[index]
-        let primary = modelGroups.first { $0.id == primaryGroupID }?.endpointID
-        let fallback = modelGroups.first { $0.id == fallbackGroupID }?.endpointID
+        let primary = routingEndpointID(fallback: false)
+        let fallback = routingEndpointID(fallback: true)
         let root = root
         Task {
             do {
@@ -876,12 +895,22 @@ final class StatusModel: ObservableObject {
         }
     }
 
+    private func routingEndpointID(fallback: Bool) -> String? {
+        let id: String?
+        if modelRoutingMode == .template, let template = selectedTaskTemplate {
+            id = fallback ? template.fallbackGroupID : template.primaryGroupID
+        } else {
+            id = fallback ? fallbackGroupID : primaryGroupID
+        }
+        return modelGroups.first { $0.id == id }?.endpointID
+    }
+
     func apiKeyStatus(for endpoint: ModelEndpointDraft) -> String {
         if endpoint.hasStoredAPIKey { return "已保存到系统钥匙串" }
         let environment = ProcessInfo.processInfo.environment
-        if modelGroups.first(where: { $0.id == primaryGroupID })?.endpointID == endpoint.id,
+        if routingEndpointID(fallback: false) == endpoint.id,
            environment["DEEPSEEK_API_KEY"]?.isEmpty == false { return "当前从主模型环境变量读取密钥" }
-        if modelGroups.first(where: { $0.id == fallbackGroupID })?.endpointID == endpoint.id,
+        if routingEndpointID(fallback: true) == endpoint.id,
            environment["COMPUTER_HISTORY_FALLBACK_API_KEY"]?.isEmpty == false { return "当前从备用模型环境变量读取密钥" }
         return "尚未填写密钥"
     }
@@ -915,61 +944,39 @@ final class StatusModel: ObservableObject {
         modelGroups.removeAll { $0.id == removedID }
         if primaryGroupID == removedID { primaryGroupID = modelGroups[0].id }
         if fallbackGroupID == removedID || fallbackGroupID == primaryGroupID { fallbackGroupID = "" }
-        for task in Array(modelTasks.keys) where modelTasks[task]?.groupID == removedID {
-            modelTasks[task]?.groupID = nil
-        }
         for index in modelTaskTemplates.indices {
             modelTaskTemplates[index].removeModel(removedID, replacement: modelGroups[0].id)
+            modelTaskTemplates[index].fillTaskModels()
         }
         editingGroupID = primaryGroupID
     }
 
-    func selectTaskTemplate(_ id: String) {
-        selectedTaskTemplateID = id
-        taskTemplateName = modelTaskTemplates.first { $0.id == id }?.name ?? ""
+    var selectedTaskTemplate: ModelTaskTemplate? {
+        modelTaskTemplates.first { $0.id == selectedTaskTemplateID }
     }
 
-    func applyTaskTemplate() {
-        guard let template = modelTaskTemplates.first(where: { $0.id == selectedTaskTemplateID }) else { return }
-        primaryGroupID = template.primaryGroupID
-        fallbackGroupID = template.fallbackGroupID ?? ""
-        modelTasks = template.tasks
-        dailyBudget = template.dailyBudget.map(String.init(describing:)) ?? ""
-        monthlyBudget = template.monthlyBudget.map(String.init(describing:)) ?? ""
+    func newTaskTemplate() -> ModelTaskTemplate {
+        var template = ModelTaskTemplate(name: "", primaryGroupID: primaryGroupID,
+            fallbackGroupID: fallbackGroupID.isEmpty ? nil : fallbackGroupID)
+        template.fillTaskModels()
+        return template
+    }
+
+    func storeTaskTemplate(_ draft: ModelTaskTemplate) {
+        if let index = modelTaskTemplates.firstIndex(where: { $0.id == draft.id }) {
+            modelTaskTemplates[index] = draft
+        } else {
+            modelTaskTemplates.append(draft)
+        }
+        selectedTaskTemplateID = draft.id
         modelSettingsError = nil
-        modelSettingsMessage = "已套用「\(template.name)」，保存后生效"
-    }
-
-    func saveTaskTemplate(update: Bool = false, renameOnly: Bool = false) {
-        do {
-            let name = taskTemplateName.trimmingCharacters(in: .whitespacesAndNewlines)
-            let existing = update ? modelTaskTemplates.firstIndex { $0.id == selectedTaskTemplateID } : nil
-            guard !name.isEmpty, !modelTaskTemplates.indices.contains(where: { $0 != existing && modelTaskTemplates[$0].name == name }) else {
-                throw ConfigurationInputError.invalid("请填写未使用的模板名称。")
-            }
-            let id: String
-            if renameOnly, let existing {
-                modelTaskTemplates[existing].name = name
-                id = modelTaskTemplates[existing].id
-            } else {
-                id = existing.map { modelTaskTemplates[$0].id } ?? UUID().uuidString
-                let template = try ModelTaskTemplate(id: id, name: name, primaryGroupID: primaryGroupID,
-                    fallbackGroupID: fallbackGroupID.isEmpty ? nil : fallbackGroupID, tasks: modelTasks,
-                    dailyBudget: modelBudget(dailyBudget), monthlyBudget: modelBudget(monthlyBudget))
-                if let existing { modelTaskTemplates[existing] = template }
-                else { modelTaskTemplates.append(template) }
-            }
-            selectTaskTemplate(id)
-            modelSettingsError = nil
-            modelSettingsMessage = "点击保存以保留模板更改"
-        } catch { modelSettingsError = String(describing: error); modelSettingsMessage = nil }
+        modelSettingsMessage = nil
     }
 
     func removeTaskTemplate() {
         modelTaskTemplates.removeAll { $0.id == selectedTaskTemplateID }
-        selectTaskTemplate("")
-        modelSettingsError = nil
-        modelSettingsMessage = "点击保存以移除模板"
+        selectedTaskTemplateID = modelTaskTemplates.first?.id ?? ""
+        if modelTaskTemplates.isEmpty { modelRoutingMode = .unified }
     }
 
     private func modelBudget(_ text: String) throws -> Double? {
@@ -990,11 +997,14 @@ final class StatusModel: ObservableObject {
                 }
                 return try draft.value(endpoint: endpoint)
             }
+            guard modelRoutingMode == .unified || selectedTaskTemplate != nil else {
+                throw ConfigurationInputError.invalid("请选择任务模板。")
+            }
             let settings = try ModelGroups(groups: groups,
                 primaryGroupID: primaryGroupID, fallbackGroupID: fallbackGroupID.isEmpty ? nil : fallbackGroupID,
                 dailyBudget: modelBudget(dailyBudget), monthlyBudget: modelBudget(monthlyBudget),
-                tasks: modelTasks.isEmpty ? nil : modelTasks, endpoints: endpoints,
-                templates: modelTaskTemplates.isEmpty ? nil : modelTaskTemplates)
+                endpoints: endpoints, templates: modelTaskTemplates.isEmpty ? nil : modelTaskTemplates,
+                activeTemplateID: modelRoutingMode == .template ? selectedTaskTemplateID : nil)
             try settings.validateForSaving()
             for index in modelEndpoints.indices {
                 let endpoint = modelEndpoints[index]

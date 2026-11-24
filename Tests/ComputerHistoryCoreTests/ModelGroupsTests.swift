@@ -94,6 +94,32 @@ final class ModelGroupsTests: XCTestCase {
         XCTAssertEqual(template.tasks["narrative"]?.outputTokenBudget, 2048)
     }
 
+    func testSelectedTemplateUsesOneFallbackAndPreservesUnifiedRoute() throws {
+        let url = URL(string: "https://model.example")!
+        let groups = ["main", "alternate", "spare"].map {
+            ModelGroup(id: $0, name: $0, settings: .init(baseURL: url, model: $0, requiresAPIKey: false))
+        }
+        var preset = ModelTaskTemplate(id: "template", name: "Template", primaryGroupID: "spare",
+            fallbackGroupID: "spare", tasks: ["daily": .init(groupID: "alternate", outputTokenBudget: 4096)])
+        preset.fillTaskModels()
+        let root = try root()
+        var settings = ModelGroups(groups: groups, primaryGroupID: "main", fallbackGroupID: "alternate",
+            templates: [preset], activeTemplateID: preset.id)
+        try settings.save(root: root)
+        let loaded = try ModelGroups.load(root: root)
+        XCTAssertEqual(loaded.effectiveTasks?.count, 5)
+        XCTAssertEqual(try loaded.resolved(for: "daily").fallback?.model, "spare")
+        XCTAssertNil(try loaded.resolved(for: "10min").fallback)
+        XCTAssertEqual(try loaded.resolved(for: "daily").outputTokenBudget, 4096)
+        settings.activeTemplateID = nil
+        try settings.save(root: root)
+        let unified = try ModelGroups.load(root: root)
+        XCTAssertNil(unified.effectiveTasks)
+        XCTAssertEqual(try unified.resolved(for: "daily").model, "main")
+        XCTAssertEqual(try unified.resolved(for: "daily").fallback?.model, "alternate")
+        XCTAssertEqual(unified.templates, [preset])
+    }
+
     func testRetiredTaskDoesNotBlockActiveConfiguration() throws {
         let root = try root()
         let group = ModelGroup(id: "one", name: "One", settings: .init(

@@ -5,8 +5,26 @@ import ComputerHistoryCore
 
 struct SummarySettingsPane: View {
     @ObservedObject var model: StatusModel
+    @State private var editingTemplate: ModelTaskTemplate?
+    @State private var confirmsTemplateDeletion = false
 
     var body: some View {
+        Group {
+            if let template = editingTemplate {
+                TaskTemplateForm(draft: template, models: model.modelGroups, templates: model.modelTaskTemplates) {
+                    model.storeTaskTemplate($0)
+                    editingTemplate = nil
+                } cancel: {
+                    editingTemplate = nil
+                }
+            } else {
+                settingsBody
+            }
+        }
+        .frame(width: DesignTokens.Dimensions.panelWidth, height: DesignTokens.Dimensions.panelHeight)
+    }
+
+    private var settingsBody: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
                 .padding(.horizontal, 14)
@@ -36,7 +54,6 @@ struct SummarySettingsPane: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: DesignTokens.Dimensions.panelWidth, height: DesignTokens.Dimensions.panelHeight)
     }
 
     private var timelineEditor: some View {
@@ -293,70 +310,74 @@ struct SummarySettingsPane: View {
         }.font(.system(size: 11))
     }
 
-    private var taskTemplateEditor: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Picker("任务模板", selection: Binding(get: { model.selectedTaskTemplateID }, set: { model.selectTaskTemplate($0) })) {
-                Text("选择模板").tag("")
-                ForEach(model.modelTaskTemplates) { Text($0.name).tag($0.id) }
-            }.accessibilityIdentifier("task-template-picker")
-            SettingsField("模板名称", text: $model.taskTemplateName, placeholder: "例如：日常总结", id: "task-template-name")
+    private var taskTemplates: some View {
+        SettingsCard("任务模板") {
+            if !model.modelTaskTemplates.isEmpty {
+                Picker("当前模板", selection: $model.selectedTaskTemplateID) {
+                    ForEach(model.modelTaskTemplates) { Text($0.name).tag($0.id) }
+                }.accessibilityIdentifier("task-template-picker")
+            }
             HStack {
-                Button("套用模板") { model.applyTaskTemplate() }.disabled(model.selectedTaskTemplateID.isEmpty)
-                Button("存为新模板") { model.saveTaskTemplate() }.disabled(model.taskTemplateName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                Menu("管理") {
-                    Button("用当前配置更新") { model.saveTaskTemplate(update: true) }
-                    Button("重命名") { model.saveTaskTemplate(update: true, renameOnly: true) }
-                    Button("删除模板", role: .destructive) { model.removeTaskTemplate() }
-                }.disabled(model.selectedTaskTemplateID.isEmpty)
+                if let template = model.selectedTaskTemplate {
+                    Button("编辑模板") { editingTemplate = template }
+                        .accessibilityIdentifier("task-template-edit")
+                    Menu("更多") {
+                        Button("复制为新模板") {
+                            var copy = template
+                            copy.id = UUID().uuidString
+                            copy.name = ""
+                            editingTemplate = copy
+                        }
+                        Button("删除模板", role: .destructive) { confirmsTemplateDeletion = true }
+                    }.fixedSize()
+                }
+                Spacer()
+                Button("新建模板") { editingTemplate = model.newTaskTemplate() }
+                    .accessibilityIdentifier("task-template-new")
             }.controlSize(.small)
+            if let template = model.selectedTaskTemplate {
+                Divider()
+                ForEach(ModelTaskConfiguration.tasks, id: \.self) { task in
+                    templateRouteRow(taskModelLabel(task), id: template.tasks[task]?.groupID ?? template.primaryGroupID)
+                }
+                Divider()
+                templateRouteRow("全局备用", id: template.fallbackGroupID)
+            }
         }
+        .alert("删除此模板？", isPresented: $confirmsTemplateDeletion) {
+            Button("取消", role: .cancel) {}
+            Button("删除", role: .destructive) { model.removeTaskTemplate() }
+        }
+    }
+
+    private func templateRouteRow(_ label: String, id: String?) -> some View {
+        LabeledContent(label, value: model.modelGroups.first { $0.id == id }?.name ?? "无")
+            .font(DesignTokens.Typography.footnote)
     }
 
     private var modelEditor: some View {
         VStack(alignment: .leading, spacing: 8) {
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 12) {
-                    SettingsCard("默认模型") {
-                        Picker("主模型", selection: Binding(get: { model.primaryGroupID }, set: { id in
-                            model.primaryGroupID = id
-                            if model.fallbackGroupID == id { model.fallbackGroupID = "" }
-                        })) {
-                            ForEach(model.modelGroups) { Text($0.name).tag($0.id) }
-                        }
-                        Picker("备用模型", selection: $model.fallbackGroupID) {
-                            Text("不使用").tag("")
-                            ForEach(model.modelGroups.filter { $0.id != model.primaryGroupID }) { Text($0.name).tag($0.id) }
-                        }
-                        Text("主模型请求失败时尝试备用模型。")
-                            .font(.system(size: 10)).foregroundStyle(.secondary)
-                    }
-                    SettingsDisclosure("按任务选择模型") {
-                        taskTemplateEditor
-                        ForEach(ModelTaskConfiguration.tasks, id: \.self) { task in
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text(["10min": "十分钟记忆", "narrative-grouping": "活动归属", "narrative": "活动概览", "daily": "日报", "weekly": "周报"][task] ?? task)
-                                Picker("模型", selection: Binding(get: { model.modelTasks[task]?.groupID ?? "" }, set: { id in
-                                    var options = model.modelTasks[task] ?? .init()
-                                    options.groupID = id.isEmpty ? nil : id
-                                    model.modelTasks[task] = options
-                                })) {
-                                    Text("沿用主模型").tag("")
-                                    ForEach(model.modelGroups) { Text($0.name).tag($0.id) }
-                                }
-                                HStack {
-                                    TextField("推理强度：沿用模型配置", text: Binding(get: { model.modelTasks[task]?.reasoningEffort ?? "" }, set: { text in
-                                        var options = model.modelTasks[task] ?? .init()
-                                        options.reasoningEffort = text.isEmpty ? nil : text
-                                        model.modelTasks[task] = options
-                                    }))
-                                    TextField("输出额度：沿用模型配置", value: Binding<Int?>(get: { model.modelTasks[task]?.outputTokenBudget }, set: { value in
-                                        var options = model.modelTasks[task] ?? .init()
-                                        options.outputTokenBudget = value
-                                        model.modelTasks[task] = options
-                                    }), format: .number)
-                                }.textFieldStyle(.roundedBorder)
+                    Picker("分配方式", selection: $model.modelRoutingMode) {
+                        ForEach(StatusModel.ModelRoutingMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }.pickerStyle(.segmented).labelsHidden()
+                        .accessibilityIdentifier("model-routing-mode")
+                    if model.modelRoutingMode == .unified {
+                        SettingsCard("主备模型") {
+                            Picker("主模型", selection: Binding(get: { model.primaryGroupID }, set: { id in
+                                model.primaryGroupID = id
+                                if model.fallbackGroupID == id { model.fallbackGroupID = "" }
+                            })) {
+                                ForEach(model.modelGroups) { Text($0.name).tag($0.id) }
+                            }
+                            Picker("备用模型", selection: $model.fallbackGroupID) {
+                                Text("不使用").tag("")
+                                ForEach(model.modelGroups.filter { $0.id != model.primaryGroupID }) { Text($0.name).tag($0.id) }
                             }
                         }
+                    } else {
+                        taskTemplates
                     }
                     SettingsDisclosure("端点与认证") {
                         Picker("端点", selection: $model.editingEndpointID) {
@@ -372,7 +393,7 @@ struct SummarySettingsPane: View {
                             modelEndpointEditor(index)
                         }
                     }
-                    SettingsCard("模型配置") {
+                    DisclosureGroup("模型配置", isExpanded: $model.showsModelLibrary) {
                         Picker("编辑", selection: $model.editingGroupID) {
                             ForEach(model.modelGroups) { Text($0.name).tag($0.id) }
                         }
@@ -387,11 +408,11 @@ struct SummarySettingsPane: View {
                             modelGroupEditor(index)
                         }
                     }
-                    SettingsDisclosure("预算") {
-                        SettingsField("每日预算", text: $model.dailyBudget, placeholder: "留空表示不限制", id: "model-daily")
-                        SettingsField("每月预算", text: $model.monthlyBudget, placeholder: "留空表示不限制", id: "model-monthly")
-                        Text("预算使用主模型的计费币种；设置预算前需填写该模型的单价。")
-                            .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    if model.modelRoutingMode == .unified {
+                        SettingsDisclosure("预算") {
+                            SettingsField("每日预算", text: $model.dailyBudget, placeholder: "留空表示不限制", id: "model-daily")
+                            SettingsField("每月预算", text: $model.monthlyBudget, placeholder: "留空表示不限制", id: "model-monthly")
+                        }
                     }
 
                     SettingsDisclosure("高级选项") {
@@ -408,8 +429,6 @@ struct SummarySettingsPane: View {
             VStack(alignment: .leading, spacing: 6) {
                 feedback(error: model.modelSettingsError, message: model.modelSettingsMessage)
                 HStack {
-                    Text("保存后，下一次总结使用新设置。")
-                        .font(.system(size: 10)).foregroundStyle(.tertiary)
                     Spacer()
                     Button("保存 (⌘S)") { model.saveModelConfiguration() }
                         .buttonStyle(.borderedProminent)
@@ -716,6 +735,84 @@ private struct SettingsCard<Content: View>: View {
                         .strokeBorder(DesignTokens.Colors.cardBorder, lineWidth: 0.5)
                 )
         )
+    }
+}
+
+private func taskModelLabel(_ task: String) -> String {
+    ["10min": "十分钟记忆", "narrative-grouping": "活动归属", "narrative": "活动概览", "daily": "日报", "weekly": "周报"][task] ?? task
+}
+
+struct TaskTemplateForm: View {
+    @State var draft: ModelTaskTemplate
+    let models: [ModelGroupDraft]
+    let templates: [ModelTaskTemplate]
+    let submit: (ModelTaskTemplate) -> Void
+    let cancel: () -> Void
+
+    private var name: String { draft.name.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var duplicateName: Bool { templates.contains { $0.id != draft.id && $0.name == name } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Button("取消", action: cancel).keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("task-template-cancel")
+                Spacer()
+                Text(templates.contains { $0.id == draft.id } ? "编辑任务模板" : "新建任务模板")
+                    .font(DesignTokens.Typography.bodySemibold)
+                Spacer()
+                Button("完成") {
+                    draft.name = name
+                    draft.primaryGroupID = draft.tasks["10min"]?.groupID ?? draft.primaryGroupID
+                    submit(draft)
+                }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    .disabled(name.isEmpty || duplicateName).accessibilityIdentifier("task-template-done")
+            }.padding(14)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    SettingsField("模板名称", text: $draft.name, placeholder: "例如：日常总结", id: "task-template-name")
+                    if duplicateName {
+                        Text("已有同名模板").font(DesignTokens.Typography.footnote).foregroundStyle(.red)
+                    }
+                    SettingsCard("任务模型") {
+                        ForEach(ModelTaskConfiguration.tasks, id: \.self) { task in
+                            taskRow(task)
+                        }
+                    }
+                    SettingsCard("全局备用") {
+                        Picker("备用模型", selection: Binding(get: { draft.fallbackGroupID ?? "" }, set: {
+                            draft.fallbackGroupID = $0.isEmpty ? nil : $0
+                        })) {
+                            Text("不使用").tag("")
+                            ForEach(models) { Text($0.name).tag($0.id) }
+                        }
+                    }
+                    SettingsDisclosure("预算") {
+                        TextField("每日预算", value: $draft.dailyBudget, format: .number).textFieldStyle(.roundedBorder)
+                        TextField("每月预算", value: $draft.monthlyBudget, format: .number).textFieldStyle(.roundedBorder)
+                    }
+                }.padding(14)
+            }
+        }
+    }
+
+    private func taskRow(_ task: String) -> some View {
+        let options = Binding(get: { draft.tasks[task] ?? .init() }, set: { draft.tasks[task] = $0 })
+        return VStack(alignment: .leading, spacing: 4) {
+            Picker(taskModelLabel(task), selection: Binding(get: { options.wrappedValue.groupID ?? draft.primaryGroupID }, set: {
+                options.wrappedValue.groupID = $0
+            })) {
+                ForEach(models) { Text($0.name).tag($0.id) }
+            }
+            DisclosureGroup("推理与输出") {
+                TextField("推理强度（留空沿用模型）", text: Binding(get: { options.wrappedValue.reasoningEffort ?? "" }, set: {
+                    options.wrappedValue.reasoningEffort = $0.isEmpty ? nil : $0
+                })).textFieldStyle(.roundedBorder)
+                TextField("输出额度（留空沿用模型）", value: options.outputTokenBudget, format: .number)
+                    .textFieldStyle(.roundedBorder)
+            }.font(DesignTokens.Typography.caption)
+        }
     }
 }
 

@@ -112,7 +112,9 @@ with tempfile.TemporaryDirectory(prefix='fallback-test-') as d:
                             reasoningEffort='none', outputTokenBudget=4096)],
             'primaryGroupID': 'default',
             'fallbackGroupID': 'spare',
-            'tasks': {'10min': {'groupID': 'memory'}},
+            'activeTemplateID': 'structured',
+            'templates': [{'id': 'structured', 'name': 'Structured', 'primaryGroupID': 'default',
+                           'fallbackGroupID': 'spare', 'tasks': {'10min': {'groupID': 'memory'}}}],
         }
         (root/'model.json').write_text(json.dumps(shared))
         before = len(calls)
