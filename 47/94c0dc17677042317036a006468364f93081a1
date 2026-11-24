@@ -1,0 +1,18 @@
+CHANGELOG.md
+  h_a0b60935de1168 3,8
+CHANGELOG.zh.md
+  h_a0b60935de1168 3,8
+VERSION
+  h_a0b60935de1168 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4794c0dc17677042317036a006468364f93081a1",
+  "prompts": {},
+  "humans": {
+    "h_a0b60935de1168": {
+      "author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
