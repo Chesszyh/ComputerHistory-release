@@ -32,7 +32,7 @@ final class ConfigurationEditorTests: XCTestCase {
             requiresAPIKey: false, reasoningEffort: "custom", pricing: .init(currency: "USD", inputPerMillion: 1.5,
                 cachedInputPerMillion: 0.2, outputPerMillion: 3), dailyBudget: 5, monthlyBudget: 30,
             fallback: .init(baseURL: URL(string: "http://127.0.0.1:1235/v1")!, model: "synthetic-fallback",
-                reasoningEffort: "none", pricing: .init(inputPerMillion: 0, cachedInputPerMillion: 0, outputPerMillion: 0)))
+                reasoningEffort: "none", pricing: .init(currency: "USD", inputPerMillion: 0, cachedInputPerMillion: 0, outputPerMillion: 0)))
         try settings.save(root: root)
         var draft = ModelSettingsDraft(try ModelSettings.load(root: root), environment: [:])
         draft.model = "edited-model"

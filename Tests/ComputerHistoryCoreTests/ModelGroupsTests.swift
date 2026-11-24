@@ -75,7 +75,7 @@ final class ModelGroupsTests: XCTestCase {
         let old = ModelSettings(baseURL: URL(string: "http://127.0.0.1:1234/v1")!, model: "primary",
             requiresAPIKey: false, reasoningEffort: "high", pricing: .init(inputPerMillion: 1, cachedInputPerMillion: 0, outputPerMillion: 2),
             dailyBudget: 5, fallback: .init(baseURL: URL(string: "http://127.0.0.1:1235/v1")!, model: "secondary",
-                requiresAPIKey: true, requestStyle: .reasoning, timeoutSeconds: 12), requestStyle: .standard, timeoutSeconds: 30)
+                pricing: .init(inputPerMillion: 1, cachedInputPerMillion: 0, outputPerMillion: 2), requiresAPIKey: true, requestStyle: .reasoning, timeoutSeconds: 12), requestStyle: .standard, timeoutSeconds: 30)
         try old.save(root: root)
         let bytes = try Data(contentsOf: root.appendingPathComponent("model.json"))
         var groups = try ModelGroups.load(root: root)
@@ -101,6 +101,36 @@ final class ModelGroupsTests: XCTestCase {
         XCTAssertEqual(swapped.fallback?.model, "primary")
         XCTAssertEqual(swapped.fallback?.credentialGroupID, "legacy-primary")
         XCTAssertEqual(try ModelGroups.load(root: root).groups.map(\.model), ["primary", "secondary"])
+    }
+
+    func testBudgetRequiresFallbackPricingInPrimaryCurrencyForBothFileFormats() throws {
+        let root = try root()
+        let url = URL(string: "http://localhost/v1")!
+        let price = ModelPricing(inputPerMillion: 1, cachedInputPerMillion: 0, outputPerMillion: 1)
+        let file = root.appendingPathComponent("model.json")
+        for currency in [nil, "USD", "CNY"] as [String?] {
+            var legacy = ModelSettings(baseURL: url, model: "one", pricing: price, monthlyBudget: 3,
+                fallback: .init(baseURL: url, model: "two", pricing: currency.map {
+                    ModelPricing(currency: $0, inputPerMillion: 2, cachedInputPerMillion: 0, outputPerMillion: 2)
+                }))
+            let backup = ModelSettings(baseURL: url, model: "two", pricing: legacy.fallback?.pricing)
+            var groups = ModelGroups(groups: [.init(id: "one", name: "One", settings: legacy),
+                                               .init(id: "two", name: "Two", settings: backup)],
+                                     primaryGroupID: "one", fallbackGroupID: "two", dailyBudget: 2)
+            for data in [try JSONEncoder().encode(legacy), try JSONEncoder().encode(groups)] {
+                try data.write(to: file)
+                var draft = try ModelGroups.readForEditing(root: root)
+                let fallback = try XCTUnwrap(draft.groups.firstIndex { $0.id == draft.fallbackGroupID })
+                draft.groups[fallback].pricing = price
+                XCTAssertNoThrow(try draft.resolved())
+                if currency == "CNY" { XCTAssertNoThrow(try ModelSettings.load(root: root)) }
+                else { XCTAssertThrowsError(try ModelSettings.load(root: root)) { XCTAssertTrue(String(describing: $0).contains("备用模型")) } }
+            }
+            legacy.monthlyBudget = nil
+            groups.dailyBudget = nil
+            XCTAssertNoThrow(try legacy.save(root: root))
+            XCTAssertNoThrow(try groups.save(root: root))
+        }
     }
 
     func testInvalidSelectionsAndInactiveGroupPreventOverwrite() throws {

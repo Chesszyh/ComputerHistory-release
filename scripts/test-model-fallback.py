@@ -83,7 +83,7 @@ with tempfile.TemporaryDirectory(prefix='fallback-test-') as d:
             assert parent['input']==r['input'] and parent['system']==r['system']
         assert all('Authorization' not in p.read_text() and 'synthetic-primary-key' not in p.read_text() for p in (root/'requests').glob('*.json'))
         primary='http';secondary='ok';config['fallback']['requiresAPIKey']=False;save();run();assert calls[-1][1] is None
-        config['dailyBudget']=0;config['pricing']={'currency':'CNY','inputPerMillion':1,'cachedInputPerMillion':0,'outputPerMillion':1};save()
+        config['dailyBudget']=0;config['pricing']={'currency':'CNY','inputPerMillion':1,'cachedInputPerMillion':0,'outputPerMillion':1};config['fallback']['pricing']=config['pricing'];save()
         before=len(calls);run(ok=False);assert len(calls)==before,'budget must not be bypassed through fallback'
         config.pop('dailyBudget');config.pop('pricing')
         fallback=config.pop('fallback')
@@ -127,7 +127,7 @@ with tempfile.TemporaryDirectory(prefix='fallback-test-') as d:
         budget_pricing = {'currency':'CNY','inputPerMillion':1_000_000,'cachedInputPerMillion':0,'outputPerMillion':0}
         config['pricing'] = budget_pricing
         config['fallback'] = dict(fallback, baseURL=f'http://127.0.0.1:{server.server_port}/backup/v1',
-                                  pricing=dict(budget_pricing, currency='USD'))
+                                  pricing=budget_pricing)
         request_dir = root / 'requests'
         def book_during_primary(model):
             if model != 'synthetic-primary':

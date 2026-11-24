@@ -91,6 +91,12 @@ public struct ModelSettings: Codable, Sendable {
         for tokens in [outputTokenBudget, fallback?.outputTokenBudget].compactMap({ $0 }) {
             guard tokens > 0 else { throw SettingsError.invalid("输出额度应为正整数 token。") }
         }
+        if dailyBudget != nil || monthlyBudget != nil {
+            guard let pricing else { throw SettingsError.invalid("设置预算前，请为主模型组填写单价。") }
+            if let fallback, fallback.pricing?.currency != pricing.currency {
+                throw SettingsError.fallbackPricing
+            }
+        }
         if let secondary = fallback {
             try ModelTransport.validate(secondary.baseURL, allowInsecureHTTP: secondary.allowInsecureHTTP == true)
             guard ["http", "https"].contains(secondary.baseURL.scheme), secondary.baseURL.host != nil,
@@ -100,7 +106,13 @@ public struct ModelSettings: Codable, Sendable {
 
     public enum SettingsError: Error, CustomStringConvertible {
         case invalid(String)
-        public var description: String { switch self { case .invalid(let message): return message } }
+        case fallbackPricing
+        public var description: String {
+            switch self {
+            case .invalid(let message): return message
+            case .fallbackPricing: return "设置预算前，请为备用模型填写与主模型相同币种的单价。"
+            }
+        }
     }
 }
 

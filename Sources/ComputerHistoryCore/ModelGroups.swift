@@ -56,17 +56,25 @@ public struct ModelGroups: Codable, Sendable {
     }
 
     public static func load(root: URL, environment: [String: String] = ProcessInfo.processInfo.environment) throws -> Self {
+        let value = try readForEditing(root: root, environment: environment)
+        _ = try value.resolved()
+        return value
+    }
+
+    public static func readForEditing(root: URL, environment: [String: String] = ProcessInfo.processInfo.environment) throws -> Self {
         let file = root.appendingPathComponent("model.json")
+        let old: ModelSettings
         if FileManager.default.fileExists(atPath: file.path) {
             let data = try Data(contentsOf: file)
             if let object = try JSONSerialization.jsonObject(with: data) as? [String: Any], object["groups"] != nil {
                 var value = try JSONDecoder().decode(Self.self, from: data)
                 value.tasks?.removeValue(forKey: "6h")
-                _ = try value.resolved()
                 return value
             }
+            old = try JSONDecoder().decode(ModelSettings.self, from: data)
+        } else {
+            old = try ModelSettingsDraft(environment: environment).value()
         }
-        let old = try ModelSettings.load(root: root) ?? ModelSettingsDraft(environment: environment).value()
         var groups = [ModelGroup(id: "legacy-primary", name: "原主模型", settings: old)]
         if let fallback = old.fallback {
             groups.append(ModelGroup(id: "legacy-fallback", name: "原备用模型", settings: ModelSettings(
@@ -124,9 +132,6 @@ public struct ModelGroups: Codable, Sendable {
             if fallbackGroupID != selectedID { value.fallback = fallback }
         }
         try value.validate()
-        if (dailyBudget != nil || monthlyBudget != nil), value.pricing == nil {
-            throw invalid("设置预算前，请为主模型组填写单价。")
-        }
         return value
     }
 

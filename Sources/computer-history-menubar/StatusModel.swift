@@ -754,7 +754,11 @@ final class StatusModel: ObservableObject {
         modelConfigurationLoaded = false
         collectorConfigurationLoaded = false
         do {
-            let groups = try ModelGroups.load(root: root)
+            let groups = try ModelGroups.readForEditing(root: root)
+            do { _ = try groups.resolved() }
+            catch ModelSettings.SettingsError.fallbackPricing {
+                modelSettingsError = ModelSettings.SettingsError.fallbackPricing.description
+            }
             modelGroups = try groups.groups.map { group in
                 var draft = ModelGroupDraft(group)
                 if try ModelAPIKey.contains(root: root, groupID: group.id) {
