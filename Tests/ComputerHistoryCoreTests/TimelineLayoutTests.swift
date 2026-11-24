@@ -23,8 +23,8 @@ final class TimelineLayoutTests: XCTestCase {
             Date(timeIntervalSince1970: base + Double($0 * 600))
         })
         XCTAssertEqual(cards.map { $0.leafItems.count }, Array(counts.reversed()))
-        XCTAssertEqual(cards.last?.title, "5 项活动")
-        XCTAssertEqual(cards.last?.summary, "0-0；0-1；0-2")
+        XCTAssertEqual(cards.last?.title, "0-0")
+        XCTAssertEqual(cards.last?.summary, "0-1；0-2；0-3")
         XCTAssertEqual(cards.last?.endTimestamp, cards.last?.timestamp)
         XCTAssertEqual(cards.last?.leafItems.first, input.first)
         XCTAssertEqual(TimelineLayout.cards(cards), cards)
@@ -61,12 +61,14 @@ final class TimelineLayoutTests: XCTestCase {
         XCTAssertEqual(updated[0].leafItems.count, 3)
     }
 
-    func testSameTimePreviewUsesSourceOrder() {
+    func testSameTimeHeadingUsesFirstSourceFragment() {
         var first = item("Z-first", 0, 10)
         first.sourceActivities = ["source-a": [1]]
         var later = item("A-later", 0, 20)
         later.sourceActivities = ["source-a": [2], "source-b": [1]]
-        XCTAssertEqual(TimelineLayout.cards([later, first])[0].summary, "Z-first；A-later")
+        let card = TimelineLayout.cards([later, first])[0]
+        XCTAssertEqual(card.title, "Z-first")
+        XCTAssertEqual(card.summary, "A-later")
     }
 
     func testGeneratedIntervalsKeepUniqueIncreasingStartsAndEveryActivity() {

@@ -27,10 +27,13 @@ public enum TimelineLayout {
             if isDegraded {
                 card.title = ActivityEvidence.inputDegradedTitle
                 card.summary = ActivityEvidence.inputDegradedSummary
-            } else {
-                card.title = members.contains(where: \.isAway)
-                    ? "\(members.count) 条记录" : "\(members.count) 项活动"
+            } else if members.contains(where: \.isAway) {
+                card.title = "\(members.count) 条记录"
                 card.summary = members.prefix(3).map(\.title).joined(separator: "；")
+            } else {
+                let lead = members.first(where: { $0.isPreferredTimelineTitle == true }) ?? first
+                card.title = lead.title
+                card.summary = members.lazy.filter { $0.id != lead.id }.prefix(3).map(\.title).joined(separator: "；")
             }
             card.noClearActivity = nil
             card.endTimestamp = first.timestamp
@@ -39,6 +42,7 @@ public enum TimelineLayout {
             card.isNarrative = true
             card.taskID = nil
             card.taskTitle = nil
+            card.isPreferredTimelineTitle = nil
             card.sourceRevisions = nil
             card.sourceActivities = nil
             card.sourceSteps = nil

@@ -32,6 +32,7 @@ public struct ActivityNarrative: Codable, Sendable, Equatable {
         public var generationMode: SummarySettings.TimelineMode?
         public var taskID: String?
         public var taskTitle: String?
+        var isPreferredTimelineTitle: Bool?
 
         public var isIncidentalOnly: Bool {
             guard let activities = sourceActivities, !activities.isEmpty else { return false }

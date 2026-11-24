@@ -33,6 +33,38 @@ final class ActivityGroupingTests: XCTestCase {
             XCTAssertThrowsError(try ActivityGrouping(groups: groups).items(sources: sources, prior: [], tasks: []))
         }
     }
+    func testModelChoosesExistingCardTitleWithoutReorderingActivities() async throws {
+        let (root, _, sources) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let input = """
+        {"groups":[{"references":["S1.A1"],"continuesPrevious":false},{"references":["S1.A2","S2.A1"],"continuesPrevious":false}],
+         "timelineTitles":{"S1":"S1.A2","S2":"S2.A1"}}
+        """
+        let plan = try JSONDecoder().decode(ActivityGrouping.self, from: Data(input.utf8))
+        var items = try plan.items(sources: sources, prior: [], tasks: [])
+        XCTAssertNil(items[0].isPreferredTimelineTitle)
+        XCTAssertEqual(items[1].isPreferredTimelineTitle, true)
+        items[0].title = "检查字符边界"
+        items[1].title = "验证组合字符"
+        try ActivityNarrative(items: items).save(root: root)
+        let snapshot = await TraySnapshotLoader().load(root: root)
+        let cards = snapshot.groups.flatMap(\.items)
+        XCTAssertEqual(cards.count, 1)
+        XCTAssertEqual(cards.first?.title, items[1].title)
+        XCTAssertEqual(cards.first?.summary, items[0].title)
+        XCTAssertEqual(cards.first?.leafItems.map(\.id), items.map(\.id))
+
+        let invalidChoice = """
+        {"groups":[{"references":["S1.A1"],"continuesPrevious":false},{"references":["S1.A2","S2.A1"],"continuesPrevious":false}],"timelineTitles":{"S1":"S2.A1"}}
+        """
+        let malformedField = """
+        {"groups":[{"references":["S1.A1"],"continuesPrevious":false},{"references":["S1.A2","S2.A1"],"continuesPrevious":false}],"timelineTitles":[]}
+        """
+        for response in [invalidChoice, malformedField] {
+            let fallback = try JSONDecoder().decode(ActivityGrouping.self, from: Data(response.utf8))
+            XCTAssertFalse(try fallback.items(sources: sources, prior: [], tasks: []).contains { $0.isPreferredTimelineTitle == true })
+        }
+    }
+
     func testAdjacentStepsCombineAndContinuationKeepsTaskIdentity() throws {
         let (root, _, sources) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
         var prior = ActivityNarrative.Item(id: "prior", timestamp: sources[0].startedAt.addingTimeInterval(-600), title: "稳定目标", summary: "旧结果", apps: [], sourceMemories: ["prior.md"])

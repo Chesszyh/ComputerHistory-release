@@ -34,7 +34,11 @@ class Model(http.server.BaseHTTPRequestHandler):
                 groups[0]['continuesPrevious'] = True
             if mode == 'invalid':
                 groups = groups[:1]
-            content = json.dumps(dict(groups=groups), ensure_ascii=False)
+            timeline_titles = {
+                ref.split('.')[0]: ref for ref, group in zip(refs, groups)
+                if not group['continuesPrevious']
+            }
+            content = json.dumps(dict(groups=groups, timelineTitles=timeline_titles), ensure_ascii=False)
         elif '分组已确定' in user:
             if fail_summary and 'SYNTHETIC_B' in user:
                 self.send_response(503); self.end_headers(); return
@@ -77,6 +81,8 @@ def main():
             grouped=generate()
             assert len(requests)==before+1, 'successful grouping/prose was charged again after retry'
             assert len(grouped['items'])==2
+            selected = [i for i in grouped['items'] if i.get('isPreferredTimelineTitle')]
+            assert len(selected) == 1 and selected[0]['sourceActivities'][first.name] == [2]
             assert len({i['taskID'] for i in grouped['items']})==2
             assert all(not i['title'].endswith('。') for i in grouped['items'])
             before=len(requests); generate()
@@ -86,6 +92,7 @@ def main():
             assert len(continued['items'])==2
             task=next(i for i in continued['items'] if second.name in i['sourceMemories'])
             assert first.name in task['sourceMemories'] and task['sourceActivities'][first.name]==[2]
+            assert task['isPreferredTimelineTitle'], 'continuation lost the selection for its original start'
             assert first.read_bytes()==original
             saved=(root/'narrative.json').read_bytes()
             first.write_text(first.read_text()+'\n- **查看预约**：SYNTHETIC_C。')

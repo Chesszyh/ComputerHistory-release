@@ -22,6 +22,7 @@ public struct TrayTimelineItem: Codable, Sendable, Equatable, Identifiable {
     public var sourceRevisions: [String: String]? = nil
     public var taskID: String? = nil
     public var taskTitle: String? = nil
+    var isPreferredTimelineTitle: Bool? = nil
     public var leafItems: [TrayTimelineItem] { children?.flatMap(\.leafItems) ?? [self] }
     public var incidentalCount: Int { sourceIncidental?.values.reduce(0) { $0 + $1.count } ?? 0 }
     var isPassive: Bool { !isAway && (noClearActivity == true || title == ActivityEvidence.noActivityTitle) }
@@ -497,7 +498,7 @@ public actor TraySnapshotLoader {
                 sharesSourcePeriod: item.sourceActivities?.contains { name, numbers in
                     lookup[name].map { numbers.count < ActivityFragment.count(in: $0) } ?? false
                 }, noClearActivity: noClearActivity ? true : nil, sourceRevisions: Dictionary(uniqueKeysWithValues: item.sourceMemories.compactMap { name in lookup[name].map { (name, $0.revision) } }),
-                taskID: item.taskID, taskTitle: item.taskTitle))
+                taskID: item.taskID, taskTitle: item.taskTitle, isPreferredTimelineTitle: item.isPreferredTimelineTitle))
         }
         for item in narrative.items {
             guard !item.sourceMemories.contains(where: { lookup[$0]?.generationFailed == true }) else { continue }
@@ -521,6 +522,7 @@ public actor TraySnapshotLoader {
                     sourceMemories: item.memoryFiles.map(\.lastPathComponent))
                 restoredItem.taskID = item.taskID
                 restoredItem.taskTitle = item.taskTitle
+                restoredItem.isPreferredTimelineTitle = item.isPreferredTimelineTitle
                 restoredItem.sourceActivities = item.sourceActivities
                 restoredItem.sourceSteps = item.sourceSteps
                 restoredItem.sourceIncidental = item.sourceIncidental

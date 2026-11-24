@@ -160,7 +160,8 @@ struct HistoryRegression {
         precondition(detailRows.first?.id == booking.id && detailRows.first?.summary == booking.summary)
         let row = detailRows[1]
         precondition(row.children?.count == 2, "Same-time activities must share one container")
-        precondition(row.title == "2 项活动" && row.endTimestamp == row.timestamp)
+        precondition(row.title == activity.title && row.summary == paper.title)
+        precondition(row.endTimestamp == row.timestamp)
         precondition(row.children?.first?.endTimestamp == nextEnd, "Cross-window source coverage must stay with the child")
         detailsModel.copySummary(of: row)
         let groupCopy = NSPasteboard.general.string(forType: .string)!
