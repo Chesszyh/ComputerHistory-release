@@ -59,11 +59,30 @@ public enum EventArchive {
     }
 
     public static func readEvents(at url: URL) throws -> [EventStreamRecord] {
+        let result = try readSegment(at: url)
+        if let damage = result.damage { throw damage }
+        return result.events
+    }
+
+    struct DamagedLines: Error, Codable, Sendable, CustomStringConvertible {
+        var count = 0
+        var firstLine = 0
+        var description: String { "事件记录不完整：共 \(count) 行无法解码，首处位于第 \(firstLine) 行。" }
+    }
+
+    static func readSegment(at url: URL) throws -> (events: [EventStreamRecord], damage: DamagedLines?) {
         try withReader(at: url) { handle in
+            var lineNumber = 0
+            var damage = DamagedLines()
             var buffer = Data(), result: [EventStreamRecord] = []
             let decoder = EventStreamJSON.makeDecoder()
             func consume(_ line: Data) {
-                if let value = try? decoder.decode(EventStreamRecord.self, from: line) { result.append(value) }
+                lineNumber += 1
+                do { result.append(try decoder.decode(EventStreamRecord.self, from: line)) }
+                catch {
+                    if damage.count == 0 { damage.firstLine = lineNumber }
+                    damage.count += 1
+                }
             }
             while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
                 buffer.append(chunk)
@@ -73,7 +92,7 @@ public enum EventArchive {
                 }
             }
             if !buffer.isEmpty { consume(buffer) }
-            return result.sorted { $0.timestamp < $1.timestamp }
+            return (result.sorted { $0.timestamp < $1.timestamp }, damage.count == 0 ? nil : damage)
         }
     }
 
@@ -127,11 +146,11 @@ public enum EventArchive {
             let url = eventsURL(in: dir)
             guard fm.fileExists(atPath: url.path) else { continue }
             do {
-            let events = try readEvents(at: url)
+            let (events, damage) = try readSegment(at: url)
             let metadata = EventStreamMetadata(id: dir.lastPathComponent, startedAt: start,
                 endedAt: events.last?.timestamp, endReason: EventStreamEndReason.serviceTerminated.rawValue,
                 eventCount: events.count, suppressedEventCount: 0, eventsPath: url.path,
-                firstEventAt: events.first?.timestamp)
+                firstEventAt: events.first?.timestamp, damagedLines: damage)
             try EventStreamJSON.makeEncoder().encode(metadata).write(
                 to: dir.appendingPathComponent("metadata.json"), options: .atomic)
             } catch {

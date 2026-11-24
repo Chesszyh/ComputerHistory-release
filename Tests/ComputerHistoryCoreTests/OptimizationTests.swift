@@ -232,8 +232,31 @@ final class OptimizationTests: XCTestCase {
         let meta = try EventStreamJSON.makeDecoder().decode(EventStreamMetadata.self,
             from: Data(contentsOf: old.metadataURL))
         XCTAssertEqual(meta.eventCount, 1)
+        XCTAssertEqual(meta.damagedLines?.count, 1)
+        XCTAssertEqual(meta.damagedLines?.firstLine, 2)
         XCTAssertEqual(meta.endReason, "service_terminated")
         XCTAssertFalse(FileManager.default.fileExists(atPath: active.metadataURL.path))
+    }
+
+    func testDamagedMiddleLinePreservesBothEventsAndMarksGeneratedMemory() throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let writer = try SegmentWriter(rootDirectoryURL: root, start: start)
+        try writer.append(.init(id: 1, timestamp: start, kind: .sessionStarted))
+        try writer.append(.init(id: 2, timestamp: start, kind: .sessionStarted))
+        let lines = try Data(contentsOf: writer.eventsURL).split(separator: 10)
+        try (Data(lines[0]) + Data("\n{broken}\n".utf8) + lines[1]).write(to: writer.eventsURL)
+        try EventArchive.recoverUnsealed(root: root, excluding: "")
+        try EventArchive.archive(directory: writer.directoryURL)
+        let url = EventArchive.eventsURL(in: writer.directoryURL)
+        let result = try EventArchive.readSegment(at: url)
+        XCTAssertEqual(result.events.map(\.id), [1, 2])
+        XCTAssertEqual(result.damage?.firstLine, 2)
+        XCTAssertEqual(result.damage?.count, 1)
+        XCTAssertThrowsError(try EventArchive.readEvents(at: url))
+        let memory = try MemoryGenerator(rootDirectory: root, memoriesDirectory: root.appendingPathComponent("memories"))
+            .generate(segmentID: writer.segmentID)
+        XCTAssertTrue(try String(contentsOf: memory.memoryURL, encoding: .utf8).contains("共 1 行无法解码，首处位于第 2 行"))
+        XCTAssertTrue(CollectorStatus.read(root: root).data.eventCountIncomplete)
     }
 
     func testCorruptArchiveFailsInsteadOfProducingEmptySummary() throws {

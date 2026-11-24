@@ -16,6 +16,7 @@ public struct EventStreamMetadata: Codable, Sendable {
     public var eventsPath: String
     public var firstEventAt: Date? = nil
     public var inputListeningDegraded: Bool? = nil
+    var damagedLines: EventArchive.DamagedLines? = nil
 }
 
 /// 录制结束原因。取值来自反汇编 `ComputerUseIPCEventStreamEndReason.rawValue.getter`。

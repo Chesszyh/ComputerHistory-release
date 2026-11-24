@@ -57,7 +57,8 @@ public enum MemoryWriter {
         titleOverride: String? = nil,
         evidenceMaterial: String? = nil,
         noClearActivity: Bool = false,
-        inputListeningDegraded: Bool = false
+        inputListeningDegraded: Bool = false,
+        integrityNote: String? = nil
     ) -> String {
         var out = ""
 
@@ -83,6 +84,7 @@ public enum MemoryWriter {
         out += "---\n\n"
 
         out += "## Memory summary\n\n"
+        if let integrityNote { out += integrityNote + "\n\n" }
         if noClearActivity {
             out += "### 本次活动\n\n- **\(ActivityEvidence.noActivityTitle)**：\(ActivityEvidence.noActivitySummary)\n\n"
         } else if inputListeningDegraded {

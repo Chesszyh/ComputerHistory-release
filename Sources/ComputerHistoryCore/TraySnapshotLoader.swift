@@ -168,6 +168,7 @@ public actor TraySnapshotLoader {
             bytes += Int(current.size)
             let metadata = try? EventStreamJSON.makeDecoder().decode(EventStreamMetadata.self,
                 from: Data(contentsOf: dir.appendingPathComponent("metadata.json")))
+            if metadata?.damagedLines != nil { incomplete = true }
             let written = url.pathExtension == "gz" ? (metadata?.endedAt ?? current.modified) : current.modified
             lastWrite = max(lastWrite ?? written, written)
             if let date = SegmentClock.date(fromSegmentID: dir.lastPathComponent) {

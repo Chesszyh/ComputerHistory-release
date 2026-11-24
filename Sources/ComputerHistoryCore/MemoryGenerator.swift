@@ -121,7 +121,8 @@ public struct MemoryGenerator: Sendable {
         let segmentDir = rootDirectory.appendingPathComponent("segments")
             .appendingPathComponent(segmentID)
         let eventsURL = EventArchive.eventsURL(in: segmentDir)
-        let events = try Self.readEvents(at: eventsURL)
+        let (events, damage) = try EventArchive.readSegment(at: eventsURL)
+        if let damage, events.isEmpty { throw damage }
         guard !events.isEmpty else { throw GenerateError.noEvents(segmentID: segmentID) }
 
         let suppressed = Self.readSuppressedCount(at: segmentDir)
@@ -155,7 +156,7 @@ public struct MemoryGenerator: Sendable {
                 failedMemory: Self.hasUsableMemory(existing) ? nil : existing)
             client.memoryContextRejections = rejections
             client.memoryMaterial = { fullInput, useReferences in
-                Self.userPrompt(digest: digest, events: events, priorMemory: prior,
+                (damage.map { $0.description + "\n" } ?? "") + Self.userPrompt(digest: digest, events: events, priorMemory: prior,
                     inputDegraded: isInputDegraded, fullInput: fullInput, useTextReferences: useReferences)
             }
             do {
@@ -193,8 +194,9 @@ public struct MemoryGenerator: Sendable {
             enrichment: enrichment,
             modelNote: modelNote,
             evidenceMaterial: ActivityEvidence.material(events: events, segmentID: segmentID),
-            noClearActivity: noClearActivity,
-            inputListeningDegraded: isInputDegraded)
+            noClearActivity: noClearActivity && damage == nil,
+            inputListeningDegraded: isInputDegraded,
+            integrityNote: damage?.description)
         try markdown.write(to: memoryURL, atomically: true, encoding: .utf8)
 
         return Outcome(segmentID: segmentID, memoryURL: memoryURL,

@@ -117,6 +117,7 @@ public struct CollectorStatus: Sendable, Equatable {
             bytes += (attrs[.size] as? Int) ?? 0
             let sealedMetadata = try? EventStreamJSON.makeDecoder().decode(EventStreamMetadata.self,
                 from: Data(contentsOf: dir.appendingPathComponent("metadata.json")))
+            if sealedMetadata?.damagedLines != nil { incomplete = true }
             let modified = eventsURL.pathExtension == "gz" ? (sealedMetadata?.endedAt ?? attrs[.modificationDate] as? Date) : attrs[.modificationDate] as? Date
             if let modified {
                 if lastWrite == nil || modified > lastWrite! { lastWrite = modified }
