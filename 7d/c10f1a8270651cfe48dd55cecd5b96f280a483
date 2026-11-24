@@ -1,0 +1,21 @@
+Sources/ComputerHistoryCore/TextInputTracker.swift
+  s_018f2fc8f33ecf::t_22479605f8e499 89-144,168-172,177-195,200-211,214-220,222-261,263,265,274-276,316-321,327-328,342-357,365-370,372,381-382
+Tests/ComputerHistoryCoreTests/TextInputTrackerTests.swift
+  s_018f2fc8f33ecf::t_3db2cc3892976c 16-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7dc10f1a8270651cfe48dd55cecd5b96f280a483",
+  "prompts": {},
+  "sessions": {
+    "s_018f2fc8f33ecf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20bdb-c98f-7e11-b60a-a57e9bb6522b",
+        "model": "gpt-6.2-astra"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
