@@ -1,0 +1,36 @@
+README.md
+  s_b8e3b834b91716::t_328489ac0746d0 15-17,19-21
+Sources/ComputerHistoryCore/TraySnapshotLoader.swift
+  s_b8e3b834b91716::t_51c47e351a0335 86,184,276,278-295,297-304,306,321-322,326-330,337,339,363,367,373-374,388,392-393
+  s_b8e3b834b91716::t_49cbcd66c38a66 296,355,387,389-391,395
+CHANGELOG.md
+  s_b8e3b834b91716::t_da2519008a16d4 9
+CHANGELOG.zh.md
+  s_b8e3b834b91716::t_eb843c11671e58 9
+Sources/computer-history-menubar/StatusModel.swift
+  s_b8e3b834b91716::t_88cff1d3583bf7 24,26,43,210,248-251,305-309,311-312,315,318-330,332-334,336-356,380
+Sources/computer-history-menubar/StatusPanel.swift
+  s_b8e3b834b91716::t_6f7392390fc6d0 77,444-446,1650-1660
+Tests/ComputerHistoryCoreTests/TraySnapshotLoaderTests.swift
+  s_b8e3b834b91716::t_19d2549fc9e0be 39-67
+docs/collector.md
+  s_b8e3b834b91716::t_f250bedad64443 222-223
+scripts/test-menubar-usage.swift
+  s_b8e3b834b91716::t_48b6fd6c96de01 34,40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5a1a561c6cb34769f262847135672ea63348ca35",
+  "prompts": {},
+  "sessions": {
+    "s_b8e3b834b91716": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20eba-41e9-7ed0-9097-4322c687a7e0",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
