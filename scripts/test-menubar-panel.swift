@@ -163,9 +163,6 @@ struct HistoryRegression {
         precondition(row.title == activity.title && row.summary == paper.title)
         precondition(row.endTimestamp == row.timestamp)
         precondition(row.children?.first?.endTimestamp == nextEnd, "Cross-window source coverage must stay with the child")
-        detailsModel.copySummary(of: row)
-        let groupCopy = NSPasteboard.general.string(forType: .string)!
-        precondition(groupCopy.contains("迁移示例项目") && groupCopy.contains("阅读示例论文"), "Copy must retain all folded activities")
         detailsModel.toggleExpanded(row.id)
         let details = NSHostingView(rootView: TimelineRow(item: row, model: detailsModel).padding(8).frame(width: 380))
         window.contentView = details
@@ -182,6 +179,9 @@ struct HistoryRegression {
             capture.waitUntilExit()
             precondition(capture.terminationStatus == 0, "Synthetic window capture failed")
         }
+        detailsModel.copySummary(of: row)
+        let groupCopy = NSPasteboard.general.string(forType: .string)!
+        precondition(groupCopy.contains("迁移示例项目") && groupCopy.contains("阅读示例论文"), "Copy must retain all folded activities")
         let aside = ActivityFragment.details(files: [memory], activities: activity.sourceIncidental)
         let disclosure = NSHostingView(rootView: IncidentalActivities(details: aside, count: 1, collapsible: true).padding(14).frame(width: 340))
         window.contentView = disclosure

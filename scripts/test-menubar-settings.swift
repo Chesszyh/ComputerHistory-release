@@ -124,10 +124,12 @@ struct SettingsRegression {
         try snapshot("model-library")
         let modelField = fields(panel).first { $0.placeholderString == "deepseek-flash" }!
         let fieldFrame = modelField.convert(modelField.bounds, to: panel)
-        for popup in popups(panel) {
+        let modelPopups = popups(panel)
+        precondition(modelPopups.count == 3, "Expected model, endpoint and request-format popups")
+        for popup in modelPopups {
             let popupFrame = popup.convert(popup.bounds, to: panel)
             precondition(abs(fieldFrame.minX - popupFrame.minX) <= 1 && abs(fieldFrame.maxX - popupFrame.maxX) <= 1,
-                         "Popups and input fields must share both edges")
+                         "Popup \(popup.accessibilityLabel() ?? "unknown") frame \(popupFrame) must share the edges of text field \(fieldFrame)")
         }
         model.modelEndpoints[0].requiresAPIKey = true
         click(NSPoint(x: 80, y: 538))
@@ -159,7 +161,8 @@ struct SettingsRegression {
         let originalID = model.primaryGroupID
         model.addModelGroup()
         let newID = model.editingGroupID
-        model.modelGroups[1].name = "Synthetic second source"
+        model.modelGroups[0].name = "云端模型"
+        model.modelGroups[1].name = "本地模型"
         model.modelGroups[1].settings.model = "second-source"
         model.primaryGroupID = newID
         model.fallbackGroupID = originalID
@@ -189,13 +192,13 @@ struct SettingsRegression {
         window.contentView = templateHost
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         let nameField = fields(templateHost).first { $0.placeholderString == "例如：日常总结" }!
-        nameField.stringValue = "Synthetic template"
+        nameField.stringValue = "日常总结"
         nameField.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: nameField))
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         click(NSPoint(x: 342, y: 615))
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         var route = submitted!
-        precondition(route.name == "Synthetic template" && route.tasks.count == 5)
+        precondition(route.name == "日常总结" && route.tasks.count == 5)
         window.contentView = panel
         settle()
         route.tasks["narrative"] = .init(groupID: originalID, reasoningEffort: "none", outputTokenBudget: 2048)
@@ -204,6 +207,8 @@ struct SettingsRegression {
         model.saveModelConfiguration()
         model.loadConfigurationDrafts()
         precondition(model.modelRoutingMode == .template && model.selectedTaskTemplateID == route.id)
+        settle()
+        try snapshot("task-routing")
         precondition(try! ModelGroups.load(root: root).resolved(for: "narrative").outputTokenBudget == 2048)
         model.modelRoutingMode = .unified
         model.saveModelConfiguration()

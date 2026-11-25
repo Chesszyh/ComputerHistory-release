@@ -2,13 +2,21 @@
 
 - 核心Idea来源：[ChatGPT Computer History](https://learn.chatgpt.com/docs/customization/computer-history)
 
-> TODO：项目实际演示、README等文档去除GPT味
-> 核心开发动力：想看看自己每天玩电脑的时间都浪费在哪里了呀，好让AI大人视奸和鞭策我呀
+> TODO：项目实际演示、README等文档去除GPT味 <br>
+> 核心开发动力：想看看自己每天玩电脑的时间都浪费在哪里了呀，好让AI大人视奸和鞭策我呀 <br>
 > 以下均由deepseek-v4.1-flash, gpt-6.1-sol/6.1-astra/6.2-sol, gemini-3.8-flash等编写，开发周期比较长了我也记不清都哪些模型改过文档了，也许我需要一个agent git blame
 
 ---
 
 macOS 本地活动记录工具。通过 Accessibility（辅助功能，简称 AX）读取前台应用的界面文本，记录窗口变化、点击、快捷键和可归因的文本变化，按时间段保存。辅助功能缺少正文的应用可显式启用[本地窗口文字识别](docs/collector.md#采集行为与局限)。可选接入[本机 ActivityWatch](docs/collector.md#activitywatch-补充来源)补充窗口与空闲记录。支持 DeepSeek 和兼容接口的自托管模型生成记忆摘要，并在菜单栏查看时间线、逐次请求和费用。
+
+## 界面演示
+
+| 活动详情 | 按任务分配 |
+| --- | --- |
+| <img src="docs/images/activity-details.png" alt="时间线展开同一时段的两项活动及各自摘要" width="340"> | <img src="docs/images/task-routing.png" alt="按任务分配模板，列出五项任务的模型和全局备用" width="340"> |
+
+截图使用示例数据。
 
 ## 使用前了解
 

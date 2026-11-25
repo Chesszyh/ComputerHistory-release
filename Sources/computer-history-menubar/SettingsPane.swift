@@ -760,6 +760,11 @@ private struct SettingsPopUp<Selection: Hashable>: NSViewRepresentable {
         return button
     }
 
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSPopUpButton, context: Context) -> CGSize? {
+        guard let width = proposal.width, width.isFinite else { return nil }
+        return CGSize(width: width, height: proposal.height ?? nsView.intrinsicContentSize.height)
+    }
+
     func updateNSView(_ button: NSPopUpButton, context: Context) {
         context.coordinator.picker = self
         let titles = choices.map { $0.1 }
