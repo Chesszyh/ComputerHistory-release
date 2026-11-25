@@ -21,7 +21,9 @@ final class StatusModel: ObservableObject {
 
     @Published private(set) var status: CollectorStatus
     @Published private(set) var timelineCount = 0
+    @Published private(set) var timelineLoading = true
     @Published private(set) var modelRequests: [ModelRequest] = []
+    @Published private(set) var usageLoaded = false
     @Published var showsReports = false
     @Published var reportKind: ReportKind = .daily
     @Published var reportDate = Date()
@@ -38,7 +40,7 @@ final class StatusModel: ObservableObject {
     @Published private(set) var backupMessage = ""
     private var reportTask: Task<Void, Never>?
     private var reportLoadTask: Task<Void, Never>?
-    @Published var showsUsage = false
+    @Published var showsUsage = false { didSet { if showsUsage { refreshUsage() } } }
     @Published var requestDetail: ModelRequest?
     @Published var requestError: String?
     @Published var usageFilter = ModelRequestFilter()
@@ -205,6 +207,7 @@ final class StatusModel: ObservableObject {
     private let commandExecutable: URL
     private let loader = TraySnapshotLoader()
     private var refreshTask: Task<Void, Never>?
+    private var usageTask: Task<Void, Never>?
     private var refreshState = TrayRefreshState()
     private var historyRequested = false
     private var liveTask: Task<Void, Never>?
@@ -242,7 +245,10 @@ final class StatusModel: ObservableObject {
 
         // 采集状态与记忆在后台刷新，复用未变化文件的缓存。
         Timer.publish(every: 3, on: .main, in: .common).autoconnect()
-            .sink { [weak self] _ in self?.refreshSlow(forceHistory: false) }
+            .sink { [weak self] _ in
+                self?.refreshSlow(forceHistory: false)
+                if self?.panelVisible == true, self?.showsUsage == true { self?.refreshUsage() }
+            }
             .store(in: &cancellables)
     }
 
@@ -296,34 +302,58 @@ final class StatusModel: ObservableObject {
                 self.finishRefresh()
                 return
             }
+            if self?.timelineLoading == true {
+                let recent = await loader.load(root: root, recentSince: Date().addingTimeInterval(-48 * 60 * 60))
+                guard let model = self, !model.stopped else { return }
+                if !recent.groups.isEmpty { model.applyTimeline(recent, complete: false) }
+            }
             let snapshot = await loader.load(root: root)
-            let requests = await self?.requestLoader.load(root: root) ?? []
+            guard let self, !self.stopped else { return }
+            self.applyTimeline(snapshot, complete: true)
             let health = await Task.detached { ModelHealth.load(root: root) }.value
             let enabled = await Task.detached { (try? BackupSettings.load(root: root))?.enabled ?? false }.value
-            guard let self, !self.stopped else { return }
+            guard !self.stopped else { return }
             if self.modelFailure != health?.error { self.modelFailure = health?.error }
             if self.effectiveBackupEnabled != enabled { self.effectiveBackupEnabled = enabled }
-            if self.modelRequests != requests { self.modelRequests = requests }
-            if self.invalidCorrections != snapshot.invalidCorrections { self.invalidCorrections = snapshot.invalidCorrections }
-            if self.status != snapshot.status { self.status = snapshot.status }
-            if self.control != snapshot.control { self.control = snapshot.control }
-            if self.contentVersion != snapshot.contentVersion { self.contentVersion = snapshot.contentVersion }
-            if self.effectiveTimelineMode != snapshot.timelineMode { self.effectiveTimelineMode = snapshot.timelineMode }
-            if self.deletedSummaries != snapshot.deletedSummaries { self.deletedSummaries = snapshot.deletedSummaries }
-            let count = snapshot.groups.reduce(0) { $0 + $1.items.count }
-            if self.timelineCount != count { self.timelineCount = count }
-            if self.allTimelineGroups != snapshot.groups {
-                self.allTimelineGroups = snapshot.groups
-                self.applyTimelineLimit()
-                let ids = Set(snapshot.groups.flatMap(\.items).flatMap { [$0] + $0.leafItems }.map(\.id))
-                self.expandedRows.formIntersection(ids)
-                self.selectedSummaryIDs.formIntersection(ids)
-                if let detail = self.detail, !ids.contains(detail.id) { self.closeDetail() }
-            }
-            if self.lastEventAt != snapshot.status.data.lastWriteAt { self.lastEventAt = snapshot.status.data.lastWriteAt }
-            let login = LoginItem.isEnabled
-            if self.loginItemEnabled != login { self.loginItemEnabled = login }
             self.finishRefresh()
+        }
+    }
+
+    private func applyTimeline(_ snapshot: TraySnapshot, complete: Bool) {
+        if effectiveTimelineMode != snapshot.timelineMode { effectiveTimelineMode = snapshot.timelineMode }
+        if contentVersion != snapshot.contentVersion { contentVersion = snapshot.contentVersion }
+        let count = snapshot.groups.reduce(0) { $0 + $1.items.count }
+        if timelineCount != count { timelineCount = count }
+        if allTimelineGroups != snapshot.groups {
+            allTimelineGroups = snapshot.groups
+            applyTimelineLimit()
+            if complete {
+                let ids = Set(snapshot.groups.flatMap(\.items).flatMap { [$0] + $0.leafItems }.map(\.id))
+                expandedRows.formIntersection(ids)
+                selectedSummaryIDs.formIntersection(ids)
+                if let detail, !ids.contains(detail.id) { closeDetail() }
+            }
+        }
+        if timelineLoading { timelineLoading = false }
+        guard complete else { return }
+        if invalidCorrections != snapshot.invalidCorrections { invalidCorrections = snapshot.invalidCorrections }
+        if status != snapshot.status { status = snapshot.status }
+        if control != snapshot.control { control = snapshot.control }
+        if deletedSummaries != snapshot.deletedSummaries { deletedSummaries = snapshot.deletedSummaries }
+        if lastEventAt != snapshot.status.data.lastWriteAt { lastEventAt = snapshot.status.data.lastWriteAt }
+        let login = LoginItem.isEnabled
+        if loginItemEnabled != login { loginItemEnabled = login }
+    }
+
+    private func refreshUsage() {
+        guard !stopped, usageTask == nil else { return }
+        let root = root, loader = requestLoader
+        usageTask = Task { [weak self] in
+            let requests = await loader.load(root: root)
+            guard let self, !self.stopped else { return }
+            if self.modelRequests != requests { self.modelRequests = requests }
+            if !self.usageLoaded { self.usageLoaded = true }
+            self.usageTask = nil
         }
     }
 
@@ -347,6 +377,7 @@ final class StatusModel: ObservableObject {
         stopped = true
         refreshState.cancel()
         refreshTask?.cancel()
+        usageTask?.cancel()
         liveTask?.cancel()
         detailTask?.cancel()
         reportTask?.cancel()

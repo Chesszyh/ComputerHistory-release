@@ -74,7 +74,7 @@ struct StatusPanel: View {
                     RuntimeSection(model: model)
                     SettingsSection(model: model)
                     VStack(spacing: 1) {
-                        PanelNavigationRow(title: "总结用量与费用", icon: "chart.xyaxis.line", detail: "\(model.modelRequests.count) 次请求") { model.showsUsage = true }
+                        PanelNavigationRow(title: "总结用量与费用", icon: "chart.xyaxis.line", detail: model.usageLoaded ? "\(model.modelRequests.count) 次请求" : "") { model.showsUsage = true }
                         PanelNavigationRow(title: "日报、周报与导出", icon: "doc.text") { model.openReports() }
                             .accessibilityIdentifier("open-reports")
                     }
@@ -441,7 +441,9 @@ struct TimelineSection: View {
                 Text("\(model.invalidCorrections) 项归属修改的来源已变化，请撤销后重新确认。")
                     .font(DesignTokens.Typography.caption).foregroundStyle(.orange)
             }
-            if model.timelineCount == 0 {
+            if model.timelineLoading {
+                ProgressView("正在加载历史活动").controlSize(.small)
+            } else if model.timelineCount == 0 {
                 emptyStateView
             } else {
                 dayGroupsView
@@ -1645,13 +1647,17 @@ struct ModelUsagePane: View {
                             }
                         }
                         .font(.system(size: 11))
-                        totals(filter.period.rawValue, records: filteredRequests)
-                        Text("仅统计模型请求，包含补齐、重试和降级；本地整理不产生请求。费用按请求时的单价估算。")
-                            .font(.system(size: 10)).foregroundStyle(.tertiary)
-                        if filteredRequests.isEmpty {
-                            Text("这个范围内暂无请求")
-                                .font(.system(size: 12)).foregroundStyle(.secondary)
-                                .padding(.vertical, 16)
+                        if model.usageLoaded {
+                            totals(filter.period.rawValue, records: filteredRequests)
+                            Text("仅统计模型请求，包含补齐、重试和降级；本地整理不产生请求。费用按请求时的单价估算。")
+                                .font(.system(size: 10)).foregroundStyle(.tertiary)
+                            if filteredRequests.isEmpty {
+                                Text("这个范围内暂无请求")
+                                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                                    .padding(.vertical, 16)
+                            }
+                        } else {
+                            ProgressView("正在加载用量").controlSize(.small)
                         }
                         if let error = model.requestError { Text(error).foregroundStyle(.red) }
                         ForEach(requestDays, id: \.self) { day in

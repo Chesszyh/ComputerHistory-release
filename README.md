@@ -12,11 +12,13 @@ macOS 本地活动记录工具。通过 Accessibility（辅助功能，简称 AX
 
 ## 界面演示
 
-| 活动详情 | 按任务分配 |
-| --- | --- |
-| <img src="docs/images/activity-details.png" alt="时间线展开同一时段的两项活动及各自摘要" width="340"> | <img src="docs/images/task-routing.png" alt="按任务分配模板，列出五项任务的模型和全局备用" width="340"> |
+| 主界面 | 历史活动时间线 | 日报 |
+| --- | --- | --- |
+| <img src="docs/images/main-panel.png" alt="主界面的采集状态、用量和报表入口" width="240"> | <img src="docs/images/activity-details.png" alt="按时段排列的活动摘要与应用图标" width="240"> | <img src="docs/images/daily-report.png" alt="日报与周报切换、日期选择和日报标题" width="240"> |
 
-截图使用示例数据。
+| 模型与端点 | 按任务分配 |
+| --- | --- |
+| <img src="docs/images/model-endpoint.png" alt="配置模型服务端点、认证和模型列表" width="300"> | <img src="docs/images/task-routing.png" alt="按任务分配模板及全局备用模型" width="300"> |
 
 ## 使用前了解
 

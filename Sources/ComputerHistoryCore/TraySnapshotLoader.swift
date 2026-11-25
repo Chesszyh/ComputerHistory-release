@@ -83,6 +83,7 @@ public actor TraySnapshotLoader {
     private var previousTimeZone: TimeZone?
     private var previousEdits = TimelineEdits()
     private var previousCorrections = TimelineCorrections()
+    private var previousRecentSince: Date?
     private var previousTimelineMode: SummarySettings.TimelineMode?
     private var groups: [TrayTimelineGroup] = []
     private var deletedSummaries: [TimelineDeletions.Record] = []
@@ -180,7 +181,7 @@ public actor TraySnapshotLoader {
         return status
     }
 
-    public func load(root: URL, timeZone: TimeZone = .current) -> TraySnapshot {
+    public func load(root: URL, timeZone: TimeZone = .current, recentSince: Date? = nil) -> TraySnapshot {
         let fm = FileManager.default
         var bytesRead = 0, parsed = 0
         let segmentsDirectory = root.appendingPathComponent("segments")
@@ -272,11 +273,37 @@ public actor TraySnapshotLoader {
         }
         counters = counters.filter { seen.contains($0.key) }
         sealedCounts = sealedCounts.filter { seen.contains($0.key) }
-        let files = ((try? fm.contentsOfDirectory(at: root.appendingPathComponent("memories"),
+        let listedFiles = ((try? fm.contentsOfDirectory(at: root.appendingPathComponent("memories"),
                     includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []).filter { $0.pathExtension == "md" }
-        let fileSet = Set(files)
+        let nStamp = stamp(ActivityNarrative.fileURL(root: root))
+        let narrativeChanged = nStamp != narrativeStamp
+        if narrativeChanged {
+            narrative = ActivityNarrative.load(root: root)
+            narrativeStamp = nStamp
+        }
+
+        let deletions = (try? TimelineDeletions.load(root: root)) ?? previousDeletions
+        let corrections = (try? TimelineCorrections.load(root: root)) ?? previousCorrections
+        let restored = deletions.restoredItems.filter { item in recentSince.map { item.endTimestamp >= $0 } ?? true }
+        let cutoff = recentSince.map { SegmentClock.segmentID(for: SegmentClock.alignedStart(for: $0)) }
+        var selectedNarrative = narrative
+        var files = listedFiles
+        if let recentSince, let cutoff {
+            // Corrections can link recent items to older sources that still determine their task identity.
+            let correctedSources = Set(corrections.entries.flatMap { $0.groups.flatMap { $0.map(\.memory) } })
+            selectedNarrative.items = narrative.items.filter { item in
+                item.timestamp >= recentSince || item.sourceMemories.contains {
+                    String($0.prefix(20)) >= cutoff || correctedSources.contains($0)
+                }
+            }
+            let dependencies = Set(selectedNarrative.items.flatMap(\.sourceMemories))
+                .union(restored.flatMap { $0.memoryFiles.map(\.lastPathComponent) })
+                .union(correctedSources)
+            files = listedFiles.filter { dependencies.contains($0.lastPathComponent) || String($0.lastPathComponent.prefix(20)) >= cutoff }
+        }
+        let fileSet = Set(listedFiles)
         let removedMemories = memories.keys.contains { !fileSet.contains($0) }
-        memories = memories.filter { fileSet.contains($0.key) }
+        if removedMemories { memories = memories.filter { fileSet.contains($0.key) } }
         for file in files {
             guard let current = stamp(file) else { memories[file] = nil; continue }
             let metadata = memories[file]?.entry.flatMap {
@@ -291,29 +318,25 @@ public actor TraySnapshotLoader {
                 stamp(root.appendingPathComponent("segments/\($0.sourceSegmentID)/metadata.json"))
             }, entry)
         }
-        let index = MemoryIndex(entries: memories.values.compactMap(\.entry).sorted { $0.startedAt > $1.startedAt })
-        let nStamp = stamp(ActivityNarrative.fileURL(root: root))
-        let narrativeChanged = nStamp != narrativeStamp
-        if narrativeChanged {
-            narrative = ActivityNarrative.load(root: root)
-            narrativeStamp = nStamp
-        }
-        if parsed > 0 || removedMemories || narrativeChanged { contentVersion += 1 }
+        let index = MemoryIndex(entries: files.compactMap { memories[$0]?.entry }.sorted { $0.startedAt > $1.startedAt })
+        if parsed > 0 || removedMemories || narrativeChanged || previousRecentSince != recentSince { contentVersion += 1 }
         let sources = index.entries.map { TimelineSource(url: $0.fileURL, date: $0.startedAt, firstEventAt: $0.firstEventAt, endedAt: $0.endedAt, endReason: $0.endReason,
                                            title: $0.title, summary: $0.summary, apps: $0.applications, activityFragmentCount: $0.activityFragmentCount) }
-        let deletions = (try? TimelineDeletions.load(root: root)) ?? previousDeletions
         let away = AwayPeriods.load(root: root)
-        let (blockedAwayGaps, interactionBytes) = blockedGaps(away: away, eventFilesByBucket: eventFilesByBucket)
+        var visibleAway = away
+        if let recentSince {
+            visibleAway.periods = away.periods.filter { $0.end >= recentSince.addingTimeInterval(-Self.awayGapTolerance) }
+        }
+        let (blockedAwayGaps, interactionBytes) = blockedGaps(away: visibleAway, eventFilesByBucket: eventFilesByBucket)
         bytesRead += interactionBytes
         let awayChanged = away != previousAway || blockedAwayGaps != previousBlockedAwayGaps
         let mode = (try? SummarySettings.load(root: root))?.timelineMode ?? previousTimelineMode ?? .continuous
         let edits = (try? TimelineEdits.load(root: root)) ?? previousEdits
-        let corrections = (try? TimelineCorrections.load(root: root)) ?? previousCorrections
         if edits != previousEdits || corrections != previousCorrections { contentVersion += 1 }
         if awayChanged || deletions != previousDeletions { contentVersion += 1 }
-        if edits != previousEdits || corrections != previousCorrections || deletions != previousDeletions || awayChanged || sources != previousTimelineEntries || narrative.items != previousNarrative || previousTimeZone != timeZone || previousTimelineMode != mode {
+        if edits != previousEdits || corrections != previousCorrections || deletions != previousDeletions || awayChanged || sources != previousTimelineEntries || selectedNarrative.items != previousNarrative || previousTimeZone != timeZone || previousTimelineMode != mode || previousRecentSince != recentSince {
             if previousTimelineMode != mode { contentVersion += 1 }
-            var displayNarrative = narrative
+            var displayNarrative = selectedNarrative
             let lookup = Dictionary(uniqueKeysWithValues: index.entries.map { ($0.id, $0) })
             // Split placeholders have aliases but no revisions. Their frontmatter statistics are
             // not an activity summary; keep completed model narratives untouched.
@@ -329,7 +352,7 @@ public actor TraySnapshotLoader {
                 displayNarrative = corrections.applying(to: displayNarrative, index: index, away: away)
             }
             displayNarrative = displayNarrative.separatingAwayPeriods(index: index, away: away, mode: mode)
-            let allGroups = Self.timeline(index: index, narrative: displayNarrative, away: away, restored: deletions.restoredItems, timeZone: timeZone, mode: mode)
+            let allGroups = Self.timeline(index: index, narrative: displayNarrative, away: away, restored: restored, timeZone: timeZone, mode: mode)
             deletedSummaries = deletions.trashEntries(candidates: allGroups.flatMap(\.items))
             let aliases = Dictionary(displayNarrative.items.map { ($0.id, $0.previousIDs ?? []) }, uniquingKeysWith: { first, _ in first })
             groups = allGroups.compactMap { group in
@@ -337,16 +360,18 @@ public actor TraySnapshotLoader {
                     !deletions.ids.contains(item.deletionID)
                         && !(aliases[item.id] ?? []).contains { deletions.ids.contains("narrative:" + $0) }
                 }
+                if let recentSince { items = items.filter { $0.endTimestamp >= recentSince } }
                 items = items.map { edits.applying(to: $0, mode: mode, index: index) }
                 return items.isEmpty ? nil : TrayTimelineGroup(day: group.day, items: items)
             }
-            groups = Self.displayGroups(items: groups.flatMap(\.items), periods: away.periods,
+            groups = Self.displayGroups(items: groups.flatMap(\.items), periods: visibleAway.periods,
                                         blockedGaps: blockedAwayGaps, timeZone: timeZone)
             previousCorrections = corrections
             previousEdits = edits
             previousDeletions = deletions
             previousTimelineEntries = sources
-            previousNarrative = narrative.items
+            previousNarrative = selectedNarrative.items
+            previousRecentSince = recentSince
             previousTimeZone = timeZone
             previousTimelineMode = mode
             previousAway = away
@@ -359,8 +384,15 @@ public actor TraySnapshotLoader {
                      memories: CollectorStatus.memoryStats(index: index, data: data), rootDirectory: root,
                      awayReason: away.startedAt.map { _ in away.startedReason ?? .locked },
                      inputListening: InputListeningStatus.load(root: root))
+        var displayed = Self.addingOpenAway(to: groups, away: visibleAway, blockedGaps: blockedAwayGaps, timeZone: timeZone)
+        if let recentSince {
+            displayed = displayed.compactMap { group in
+                let items = group.items.filter { $0.endTimestamp >= recentSince }
+                return items.isEmpty ? nil : TrayTimelineGroup(day: group.day, items: items)
+            }
+        }
         return TraySnapshot(status: status, control: CollectorControl.load(root: root),
-                            groups: Self.addingOpenAway(to: groups, away: away, blockedGaps: blockedAwayGaps, timeZone: timeZone),
+                            groups: displayed,
                             contentVersion: contentVersion, timelineMode: mode, deletedSummaries: deletedSummaries, eventBytesRead: bytesRead, memoriesParsed: parsed, invalidCorrections: corrections.invalidCount(index: index))
     }
 

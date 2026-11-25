@@ -36,6 +36,35 @@ final class TraySnapshotLoaderTests: XCTestCase {
         XCTAssertNotEqual(try Data(contentsOf: ActivityNarrative.fileURL(root: root)), saved)
     }
 
+    func testRecentTimelineReusesCrossBoundarySourcesWhenCompletingHistory() async throws {
+        let root = try root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("memories")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let names = ["2026-11-20T00-00-00Z", "2026-11-24T23-50-00Z", "2026-11-25T00-00-00Z"]
+            .map { $0 + "-ABCD-10min-memory-summary.md" }
+        for name in names {
+            try "---\ntitle: 示例记录\ndescription: 示例活动\n---\n### 本次活动\n- **核对材料**：检查内容。"
+                .write(to: directory.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        let boundary = try XCTUnwrap(SegmentClock.date(fromSegmentID: "2026-11-25T00-00-00Z"))
+        let crossing = ActivityNarrative.Item(id: "crossing", timestamp: boundary.addingTimeInterval(-600),
+            title: "跨边界活动", summary: "连续检查示例材料", apps: [], sourceMemories: Array(names.suffix(2)))
+        try ActivityNarrative(items: [crossing]).save(root: root)
+
+        let loader = TraySnapshotLoader()
+        let recent = await loader.load(root: root, recentSince: boundary)
+        XCTAssertEqual(recent.memoriesParsed, 2)
+        let recentItems = recent.groups.flatMap(\.items).flatMap(\.leafItems)
+        XCTAssertEqual(recentItems.map(\.id), ["crossing"])
+        XCTAssertEqual(recentItems.first?.memoryFiles.map(\.lastPathComponent), Array(names.suffix(2)))
+
+        let complete = await loader.load(root: root)
+        XCTAssertEqual(complete.memoriesParsed, 1)
+        let completeItems = complete.groups.flatMap(\.items).flatMap(\.leafItems)
+        XCTAssertEqual(completeItems.map(\.id), ["crossing", names[0]])
+    }
+
     private func root() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
