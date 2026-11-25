@@ -126,11 +126,15 @@ struct SettingsRegression {
         let fieldFrame = modelField.convert(modelField.bounds, to: panel)
         let modelPopups = popups(panel)
         precondition(modelPopups.count == 3, "Expected model, endpoint and request-format popups")
-        for popup in modelPopups {
-            let popupFrame = popup.convert(popup.bounds, to: panel)
-            precondition(abs(fieldFrame.minX - popupFrame.minX) <= 1 && abs(fieldFrame.maxX - popupFrame.maxX) <= 1,
-                         "Popup \(popup.accessibilityLabel() ?? "unknown") frame \(popupFrame) must share the edges of text field \(fieldFrame)")
+        let popupFrames = modelPopups.map { $0.convert($0.bounds, to: panel) }
+        let reference = popupFrames[0]
+        for frame in popupFrames {
+            precondition(abs(frame.minX - reference.minX) <= 1 && abs(frame.maxX - reference.maxX) <= 1,
+                         "Model popups must share both horizontal edges: \(popupFrames)")
         }
+        // macOS 15 exposes the inset text field frame inside its SwiftUI layout bounds.
+        precondition(abs(fieldFrame.minX - reference.minX) <= 4 && abs(fieldFrame.maxX - reference.maxX) <= 4,
+                     "The model controls must fill the same column: popup \(reference), text field \(fieldFrame)")
         model.modelEndpoints[0].requiresAPIKey = true
         click(NSPoint(x: 80, y: 538))
         settle()
