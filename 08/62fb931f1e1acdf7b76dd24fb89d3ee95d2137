@@ -1,0 +1,19 @@
+scripts/test-menubar-settings.swift
+  s_b8e3b834b91716::t_dd53f67e125e09 129-133,135-137
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0862fb931f1e1acdf7b76dd24fb89d3ee95d2137",
+  "prompts": {},
+  "sessions": {
+    "s_b8e3b834b91716": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20eba-41e9-7ed0-9097-4322c687a7e0",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
