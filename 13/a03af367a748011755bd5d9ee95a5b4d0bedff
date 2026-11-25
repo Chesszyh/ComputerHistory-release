@@ -1,0 +1,29 @@
+README.md
+  s_b8e3b834b91716::t_122a98252dac1e 5-6,13-14,18-19
+  s_b8e3b834b91716::t_57786b014a122c 15-17
+  s_b8e3b834b91716::t_3849ff43f2e073 20
+scripts/test-menubar-settings.swift
+  s_b8e3b834b91716::t_57786b014a122c 164-165
+  s_b8e3b834b91716::t_122a98252dac1e 195,201,210-211
+  s_b8e3b834b91716::t_d01dc05004f685 127-129,132
+scripts/test-menubar-panel.swift
+  s_b8e3b834b91716::t_122a98252dac1e 182-184
+Sources/computer-history-menubar/SettingsPane.swift
+  s_b8e3b834b91716::t_f600367439eb5b 763-767
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "13a03af367a748011755bd5d9ee95a5b4d0bedff",
+  "prompts": {},
+  "sessions": {
+    "s_b8e3b834b91716": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20eba-41e9-7ed0-9097-4322c687a7e0",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chesszyh <chesszyh987@gmail.com>"
+    }
+  }
+}
